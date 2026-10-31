@@ -11,6 +11,11 @@ import {
   CircularProgress,
   Collapse,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
   FormControlLabel,
   IconButton,
@@ -55,6 +60,7 @@ import {
   type Model,
   getConnectors,
   getModelSettings,
+  updateModelSettings,
   getPreferences,
   getToolContext,
   listModels,
@@ -63,21 +69,26 @@ import {
   streamChat,
 } from "./api";
 import ChatSettings, { AttachmentIcon } from "./ChatSettings";
+import MarkdownRenderer from "./MarkdownRenderer";
 
-// Whether the toolbar is expanded is a per-browser convenience, so it lives
-// in localStorage. Storage can be unavailable (private windows), so failures
-// just fall back to expanded.
+// Per-browser choices kept in localStorage: whether the toolbar is expanded,
+// and whether the Tools switch is on. Storage can be unavailable (private
+// windows), so failures fall back to the default.
 const TOOLBAR_KEY = "llama-mui:toolbarOpen";
-function loadToolbarOpen(): boolean {
+// Off until the user turns it on: tools can read files, change them and run
+// commands, so they're something to opt into.
+const TOOLS_KEY = "llama-mui:toolsOn";
+function loadFlag(key: string, fallback: boolean): boolean {
   try {
-    return localStorage.getItem(TOOLBAR_KEY) !== "false";
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === "true";
   } catch {
-    return true;
+    return fallback;
   }
 }
-function saveToolbarOpen(open: boolean) {
+function saveFlag(key: string, value: boolean) {
   try {
-    localStorage.setItem(TOOLBAR_KEY, String(open));
+    localStorage.setItem(key, String(value));
   } catch {
     // Not remembered this time; nothing else depends on it.
   }
@@ -120,7 +131,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     defaults: ModelSettings;
     models: Record<string, ModelSettings>;
   } | null>(null);
-  const [toolsWanted, setToolsWanted] = useState(true);
+  const [toolsWanted, setToolsWantedState] = useState(() => loadFlag(TOOLS_KEY, false));
+  const setToolsWanted = (on: boolean) => {
+    setToolsWantedState(on);
+    saveFlag(TOOLS_KEY, on);
+  };
   // Files and folders this chat's disk tools may read; New chat clears them.
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // What a reply is waiting on the user for: a path the model asked for that
@@ -138,11 +153,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // to the end: earlier messages stay on screen but aren't sent any more.
   const [contextStart, setContextStart] = useState(0);
   const [prefs, setPrefs] = useState<Preferences | null>(null);
-  const [toolbarOpen, setToolbarOpenState] = useState(loadToolbarOpen);
+  const [toolbarOpen, setToolbarOpenState] = useState(() => loadFlag(TOOLBAR_KEY, true));
   const narrow = useMediaQuery((t) => t.breakpoints.down("sm"));
   const setToolbarOpen = (open: boolean) => {
     setToolbarOpenState(open);
-    saveToolbarOpen(open);
+    saveFlag(TOOLBAR_KEY, open);
   };
   const [abort, setAbort] = useState<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -194,6 +209,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // On only when the user wants tools and some are ready in this chat.
   const toolsOn = toolsWanted && toolContext.definitions.length > 0;
+  const thinkOn = !!(modelSettings?.models[model] ?? modelSettings?.defaults)?.think;
+  // Switching Tools on with Think off asks whether to turn Think on: without
+  // it, small models (Qwen 9B) mostly answer from memory instead of calling
+  // tools. The answer goes to Settings → Models, so the switch there is what
+  // chat actually uses.
+  const [offerThink, setOfferThink] = useState(false);
+  const turnThinkOn = () =>
+    updateModelSettings(model, { think: true })
+      .then((saved) => setModelSettings((s) => s && { ...s, models: { ...s.models, [model]: saved } }))
+      .catch((e) => setError(e.message))
+      .finally(() => setOfferThink(false));
   const toolCount = toolContext.definitions.length;
 
   useEffect(() => {
@@ -251,9 +277,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               toolsOn && toolContext.systemPrompt
                 ? [{ role: "system", content: toolContext.systemPrompt }, ...history]
                 : history,
-            // Thinking is forced on while tools are offered: without it, small
-            // models (Qwen 9B) mostly answer from memory instead of calling them.
-            think: toolsOn || !!(modelSettings?.models[model] ?? modelSettings?.defaults)?.think,
+            think: thinkOn,
             tools: toolsOn ? toolContext.definitions : undefined,
           },
           (d) => {
@@ -477,7 +501,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               <FormControlLabel
                 label="Tools"
                 control={
-                  <Switch checked={toolsOn} onChange={(e) => setToolsWanted(e.target.checked)} />
+                  <Switch
+                    checked={toolsOn}
+                    onChange={(e) => {
+                      setToolsWanted(e.target.checked);
+                      if (e.target.checked && !thinkOn) setOfferThink(true);
+                    }}
+                  />
                 }
                 disabled={!!abort || toolCount === 0}
               />
@@ -516,6 +546,23 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           </IconButton>
         </Tooltip>
       </Paper>
+
+      <Dialog open={offerThink} onClose={() => setOfferThink(false)} maxWidth="xs">
+        <DialogTitle>Turn on Think?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Think is off for {model}. Without it, small models usually skip the tools: instead of reading your files
+            or searching the web, they answer from what they already know. You can change this later in Settings →
+            Models.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOfferThink(false)}>Keep it off</Button>
+          <Button variant="contained" onClick={turnThinkOn}>
+            Turn on Think
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Top padding keeps the first messages clear of the toolbar. */}
       <Box sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3 }}>
@@ -665,7 +712,11 @@ function MessageBubble({
                 </Accordion>
               )}
               {m.content && (
-                <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</Typography>
+                m.role === "assistant" ? (
+                  <MarkdownRenderer content={m.content} />
+                ) : (
+                  <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</Typography>
+                )
               )}
               {showSteps &&
                 m.toolCalls?.map((c) => <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} />)}
@@ -697,23 +748,34 @@ function ToolCallView({ call, result: resultMessage }: { call: ToolCall; result?
       : term !== undefined
         ? `"${term}"${args.path ? ` in ${args.path}` : ""}`
         : (args.path ?? "");
+  const title = `${call.name}${target ? ` ${target}` : ""}`;
   const failed = result?.startsWith("Error:");
+  const [open, setOpen] = useState(false);
   return (
     <Accordion
       disableGutters
+      expanded={open}
+      onChange={(_, o) => setOpen(o)}
       elevation={0}
       sx={{ mt: 1, bgcolor: "action.hover", "&:before": { display: "none" } }}
     >
-      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+      {/* minWidth 0 down the flex chain lets a long title shrink instead of
+          widening the reply. */}
+      <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ "& .MuiAccordionSummary-content": { minWidth: 0 } }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
           {result === undefined ? (
-            <CircularProgress size={14} />
+            <CircularProgress size={14} sx={{ flexShrink: 0 }} />
           ) : (
-            <BuildOutlinedIcon fontSize="small" color={failed ? "error" : "action"} />
+            <BuildOutlinedIcon fontSize="small" color={failed ? "error" : "action"} sx={{ flexShrink: 0 }} />
           )}
-          <Typography variant="body2" sx={{ fontFamily: "monospace" }} noWrap>
-            {call.name}
-            {target && ` ${target}`}
+          {/* Cut with "…" while collapsed; expanded, the whole command wraps. */}
+          <Typography
+            variant="body2"
+            sx={{ fontFamily: "monospace", ...(open && { overflowWrap: "anywhere" }) }}
+            noWrap={!open}
+            title={open ? undefined : title}
+          >
+            {title}
           </Typography>
         </Stack>
         <StepTime

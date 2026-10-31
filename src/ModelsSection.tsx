@@ -127,9 +127,9 @@ export default function ModelsSection() {
       <Typography variant="body2" color="text.secondary">
         <b>Think</b> (before answering) lets a reasoning model (like Qwen) work through the problem first; its thoughts
         show in a collapsible panel above the reply. It helps with hard questions but is slower, and small models can
-        spend minutes on simple ones. Models whose chat template has no thinking mode ignore it. While the chat's
-        Tools switch is on, thinking is always on, whatever this says: without it, small models mostly answer from
-        memory instead of using their tools.
+        spend minutes on simple ones. Models whose chat template has no thinking mode ignore it. With it off, small
+        models usually skip the tools and answer from what they already know, so chat offers to turn it on when you
+        switch Tools on.
       </Typography>
     </Stack>
   );

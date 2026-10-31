@@ -28,7 +28,8 @@ browser.
 **Tools** are things the model can do while answering, grouped by what they
 reach and switched on or off one by one (`server/tools.ts`). With the
 **Tools** switch on in chat, the model gets every tool that's on and ready.
-Tool calls and their results show in the reply.
+That switch starts off, and your browser remembers where you leave it. Tool
+calls and their results show in the reply.
 
 The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 `read_file`, `find_files` (names, with `*` wildcards) and `grep` (regular
@@ -92,5 +93,7 @@ Each group adds a few lines to the system prompt while its tools are on.
 - **Think before answering**, per model in **Settings → Models** (off by
   default): off sends `chat_template_kwargs: {enable_thinking: false}`; on
   shows the model's reasoning in a collapsible panel. Saved by model id, so it
-  follows the model to any server. While the **Tools** switch is on, thinking
-  is always on: with it off, small models like Qwen 9B rarely call tools.
+  follows the model to any server, and it's what chat uses. With it off,
+  small models like Qwen 9B rarely call tools, so switching **Tools** on with
+  Think off asks whether to turn Think on, and **Settings → Tools** warns
+  about models that have it off.
