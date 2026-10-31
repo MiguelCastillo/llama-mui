@@ -89,22 +89,22 @@ export default function ModelsSection() {
       });
   };
 
-  const loadModel = async (id: string) => {
+  // Loads or unloads a model, then lists the models again so each status is
+  // the server's, not a guess. The server does it in the background: the
+  // list right after an unload still said "loaded", so ask again each second
+  // until it's done, for up to two minutes (a big model takes a while to load).
+  const setLoaded = async (id: string, load: boolean) => {
+    if (!connector) return;
     setLoading((s) => ({ ...s, [id]: true }));
     try {
-      await loadModel(id);
-      setModels((m) => (m ? m.map((x) => (x.id === id ? { ...x, status: "loading" as const } : x)) : null));
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading((s) => ({ ...s, [id]: false }));
-    }
-  };
-
-  const unloadModel = async (id: string) => {
-    setLoading((s) => ({ ...s, [id]: true }));
-    try {
-      await unloadModel(id);
+      await (load ? loadModel : unloadModel)(connector.id, id);
+      const want = load ? "loaded" : "unloaded";
+      for (let i = 0; i < 120; i++) {
+        const list = await listModelsAdmin(connector.id);
+        setModels(list);
+        if (list.find((m) => m.id === id)?.status === want) break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -231,7 +231,7 @@ export default function ModelsSection() {
                           size="small"
                           variant="contained"
                           color="primary"
-                          onClick={() => loadModel(m.id)}
+                          onClick={() => setLoaded(m.id, true)}
                           disabled={loading[m.id]}
                           startIcon={<PlayCircleOutlined />}
                         >
@@ -245,7 +245,7 @@ export default function ModelsSection() {
                           size="small"
                           variant="contained"
                           color="error"
-                          onClick={() => unloadModel(m.id)}
+                          onClick={() => setLoaded(m.id, false)}
                           disabled={loading[m.id]}
                           startIcon={<StopCircleOutlined />}
                         >
