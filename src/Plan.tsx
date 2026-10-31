@@ -147,12 +147,18 @@ export function PlanView({
   onRun,
   onChange,
   details,
+  since,
+  counter,
 }: {
   steps: PlanStep[];
   running: boolean;
   onRun: () => void;
   onChange: (steps: PlanStep[]) => void;
   details: (stepId: string) => ReactNode[] | null;
+  // While the plan runs: when the run started, for the elapsed counter.
+  since?: number | null;
+  // Draws that counter; passed in so the plan shares chat's.
+  counter?: (since: number) => ReactNode;
 }) {
   const [editing, setEditing] = useState<{ i: number; text: string } | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -190,6 +196,7 @@ export function PlanView({
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
           Plan · {done} of {steps.length} done
         </Typography>
+        {since != null && counter && <Box sx={{ mr: 1 }}>{counter(since)}</Box>}
         {unfinished && (
           <Button size="small" variant="contained" startIcon={<PlayArrowIcon />} onClick={onRun} disabled={running}>
             {started ? "Continue" : "Run"}

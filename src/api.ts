@@ -48,6 +48,13 @@ export interface ChatMessage {
   // How long a step took and roughly how many tokens it used, for display.
   // On assistant messages it covers the thinking; on tool messages, the run.
   stats?: StepStats;
+  // On the last message of a finished reply: how long the whole reply took,
+  // from sending, and two speeds. `clientTps` is what reached the browser:
+  // pieces streamed (about one token each) over the time they took to arrive,
+  // across all rounds, leaving out waits for tools and first tokens.
+  // `serverTps` is llama.cpp's own generation speed, for the last round. A big
+  // gap means the server was slow to deliver, not the model to generate.
+  took?: { ms: number; clientTps?: number; serverTps?: number };
 }
 
 export interface StepStats {

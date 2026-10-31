@@ -28,6 +28,7 @@ import {
   TextField,
   Tooltip,
   Typography,
+  type TypographyProps,
   useMediaQuery,
 } from "@mui/material";
 import AddCommentIcon from "@mui/icons-material/AddComment";
@@ -228,6 +229,15 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // the state would still be the value from before the run started.
   const [planRunning, setPlanRunning] = useState(false);
   const planRunningRef = useRef(false);
+  // When the current task started, for the counter beside the waiting dots
+  // (and on the plan card while a plan runs): from sending
+  // (or Run) until nothing is left running, so a plan's steps and checks
+  // count as one task even though each turn sets and clears `abort`.
+  const [busySince, setBusySince] = useState<number | null>(null);
+  // Pieces streamed in the current round and when the first one came, for
+  // the live tokens per second beside the counter. llama.cpp streams about
+  // one token per piece. A ref, since it changes on every piece.
+  const streamRate = useRef<StreamRate>({ pieces: 0, first: 0 });
   // Token count after the latest reply; it covers the whole conversation.
   const [usage, setUsage] = useState<Usage | null>(null);
   // Index of the first message the model still sees. Clear context moves it
@@ -398,6 +408,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // On only when the user wants tools and some are ready in this chat.
   const toolsOn = toolsWanted && toolContext.definitions.length > 0;
+  const busy = !!abort || planRunning;
+  useEffect(() => {
+    setBusySince((since) => (busy ? (since ?? Date.now()) : null));
+  }, [busy]);
+
   const toolName = (d: unknown) => (d as { function: { name: string } }).function.name;
   const canPlan = toolsOn && toolContext.definitions.some((d) => toolName(d) === "update_plan");
   const planOn = canPlan && planWanted;
@@ -469,6 +484,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
     const controller = new AbortController();
     setAbort(controller);
+    const started = performance.now();
+    // For took: pieces and streaming time over all rounds, and the server's
+    // speed for the latest round.
+    let pieces = 0;
+    let streamedMs = 0;
+    let serverTps: number | undefined;
     try {
       // Each round streams one assistant turn. If it asks for tools, run them,
       // add the results, and let the model continue from there.
@@ -489,6 +510,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         let thinkEnd = 0;
         let thinkPieces = 0;
         const show = () => setMessages([...forgotten, ...history, { ...reply }]);
+        streamRate.current = { pieces: 0, first: 0 };
+        // The empty reply goes on screen before the request is sent, so its
+        // bubble shows the waiting dots from the start, not from the first
+        // token (see `waiting` in MessageBubble).
         show();
         const { toolCalls: asked, usage: replyUsage } = await streamChat(
           {
@@ -513,6 +538,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 : undefined,
           },
           (d) => {
+            streamRate.current.first ||= performance.now();
+            streamRate.current.pieces++;
             if (d.reasoning) {
               thinkStart ||= performance.now();
               thinkPieces++;
@@ -527,6 +554,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         // Calls the model writes anyway on its last turn have nothing to run them.
         const toolCalls: ToolCall[] = lastTurn ? [] : asked;
         if (replyUsage) setUsage(replyUsage);
+        const r = streamRate.current;
+        if (r.first) {
+          pieces += r.pieces;
+          streamedMs += performance.now() - r.first;
+        }
+        serverTps = replyUsage?.tokensPerSecond ?? serverTps;
         if (thinkStart) reply.stats = { ms: (thinkEnd || performance.now()) - thinkStart, tokens: thinkPieces };
         if (replyUsage?.promptTokens && lastToolResults.length) {
           history = shareTokens(history, lastToolResults, replyUsage.promptTokens);
@@ -655,6 +688,23 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       // The server loads models on demand, so a reply can change their status.
       refreshModels(connectorId);
     }
+    const lastReply = history.map((m) => m.role).lastIndexOf("assistant");
+    if (lastReply >= 0) {
+      history = history.map((m, i) =>
+        i === lastReply
+          ? {
+              ...m,
+              took: {
+                ms: performance.now() - started,
+                // Under half a second of streaming is too short to rate.
+                clientTps: streamedMs >= 500 ? pieces / (streamedMs / 1000) : undefined,
+                serverTps,
+              },
+            }
+          : m,
+      );
+      setMessages([...forgotten, ...history]);
+    }
     return { ok, messages: [...forgotten, ...history], error };
   };
 
@@ -747,6 +797,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       key={t.start}
       parts={t.parts}
       streaming={!!abort && i === turns.length - 1}
+      since={busySince}
+      rate={streamRate}
       toolResults={toolResults}
       forgotten={t.start < contextStart}
       showSteps={prefs?.showSteps ?? true}
@@ -964,7 +1016,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             )}
             {turns.map(
               (t, i) =>
-                // A plan step's turns show under the step instead.
+                // A plan step's turns show under the step instead, waiting
+                // dots included; the step's spinner shows progress here.
                 !t.parts[0].planStep && (
                   <Fragment key={t.start}>
                     {t.start === contextStart && contextStart > 0 && <ContextDivider />}
@@ -978,6 +1031,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               <PlanView
                 steps={plan}
                 running={planRunning || !!abort}
+                since={planRunning ? busySince : null}
+                counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
                 onRun={runPlan}
                 onChange={changePlan}
                 details={(id) => {
@@ -1056,6 +1111,8 @@ function MessageBubble({
   failed,
   onResend,
   resendDisabled,
+  since,
+  rate,
 }: {
   parts: ChatMessage[];
   streaming: boolean;
@@ -1072,13 +1129,25 @@ function MessageBubble({
   onResend?: () => void;
   // Disabled state for the resend button.
   resendDisabled?: boolean;
+  // While this reply streams: when the task started, for the counter beside
+  // the waiting dots, and how fast the current round is streaming.
+  since?: number | null;
+  rate?: { current: StreamRate };
 }) {
   // This message's own choice of formatted or raw text; null follows
   // Settings → Chat. Declared before the early return below, as hooks must be.
   const [override, setOverride] = useState<boolean | null>(null);
   const showMarkdown = override ?? renderMarkdown;
+  // The finished reply's time and speed, kept on its last message.
+  const took = [...parts].reverse().find((m) => m.took)?.took;
   const isUser = parts[0].role === "user";
   const last = parts[parts.length - 1];
+  // The waiting dots: shown while the reply's newest turn has nothing yet,
+  // which is from sending until the first text, thinking or tool call, and
+  // again between rounds of tool calls (each round starts a new, empty turn).
+  // Once thinking streams, the "Thinking…" panel shows instead. A plan step's
+  // turns render under the step, so during a run its dots are inside the
+  // collapsed details and the step's own spinner is what shows.
   const waiting = showSteps
     ? streaming && !last.content && !last.reasoning && !last.toolCalls?.length
     : streaming && !last.content;
@@ -1158,9 +1227,25 @@ function MessageBubble({
                 ))}
             </Fragment>
           ))}
-          {waiting && <TypingDots />}
+          {streaming && since != null ? (
+            // The counter sits beside the waiting dots, and stays on this
+            // line once text streams in and the dots go.
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: "1.5em" }}>
+              {waiting && <TypingDots />}
+              <Elapsed since={since} rate={rate} variant="caption" color="text.secondary" />
+            </Box>
+          ) : (
+            waiting && <TypingDots />
+          )}
           {!streaming && parts.some((m) => m.content) && (
-            <Box sx={{ display: "flex", justifyContent: "flex-end", mb: -1, mr: -1 }}>
+            <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 1, mb: -1, mr: -1 }}>
+              {took && (
+                <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
+                  {formatSeconds(took.ms)}
+                  {took.clientTps ? ` · ${Math.round(took.clientTps)} tps (client)` : ""}
+                  {took.serverTps ? ` · ${Math.round(took.serverTps)} tps (server)` : ""}
+                </Typography>
+              )}
               <Tooltip title={showMarkdown ? "Show raw text" : "Show formatted"}>
                 <IconButton
                   size="small"
@@ -1508,6 +1593,34 @@ function DiffView({ diff }: { diff: string }) {
         </Box>
       ))}
     </Box>
+  );
+}
+
+interface StreamRate {
+  pieces: number;
+  // performance.now() of the round's first piece; 0 until it arrives.
+  first: number;
+}
+
+// Time since `since`, in whole seconds ("42s", "1m 05s"), updated every second,
+// and with `rate`, the current round's tokens per second once it has streamed
+// for a second (so the wait before the first token doesn't count). Other
+// props go to the Typography.
+function Elapsed({ since, rate, ...rest }: { since: number; rate?: { current: StreamRate } } & TypographyProps) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const sec = Math.max(0, Math.floor((now - since) / 1000));
+  const r = rate?.current;
+  const streamedFor = r?.first ? (performance.now() - r.first) / 1000 : 0;
+  const speed = r && streamedFor >= 1 ? ` · ${Math.round(r.pieces / streamedFor)} tps (client)` : "";
+  return (
+    <Typography component="span" variant="inherit" {...rest} sx={{ fontVariantNumeric: "tabular-nums", ...rest.sx }}>
+      {sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`}
+      {speed}
+    </Typography>
   );
 }
 

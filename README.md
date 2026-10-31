@@ -201,6 +201,13 @@ step that was running when the page closed comes back as pending.
 - Streaming replies with a Stop button. Each step of a reply (thinking, tool
   calls) shows how long it took; hover for token counts. Hide the steps in
   **Settings → Chat** to see just the answers.
+- While a reply runs, a counter next to the waiting dots shows how long it's
+  taken, with the speed it's streaming at; during a plan run it's on the plan
+  card. A finished reply keeps the total in small print, for example
+  "2.8s · 52 tps (client) · 58 tps (server)": the client speed is what reached
+  the browser, the server speed is llama.cpp's own figure for generating it. A
+  big gap means the server was slow to deliver (say, while loading another
+  model), not the model slow to generate.
 - Messages render as Markdown, yours and the model's: bold, lists, tables,
   links (opened in a new tab) and code blocks with a Copy button. Text inside
   ``` blocks shows exactly as typed, and images show as links instead of
