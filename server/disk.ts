@@ -55,7 +55,7 @@ export async function needAccess(real: string): Promise<never> {
   throw new AccessNeeded(target);
 }
 
-async function resolveAllowed(roots: string[], raw: unknown): Promise<string> {
+export async function resolveAllowed(roots: string[], raw: unknown): Promise<string> {
   const { given, abs } = await toAbsolute(roots, raw);
   let real: string;
   try {

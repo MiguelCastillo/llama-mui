@@ -8,11 +8,12 @@ import {
   AccessNeeded,
   ApprovalNeeded,
   type AttachmentTarget,
-  type Change,
+  type Approval,
   type ToolContext,
   ToolError,
   type ToolSpec,
 } from "./toolkit.ts";
+import { TERMINAL_TOOLS } from "./terminal.ts";
 import { WEB_TOOLS } from "./web.ts";
 import { WRITE_TOOLS } from "./write.ts";
 
@@ -51,6 +52,18 @@ const GROUPS: Group[] = [
       "use edit_file for changes to part of a file.",
   },
   {
+    id: "terminal",
+    label: "Terminal",
+    description:
+      "Run shell commands the model suggests, in a folder attached to a chat. You see each command and approve " +
+      "it before it runs. Commands run as you, with your network access and credentials (git, gh and so on).",
+    instructions: () =>
+      "You can run shell commands with run_command, for example git, gh or npm; it runs on the user's computer, " +
+      "which has network access and their credentials even though you don't. The user approves each command " +
+      "before it runs. Run one command at a time, explain what it's for, and never run anything destructive " +
+      "(rm -rf, force pushes, resets) unless the user asked for it.",
+  },
+  {
     id: "web",
     label: "Web",
     description:
@@ -61,7 +74,7 @@ const GROUPS: Group[] = [
   },
 ];
 
-const TOOLS: ToolSpec[] = [...DISK_TOOLS, ...WRITE_TOOLS, ...WEB_TOOLS];
+const TOOLS: ToolSpec[] = [...DISK_TOOLS, ...WRITE_TOOLS, ...TERMINAL_TOOLS, ...WEB_TOOLS];
 
 const isOffered = (ctx: ToolContext, t: ToolSpec) => !ctx.store.disabledTools.includes(t.name);
 
@@ -78,12 +91,14 @@ function toolsSystemPrompt(ctx: ToolContext): string | null {
 const contextFor = async (rawAttachments: unknown, approved: unknown = null): Promise<ToolContext> => ({
   store: await load(),
   attachments: await checkAttachments(rawAttachments),
-  approved: typeof approved === "string" ? approved : null,
+  // Re-serialized here so the comparison in requireApproval doesn't depend on
+  // how the client formatted its JSON.
+  approved: approved && typeof approved === "object" ? JSON.stringify(approved) : null,
 });
 
 // Text for the model (errors included), a path the user must allow before
-// the call can run, or a change the user must approve before it's written.
-type Outcome = { result: string } | { needsAccess: AttachmentTarget } | { needsApproval: Change };
+// the call can run, or something the user must approve first.
+type Outcome = { result: string } | { needsAccess: AttachmentTarget } | { needsApproval: Approval };
 
 async function runTool(name: string, rawArgs: unknown, ctx: ToolContext): Promise<Outcome> {
   const text = (result: string) => ({ result });
@@ -100,7 +115,7 @@ async function runTool(name: string, rawArgs: unknown, ctx: ToolContext): Promis
     return text(await tool.run(ctx, args));
   } catch (e: any) {
     if (e instanceof AccessNeeded) return { needsAccess: e.target };
-    if (e instanceof ApprovalNeeded) return { needsApproval: e.change };
+    if (e instanceof ApprovalNeeded) return { needsApproval: e.approval };
     if (e instanceof ToolError) return text(`Error: ${e.message}`);
     if (e.code === "EACCES" || e.code === "EPERM") return text("Error: permission denied");
     throw e;

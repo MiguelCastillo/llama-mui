@@ -15,6 +15,7 @@ import {
 import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
 import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
 import { type ToolGroup, getTools, setToolEnabled } from "./api";
 
@@ -22,6 +23,7 @@ import { type ToolGroup, getTools, setToolEnabled } from "./api";
 const GROUP_UI: Record<string, { icon: ReactNode }> = {
   disk: { icon: <FolderOutlinedIcon /> },
   write: { icon: <EditOutlinedIcon /> },
+  terminal: { icon: <TerminalOutlinedIcon /> },
   web: { icon: <PublicOutlinedIcon /> },
 };
 

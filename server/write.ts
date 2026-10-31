@@ -1,14 +1,14 @@
 // Tools that create and change files inside what's attached to the chat.
 // Nothing is written until the user approves the exact change: the first call
-// throws ApprovalNeeded with a diff, and chat runs the call again with that
-// diff once the user allows it. If the file changed in between, the diff no
-// longer matches and the user is asked again.
+// throws ApprovalNeeded with a diff, and chat runs the call again once the
+// user allows it. If the file changed in between, the diff no longer matches
+// and the user is asked again.
 
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { isInside, isSettingsFile, looksBinary, needAccess, toAbsolute } from "./disk.ts";
-import { ApprovalNeeded, type Change, type ToolContext, ToolError, type ToolSpec, fn } from "./toolkit.ts";
+import { type Approval, type ToolContext, ToolError, type ToolSpec, fn, requireApproval } from "./toolkit.ts";
 
 const MAX_WRITE_BYTES = 1024 * 1024;
 
@@ -61,11 +61,12 @@ const hunks = (file: string, before: string, after: string) => {
 const countLines = (s: string) => (s ? s.split("\n").length - (s.endsWith("\n") ? 1 : 0) : 0);
 
 // Writes `after` once the user has approved exactly this change.
-async function commit(ctx: ToolContext, file: string, before: string | null, after: string, action: Change["action"]) {
+type ChangeAction = Extract<Approval, { type: "change" }>["action"];
+
+async function commit(ctx: ToolContext, file: string, before: string | null, after: string, action: ChangeAction) {
   if (Buffer.byteLength(after) > MAX_WRITE_BYTES) throw new ToolError("the new content is over 1 MB");
   if (before === after) throw new ToolError(`${file} already has that content; nothing to change`);
-  const diff = hunks(file, before ?? "", after);
-  if (ctx.approved !== diff) throw new ApprovalNeeded({ path: file, action, diff });
+  requireApproval(ctx, { type: "change", path: file, action, diff: hunks(file, before ?? "", after) });
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, after);
 }

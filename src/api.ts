@@ -185,20 +185,24 @@ export interface ToolContext {
 // come from the server so they match what it can run.
 export const getToolContext = (attachments: string[]) =>
   call<ToolContext>("POST", "/api/tools/context", { attachments });
-// A change a write tool wants to make, shown to the user before it's written.
-export interface Change {
-  path: string;
-  action: "create" | "overwrite" | "edit";
-  // Unified diff hunks.
-  diff: string;
-}
+// Something a tool wants to do that the user approves first: a change to a
+// file, or a shell command.
+export type Approval =
+  | {
+      type: "change";
+      path: string;
+      action: "create" | "overwrite" | "edit";
+      // Unified diff hunks.
+      diff: string;
+    }
+  | { type: "command"; command: string; cwd: string };
 
 // Text for the model, a path outside the attachments that the user must allow
-// before the call can run, or a change the user must approve.
-export type ToolOutcome = { result: string } | { needsAccess: AttachmentTarget } | { needsApproval: Change };
-// `approved` is the diff of a change the user allowed; the server writes only
-// if the call would still make exactly that change.
-export const runTool = (c: ToolCall, attachments: string[], approved?: string) =>
+// before the call can run, or something the user must approve.
+export type ToolOutcome = { result: string } | { needsAccess: AttachmentTarget } | { needsApproval: Approval };
+// `approved` is what the user allowed; the server goes ahead only if the call
+// would still do exactly that.
+export const runTool = (c: ToolCall, attachments: string[], approved?: Approval) =>
   call<ToolOutcome>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments, attachments, approved });
 
 export interface Usage {

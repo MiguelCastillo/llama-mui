@@ -5,7 +5,7 @@ import type { Store } from "./store.ts";
 
 // What a tool call runs with: the saved settings, the files and folders
 // attached to the chat it came from (already resolved and checked), and the
-// change the user approved for this call, if any (see ApprovalNeeded).
+// approval the user gave for this call, serialized, if any (see ApprovalNeeded).
 export interface ToolContext {
   store: Store;
   attachments: string[];
@@ -41,21 +41,31 @@ export class AccessNeeded extends Error {
   }
 }
 
-// A change a write tool wants to make, as the user sees it before allowing it.
-export interface Change {
-  path: string;
-  action: "create" | "overwrite" | "edit";
-  // Unified diff hunks, without the file header.
-  diff: string;
+// What a tool wants to do that the user must approve first, as they see it:
+// a change to a file, or a shell command.
+export type Approval =
+  | {
+      type: "change";
+      path: string;
+      action: "create" | "overwrite" | "edit";
+      // Unified diff hunks, without the file header.
+      diff: string;
+    }
+  | { type: "command"; command: string; cwd: string };
+
+// Thrown until the user approves. Chat runs the call again with the approval
+// it showed, serialized, in ToolContext.approved.
+export class ApprovalNeeded extends Error {
+  constructor(readonly approval: Approval) {
+    super("This needs the user's approval");
+  }
 }
 
-// Thrown by write tools until the user approves the change. Chat runs the call
-// again with the approved diff in ToolContext.approved; the tool writes only
-// if the change it would make now is still exactly that one.
-export class ApprovalNeeded extends Error {
-  constructor(readonly change: Change) {
-    super(`The change to ${change.path} needs the user's approval`);
-  }
+// Returns only if the user approved exactly this: if what the call would do
+// now differs from what they saw (say, the file changed since the preview),
+// they're asked again.
+export function requireApproval(ctx: ToolContext, approval: Approval) {
+  if (ctx.approved !== JSON.stringify(approval)) throw new ApprovalNeeded(approval);
 }
 
 export const fn = (name: string, description: string, parameters: object): ToolSpec["definition"] => ({

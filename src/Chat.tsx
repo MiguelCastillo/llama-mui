@@ -41,6 +41,7 @@ import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import LayersClearOutlinedIcon from "@mui/icons-material/LayersClearOutlined";
 import CloseIcon from "@mui/icons-material/Close";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import {
   type ChatMessage,
   type StepStats,
@@ -49,7 +50,7 @@ import {
   type Preferences,
   type Attachment,
   type AttachmentTarget,
-  type Change,
+  type Approval,
   type ToolContext,
   type Usage,
   type Connector,
@@ -119,7 +120,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What a reply is waiting on the user for: a path the model asked for that
   // isn't attached, or a change to a file. Cleared once they answer.
   const [pending, setPending] = useState<{
-    ask: { needsAccess: AttachmentTarget } | { needsApproval: Change };
+    ask: { needsAccess: AttachmentTarget } | { needsApproval: Approval };
     decide: (allow: boolean) => void;
   } | null>(null);
   // What to offer the model given those attachments and Settings → Tools.
@@ -267,6 +268,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           history = shareTokens(history, lastToolResults, replyUsage.promptTokens);
         }
         lastToolResults = [];
+        // After a tool result, small models (Qwen 9B) sometimes write the whole
+        // answer inside their thinking and end with no text. Promote it, or
+        // the reply is blank (with steps hidden) and the next turn lacks it.
+        if (!toolCalls.length && !reply.content.trim() && reply.reasoning?.trim()) {
+          reply.content = reply.reasoning.trim();
+          reply.reasoning = "";
+        }
         if (toolCalls.length) reply.toolCalls = toolCalls;
         history = [...history, reply];
         setMessages([...forgotten, ...history]);
@@ -295,13 +303,18 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 attach({ ...target, source: "request" });
                 outcome = await runTool(call, attached);
               } else {
-                const change = outcome.needsApproval;
+                const approval = outcome.needsApproval;
                 if (!allowed) {
-                  outcome = { result: `Error: the user didn't approve this change to ${change.path}; nothing was written` };
+                  outcome = {
+                    result:
+                      approval.type === "change"
+                        ? `Error: the user didn't approve this change to ${approval.path}; nothing was written`
+                        : "Error: the user didn't approve running this command; it didn't run",
+                  };
                   break;
                 }
-                // Asks again if the file changed since the preview.
-                outcome = await runTool(call, attached, change.diff);
+                // The server asks again if, say, the file changed since the preview.
+                outcome = await runTool(call, attached, approval);
               }
             }
             result = outcome.result;
@@ -510,7 +523,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               ("needsAccess" in pending.ask ? (
                 <AccessPrompt target={pending.ask.needsAccess} onDecide={pending.decide} />
               ) : (
-                <ChangePrompt change={pending.ask.needsApproval} onDecide={pending.decide} />
+                <ApprovalPrompt approval={pending.ask.needsApproval} onDecide={pending.decide} />
               ))}
             {error && <Alert severity="error">{error}</Alert>}
             <div ref={bottomRef} />
@@ -650,9 +663,14 @@ function ToolCallView({ call, result: resultMessage }: { call: ToolCall; result?
     // Shown raw below; the server reports the bad JSON to the model.
   }
   // find_files and grep take a pattern, web_search a query; show it along with
-  // where they looked.
+  // where they looked. run_command shows its command.
   const term = args.pattern ?? args.query;
-  const target = term !== undefined ? `"${term}"${args.path ? ` in ${args.path}` : ""}` : (args.path ?? "");
+  const target =
+    args.command !== undefined
+      ? String(args.command)
+      : term !== undefined
+        ? `"${term}"${args.path ? ` in ${args.path}` : ""}`
+        : (args.path ?? "");
   const failed = result?.startsWith("Error:");
   return (
     <Accordion
@@ -861,7 +879,7 @@ function AccessPrompt({ target, onDecide }: { target: AttachmentTarget; onDecide
   return (
     <Alert severity="warning" icon={<AttachmentIcon kind={target.kind} />}>
       <Typography variant="body2">
-        The model wants to read this {target.kind}, which isn't attached to this chat:
+        The model wants access to this {target.kind}, which isn't attached to this chat:
       </Typography>
       <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere", my: 0.5 }}>
         {target.path}
@@ -882,25 +900,50 @@ function AccessPrompt({ target, onDecide }: { target: AttachmentTarget; onDecide
   );
 }
 
-const CHANGE_VERB: Record<Change["action"], string> = {
+type ChangeApproval = Extract<Approval, { type: "change" }>;
+
+const CHANGE_VERB: Record<ChangeApproval["action"], string> = {
   create: "create",
   overwrite: "replace everything in",
   edit: "change",
 };
 
-// Shown while a reply waits on a file change: the diff, and Approve / Deny.
-// Nothing is written until the user approves.
-function ChangePrompt({ change, onDecide }: { change: Change; onDecide: (allow: boolean) => void }) {
+// Shown while a reply waits on the user: a file change as a diff, or a
+// command and where it runs, with Approve (Run) / Deny. Nothing happens until
+// the user approves.
+function ApprovalPrompt({ approval, onDecide }: { approval: Approval; onDecide: (allow: boolean) => void }) {
+  const isCommand = approval.type === "command";
   return (
-    <Alert severity="info" icon={<EditOutlinedIcon fontSize="small" />} sx={{ "& .MuiAlert-message": { minWidth: 0, flexGrow: 1 } }}>
-      <Typography variant="body2">The model wants to {CHANGE_VERB[change.action]} this file:</Typography>
-      <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere", my: 0.5 }}>
-        {change.path}
-      </Typography>
-      <DiffView diff={change.diff} />
+    <Alert
+      severity={isCommand ? "warning" : "info"}
+      icon={isCommand ? <TerminalOutlinedIcon fontSize="small" /> : <EditOutlinedIcon fontSize="small" />}
+      sx={{ "& .MuiAlert-message": { minWidth: 0, flexGrow: 1 } }}
+    >
+      {isCommand ? (
+        <>
+          <Typography variant="body2">The model wants to run this command:</Typography>
+          <Box
+            component="pre"
+            sx={{ m: 0, my: 1, p: 1, borderRadius: 1, bgcolor: "background.default", fontFamily: "monospace", fontSize: "0.85rem", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+          >
+            $ {approval.command}
+          </Box>
+          <Typography variant="caption" color="text.secondary" component="div">
+            In {approval.cwd}. It runs as you, with your network access and credentials.
+          </Typography>
+        </>
+      ) : (
+        <>
+          <Typography variant="body2">The model wants to {CHANGE_VERB[approval.action]} this file:</Typography>
+          <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere", my: 0.5 }}>
+            {approval.path}
+          </Typography>
+          <DiffView diff={approval.diff} />
+        </>
+      )}
       <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
-        <Button size="small" variant="contained" onClick={() => onDecide(true)}>
-          Approve
+        <Button size="small" variant="contained" color={isCommand ? "warning" : "primary"} onClick={() => onDecide(true)}>
+          {isCommand ? "Run" : "Approve"}
         </Button>
         <Button size="small" variant="outlined" color="inherit" onClick={() => onDecide(false)}>
           Deny

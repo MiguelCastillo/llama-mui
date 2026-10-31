@@ -48,6 +48,14 @@ Approve / Deny. The server writes only if the change is still exactly the
 diff you approved; if the file changed in between, you're asked again. Files
 can't be deleted, and `settings.json` can't be written.
 
+The **Terminal** group (`server/terminal.ts`) has `run_command`, which runs a
+shell command the model suggests, in an attached folder (or one you allow).
+The reply pauses on the command and folder with Run / Deny, and it runs only
+if you approve exactly that. It runs as you, with your login shell's
+environment (PATH and so on), network and credentials: the model can't reach GitHub, but a `git push`
+it suggests can. Commands get no input (git won't prompt for a password) and
+are stopped after 2 minutes; the output and exit code go back to the model.
+
 The **Web** group (`server/web.ts`) has `web_search`, which sends the model's
 query to DuckDuckGo and returns titles, links and snippets. DuckDuckGo has no
 official API, so it reads the plain-HTML results page; if that page changes,
