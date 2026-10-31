@@ -33,6 +33,10 @@ reach and switched on or off one by one (`server/tools.ts`). With the
 That switch starts off, and your browser remembers where you leave it. Tool
 calls and their results show in the reply.
 
+The **Plan** group (`server/plan.ts`) has `update_plan`, which the model
+uses to write down the steps of a task that changes files. Chat runs those
+steps one at a time and checks each one; see [How plans work](#how-plans-work).
+
 The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 `read_file`, `find_files` (names, with `*` wildcards) and `grep` (regular
 expressions over file contents). They read only what's attached to the chat.
@@ -84,6 +88,101 @@ fetched from this machine, so the model can reach anything it can, including
 your local network.
 
 Each group adds a few lines to the system prompt while its tools are on.
+
+## How plans work
+
+Small models often say they're done when they aren't. A plan makes the work
+visible and checked: the model writes the steps, chat runs them one at a time,
+and a step only gets its checkmark when a separate check agrees it's done. The
+code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
+
+### When a plan is made
+
+- The **Plan** switch is next to **Tools** in chat. It's on by default, your
+  browser remembers it, and it only works while **Tools** is on and
+  **Plan tasks** is on in **Settings → Tools**.
+- With it on, **every message you send** gets a planning turn first. Chat
+  decides that, not the model: the model doesn't get to choose whether to
+  have one.
+- In the planning turn the system prompt adds: "Right now, only plan. Read
+  what you need, then call update_plan with the steps for this request, and
+  stop. Don't change any files yet… If the request doesn't change files,
+  answer it directly instead." The model only gets `update_plan` and the
+  read tools (`list_directory`, `read_file`, `find_files`, `grep`,
+  `locate_path`), so it can't change anything in that turn.
+- What happens next is the model's choice:
+  - **It calls `update_plan`**: the steps show as a checklist with **Run**,
+    and nothing has changed yet. A new plan replaces the one before it,
+    except that a step with exactly the same text keeps its status.
+  - **It answers instead**, which is what it should do for a question: you
+    get the answer and no plan. A small model may still plan something
+    simple, or answer something it should have planned.
+- Messages that don't get a planning turn: **Resend** of a failed message,
+  and the "Do step" messages chat sends while running a plan. With **Plan**
+  off, the system prompt still suggests a plan, but nothing makes the model
+  write one, and small models usually don't.
+- Known gap: the planning turn leaves out `web_search` and `fetch_url`, so
+  with **Plan** on, a question that needs the web can't search. They should
+  be allowed, since they don't change anything.
+
+### How many steps
+
+- **The model decides**, in the planning turn. Its only guidance is the
+  tool's instructions: each step is "one change you can make in one turn,
+  written so someone could check it from the diff alone".
+- **Limits**: at most 12 steps, each at most 300 characters, and none empty.
+  A plan over a limit is refused with an error such as "at most 12 steps;
+  merge some", and the model has to try again.
+- **You**: before or between runs, hover a step to edit its text or remove
+  it. There's no way to add a step yet; ask the model for a new plan instead.
+- Nothing checks the plan's size. A plan with one big step gets one check at
+  the end, which loses most of the benefit.
+
+### Running a plan
+
+- **Run** (or **Continue**) runs the first step that's pending or not done,
+  then the next, until every step is done or one stops.
+- Each step is one turn: chat sends "Do step 2 of 4: …" with the plan so far,
+  and the model works on that step only, with all its tools.
+- Then chat **checks** the step: one more call to the model, with no tools,
+  given the step, the changes made during it (for each change you approved,
+  the diff you saw, with the lines around it), and the reply. It answers
+  `DONE` or `MISSING: …`. The check uses the chat's **Think** setting, and
+  works much better with it on.
+- **Not done**: the model gets one retry with what's missing, and the step is
+  checked again. If it's still not done, the step gets ✗ with "Not done: …"
+  under it, and the plan stops.
+- **Stopped or failed**: if you press **Stop**, or the reply fails, the step
+  goes back to pending (with "The reply failed: …" if it did) and the plan
+  stops. **Continue** picks it up again.
+- While a plan runs, you can't send messages or switch chats.
+
+### Who marks a step done
+
+Only the check. The model writes only the steps' text: statuses it sends are
+ignored. When it calls `update_plan` again, a step keeps its status (and its
+note and history) only if it's the same step as before:
+
+- **While the plan runs**, the step in the same position. The model may
+  reword the step it's on, or add steps at the end.
+- **Otherwise**, the step with exactly the same text. A reworded or new step
+  starts pending.
+
+### Rerunning and editing
+
+- **Rerun** a done or not-done step to run it again on the files as they are
+  now. The done steps after it are marked "An earlier step changed; this may
+  need a rerun", since they were built on the old version.
+- **Editing** a step's text makes it pending again.
+- The step's earlier messages stay with it, so its history shows every run.
+
+### Where the step messages go
+
+A step's messages (the "Do step" message, the reply, its tool calls and any
+retry) carry the step's id and don't show in the chat. Click the arrow next to
+a step to see them. They're still sent to the model, so later steps know what
+earlier ones did. The plan, with each step's status, is saved with the chat; a
+step that was running when the page closed comes back as pending.
 
 ## Features
 

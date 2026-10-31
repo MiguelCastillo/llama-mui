@@ -58,6 +58,7 @@ import {
   type AttachmentTarget,
   type Approval,
   type ToolContext,
+  type PlanStep,
   type Session,
   type SessionSummary,
   type Usage,
@@ -81,6 +82,7 @@ import ChatSettings, { AttachmentIcon } from "./ChatSettings";
 import SessionsPanel from "./SessionsPanel";
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
+import { PLANNING_NOTE, PLANNING_TOOLS, PlanView, planFromCall, reviewStep, stepPrompt } from "./Plan";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
 // and whether the Tools switch is on. Storage can be unavailable (private
@@ -89,6 +91,8 @@ const TOOLBAR_KEY = "llama-mui:toolbarOpen";
 // Off until the user turns it on: tools can read files, change them and run
 // commands, so they're something to opt into.
 const TOOLS_KEY = "llama-mui:toolsOn";
+// On by default: with tools on, a task gets a plan that chat runs and checks.
+const PLAN_KEY = "llama-mui:planOn";
 // Saved as `failed` while a reply runs, so a chat reopened after the page
 // went away mid-reply offers to resend.
 const INTERRUPTED = "interrupted";
@@ -194,6 +198,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setToolsWantedState(on);
     saveFlag(TOOLS_KEY, on);
   };
+  const [planWanted, setPlanWantedState] = useState(() => loadFlag(PLAN_KEY, true));
+  const setPlanWanted = (on: boolean) => {
+    setPlanWantedState(on);
+    saveFlag(PLAN_KEY, on);
+  };
   // Files and folders this chat's disk tools may read; New chat clears them.
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // What a reply is waiting on the user for: a path the model asked for that
@@ -207,6 +216,18 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [error, setError] = useState<string | null>(null);
   // Failure of the last reply only; see retry().
   const [failed, setFailed] = useState<string | null>(null);
+  // The task's steps (see Plan.tsx). The ref is the latest plan for the plan
+  // runner, which reads it between awaits; change it only with changePlan.
+  const [plan, setPlan] = useState<PlanStep[] | null>(null);
+  const planRef = useRef<PlanStep[] | null>(null);
+  const changePlan = (next: PlanStep[] | null) => {
+    planRef.current = next;
+    setPlan(next);
+  };
+  // The ref is for code that runs inside the plan runner's own awaits, where
+  // the state would still be the value from before the run started.
+  const [planRunning, setPlanRunning] = useState(false);
+  const planRunningRef = useRef(false);
   // Token count after the latest reply; it covers the whole conversation.
   const [usage, setUsage] = useState<Usage | null>(null);
   // Index of the first message the model still sees. Clear context moves it
@@ -238,7 +259,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What was last saved or loaded, so opening a chat doesn't save it again
   // (which would move it to the top of the list).
   const savedKey = useRef("");
-  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed]);
+  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan]);
 
   const applySession = (s: Session) => {
     savedKey.current = keyOf(s);
@@ -247,6 +268,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setAttachments(s.attachments);
     setUsage(s.usage);
     setFailed(s.failed ?? null);
+    // A step that was running when the page went away didn't finish.
+    changePlan(
+      s.plan?.map((st) => ({
+        ...st,
+        id: st.id ?? crypto.randomUUID(),
+        status: st.status === "running" ? "pending" : st.status,
+      })) ?? null,
+    );
     if (s.model) setModel(s.model);
   };
 
@@ -278,6 +307,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       attachments,
       usage,
       failed: abort ? INTERRUPTED : failed,
+      plan,
     };
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -292,11 +322,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   useEffect(() => {
     const timer = setTimeout(saveNow, 800);
     return () => clearTimeout(timer);
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
-    if (abort) return;
+    if (abort || planRunningRef.current) return;
     if (saveFirst) saveNow();
     setSessionId(id);
     saveSessionId(id);
@@ -306,6 +336,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setContextStart(0);
     setAttachments([]);
     setFailed(null);
+    changePlan(null);
     setDrawerOpen(false);
     loadSession(id);
   };
@@ -367,6 +398,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // On only when the user wants tools and some are ready in this chat.
   const toolsOn = toolsWanted && toolContext.definitions.length > 0;
+  const toolName = (d: unknown) => (d as { function: { name: string } }).function.name;
+  const canPlan = toolsOn && toolContext.definitions.some((d) => toolName(d) === "update_plan");
+  const planOn = canPlan && planWanted;
   const thinkOn = !!(modelSettings?.models[model] ?? modelSettings?.defaults)?.think;
   // Switching Tools on with Think off asks whether to turn Think on: without
   // it, small models (Qwen 9B) mostly answer from memory instead of calling
@@ -403,21 +437,33 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Sends a reply after the user types it.
   const send = async () => {
     const text = input.trim();
-    if (!text || !model || !connector || abort) return;
+    if (!text || !model || !connector || abort || planRunning) return;
     setInput("");
-    reply(text, messages);
+    reply(text, messages, { planning: planOn });
   };
 
   // Streams a reply, building history from `before` instead of `messages`.
-  // Called by `send()` for new messages, and by `retry()` for failed ones.
-  const reply = async (text: string, before: ChatMessage[]) => {
-    if (!connector) return;
+  // Called by `send()` for new messages, by `retry()` for failed ones, and by
+  // `runPlan()` for each step. Returns the messages it ended with, and whether
+  // the model finished (not stopped, failed or cut off by a limit).
+  // `planning`: this turn only writes a plan (see PLANNING_NOTE). `planStep`:
+  // the turn runs that plan step; its messages carry the step's id and show
+  // under the step, and a failure stays with the step instead of offering Resend.
+  const reply = async (
+    text: string,
+    before: ChatMessage[],
+    { planning = false, planStep }: { planning?: boolean; planStep?: string } = {},
+  ): Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }> => {
+    const tag = planStep ? { planStep } : {};
+    let error: string | undefined;
+    if (!connector) return { ok: false, messages: before };
+    let ok = false;
     const connectorId = connector.id;
     // Fixed for this reply, even if the user changes attachments meanwhile;
     // only paths the user allows mid-reply are added.
     let attached = attachments.map((a) => a.path);
     const forgotten = before.slice(0, contextStart);
-    let history: ChatMessage[] = [...before.slice(contextStart), { role: "user", content: text }];
+    let history: ChatMessage[] = [...before.slice(contextStart), { role: "user", content: text, ...tag }];
     setError(null);
     setFailed(null);
 
@@ -438,7 +484,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       let stopReason: string | null = null;
       for (let round = 0; ; round++) {
         const lastTurn: boolean = stopReason !== null;
-        const reply: ChatMessage = { role: "assistant", content: "", reasoning: "" };
+        const reply: ChatMessage = { role: "assistant", content: "", reasoning: "", ...tag };
         let thinkStart = 0;
         let thinkEnd = 0;
         let thinkPieces = 0;
@@ -450,10 +496,21 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             model,
             messages:
               toolsOn && !lastTurn && toolContext.systemPrompt
-                ? [{ role: "system", content: toolContext.systemPrompt }, ...history]
+                ? [
+                    {
+                      role: "system",
+                      content: planning ? `${toolContext.systemPrompt}\n\n${PLANNING_NOTE}` : toolContext.systemPrompt,
+                    },
+                    ...history,
+                  ]
                 : history,
             think: thinkOn,
-            tools: toolsOn && !lastTurn ? toolContext.definitions : undefined,
+            tools:
+              toolsOn && !lastTurn
+                ? planning
+                  ? toolContext.definitions.filter((d) => PLANNING_TOOLS.has(toolName(d)))
+                  : toolContext.definitions
+                : undefined,
           },
           (d) => {
             if (d.reasoning) {
@@ -487,13 +544,15 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         setMessages([...forgotten, ...history]);
         if (!toolCalls.length) {
           if (stopReason) setError(stopReason);
+          ok = !stopReason;
           break;
         }
 
         for (const call of toolCalls) {
-          if (controller.signal.aborted) return;
+          if (controller.signal.aborted) return { ok, messages: [...forgotten, ...history] };
           let started = performance.now();
           let result: string;
+          let diff: string | undefined;
           const key = callKey(call);
           const times = ran.get(key) ?? 0;
           ran.set(key, times + 1);
@@ -509,7 +568,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             let outcome = await runTool(call, { chatId: sessionId, attachments: attached });
             while (!("result" in outcome)) {
               const answer = await askUser(outcome, controller.signal);
-              if (controller.signal.aborted) return;
+              if (controller.signal.aborted) return { ok, messages: [...forgotten, ...history] };
               // Time spent waiting on the user isn't the tool's.
               started = performance.now();
               if (Array.isArray(answer)) {
@@ -556,6 +615,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   };
                   break;
                 }
+                if (approval.type === "change") diff = approval.diff;
                 // The server asks again if, say, the file changed since the preview.
                 outcome = await runTool(call, { chatId: sessionId, attachments: attached, approved: approval });
               }
@@ -565,21 +625,98 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             result = `Error: ${e.message}`;
           }
           if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) ran.clear();
+          if (call.name === "update_plan" && !result.startsWith("Error:")) {
+            const steps = planFromCall(call.arguments, planRef.current ?? [], planRunningRef.current);
+            if (steps) changePlan(steps);
+          }
           lastToolResults.push(history.length);
           history = [
             ...history,
-            { role: "tool", content: result, toolCallId: call.id, stats: { ms: performance.now() - started } },
+            {
+              role: "tool",
+              content: result,
+              toolCallId: call.id,
+              stats: { ms: performance.now() - started },
+              ...(diff && !result.startsWith("Error:") && { diff }),
+              ...tag,
+            },
           ];
           setMessages([...forgotten, ...history]);
         }
         if (round === MAX_TOOL_ROUNDS - 1) stopReason ??= `Stopped after ${MAX_TOOL_ROUNDS} rounds of tool calls.`;
       }
     } catch (e) {
-      if (!controller.signal.aborted) setFailed(String(e));
+      if (!controller.signal.aborted) {
+        error = String(e);
+        if (!planStep) setFailed(error);
+      }
     } finally {
       setAbort(null);
       // The server loads models on demand, so a reply can change their status.
       refreshModels(connectorId);
+    }
+    return { ok, messages: [...forgotten, ...history], error };
+  };
+
+  // Changes one step, keeping its text. The patch replaces the rest, so a
+  // step that runs again loses its old note and "may need a rerun" mark.
+  const setStep = (i: number, patch: Omit<PlanStep, "id" | "text">) => {
+    const steps = planRef.current;
+    if (steps?.[i]) changePlan(steps.map((st, j) => (j === i ? { id: st.id, text: st.text, ...patch } : st)));
+  };
+
+  // Checks a step's turn with reviewStep. Null if it couldn't be checked
+  // (stopped, or the server failed), which leaves the step open.
+  const checkStep = async (step: string, stepMessages: ChatMessage[]) => {
+    if (!connector) return null;
+    const controller = new AbortController();
+    setAbort(controller);
+    try {
+      return await reviewStep({ connectorId: connector.id, model, think: thinkOn }, step, stepMessages, controller.signal);
+    } catch (e: any) {
+      if (!controller.signal.aborted) setError(`Couldn't check the step: ${e.message}`);
+      return null;
+    } finally {
+      setAbort(null);
+    }
+  };
+
+  // Runs the plan's open steps in order, one turn each, and checks every step
+  // before ticking it off: the model saying it's done isn't enough. A step that
+  // isn't done gets one retry with what's missing, then waits for the user.
+  const runPlan = async () => {
+    if (!connector || !model || abort || planRunningRef.current) return;
+    planRunningRef.current = true;
+    setPlanRunning(true);
+    let msgs = messages;
+    try {
+      for (;;) {
+        const steps = planRef.current;
+        const i = steps?.findIndex((st) => st.status === "pending" || st.status === "failed") ?? -1;
+        if (!steps || i < 0) break;
+        const { id, text } = steps[i];
+        setStep(i, { status: "running" });
+        const start = msgs.length;
+        let r = await reply(stepPrompt(steps, i), msgs, { planStep: id });
+        msgs = r.messages;
+        let check = r.ok ? await checkStep(text, msgs.slice(start)) : null;
+        if (check && !check.done) {
+          r = await reply(`Step ${i + 1} isn't done yet: ${check.missing}. Finish it, then reply with one line.`, msgs, {
+            planStep: id,
+          });
+          msgs = r.messages;
+          check = r.ok ? await checkStep(text, msgs.slice(start)) : null;
+        }
+        if (!check) {
+          setStep(i, r.error ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}` } : { status: "pending" });
+          break;
+        }
+        setStep(i, check.done ? { status: "done" } : { status: "failed", note: check.missing });
+        if (!check.done) break;
+      }
+    } finally {
+      planRunningRef.current = false;
+      setPlanRunning(false);
     }
   };
 
@@ -603,7 +740,24 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     else turns.push({ parts: [m], start: i });
   });
   // The last turn that's a user message; only its reply can fail.
-  const lastFailedTurnIndex = turns.map((t) => t.parts[0].role).lastIndexOf("user");
+  const lastUserTurn = turns.map((t) => t.parts[0].role).lastIndexOf("user");
+  // One turn drawn as a bubble; `i` is its place among all turns.
+  const bubble = (t: (typeof turns)[number], i: number) => (
+    <MessageBubble
+      key={t.start}
+      parts={t.parts}
+      streaming={!!abort && i === turns.length - 1}
+      toolResults={toolResults}
+      forgotten={t.start < contextStart}
+      showSteps={prefs?.showSteps ?? true}
+      renderMarkdown={prefs?.renderMarkdown ?? true}
+      failed={i === lastFailedTurnIndex ? failed : undefined}
+      onResend={i === lastFailedTurnIndex ? retry : undefined}
+      resendDisabled={i === lastFailedTurnIndex ? !!abort : undefined}
+    />
+  );
+  // A plan step's failure shows on the step, which offers Continue.
+  const lastFailedTurnIndex = lastUserTurn >= 0 && !turns[lastUserTurn].parts[0].planStep ? lastUserTurn : -1;
   const hasContext = messages.length > contextStart;
   const showIndicator = hasContext && !!prefs?.showContextMeter;
 
@@ -619,7 +773,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         currentId={sessionId}
         open={narrow ? drawerOpen : sessionsOpen}
         narrow={narrow}
-        busy={!!abort}
+        busy={!!abort || planRunning}
         onSelect={(id) => id !== sessionId && openSession(id)}
         onNew={newChat}
         onDelete={removeSession}
@@ -724,6 +878,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 disabled={!!abort || toolCount === 0}
               />
             </Tooltip>
+            <Tooltip
+              title={
+                canPlan
+                  ? "For a task, the model first writes a plan; chat runs it one step at a time and checks each step."
+                  : "Needs Tools, with Plan tasks on in Settings → Tools."
+              }
+            >
+              <FormControlLabel
+                label="Plan"
+                control={<Switch checked={planOn} onChange={(e) => setPlanWanted(e.target.checked)} />}
+                disabled={!!abort || !canPlan}
+              />
+            </Tooltip>
           </Stack>
         </Collapse>
         <Tooltip title={toolbarOpen ? "Hide toolbar" : `Show toolbar${model ? ` (${model})` : ""}`}>
@@ -795,24 +962,30 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 </Typography>
               )
             )}
-            {turns.map((t, i) => (
-              <Fragment key={t.start}>
-                {t.start === contextStart && contextStart > 0 && <ContextDivider />}
-                <MessageBubble
-                  parts={t.parts}
-                  streaming={!!abort && i === turns.length - 1}
-                  toolResults={toolResults}
-                  forgotten={t.start < contextStart}
-                  showSteps={prefs?.showSteps ?? true}
-                  renderMarkdown={prefs?.renderMarkdown ?? true}
-                  failed={i === lastFailedTurnIndex ? failed : undefined}
-                  onResend={i === lastFailedTurnIndex ? retry : undefined}
-                  resendDisabled={i === lastFailedTurnIndex ? !!abort : undefined}
-                />
-              </Fragment>
-            ))}
+            {turns.map(
+              (t, i) =>
+                // A plan step's turns show under the step instead.
+                !t.parts[0].planStep && (
+                  <Fragment key={t.start}>
+                    {t.start === contextStart && contextStart > 0 && <ContextDivider />}
+                    {bubble(t, i)}
+                  </Fragment>
+                ),
+            )}
             {/* Cleared after the last message: the divider goes at the end. */}
             {contextStart > 0 && contextStart === messages.length && <ContextDivider />}
+            {plan && (
+              <PlanView
+                steps={plan}
+                running={planRunning || !!abort}
+                onRun={runPlan}
+                onChange={changePlan}
+                details={(id) => {
+                  const own = turns.flatMap((t, i) => (t.parts[0].planStep === id ? [bubble(t, i)] : []));
+                  return own.length ? own : null;
+                }}
+              />
+            )}
             {pending && <PendingPrompt ask={pending.ask} onDecide={pending.decide} />}
             {error && <Alert severity="error">{error}</Alert>}
             <div ref={bottomRef} />

@@ -39,6 +39,12 @@ export interface ChatMessage {
   toolCalls?: ToolCall[];
   // Set on tool messages: which call this is the result of.
   toolCallId?: string;
+  // Set on the result of a file change the user approved: the diff they saw,
+  // with a few lines around each change. Never sent to the model.
+  diff?: string;
+  // Set on the messages of a plan step's turn: that step's id. They're sent to
+  // the model like any other, but show under the step instead of in the chat.
+  planStep?: string;
   // How long a step took and roughly how many tokens it used, for display.
   // On assistant messages it covers the thinking; on tool messages, the run.
   stats?: StepStats;
@@ -237,6 +243,21 @@ export interface Session {
   usage: Usage | null;
   // Failure of the last reply; see Chat.tsx. Older saved chats don't have it.
   failed: string | null;
+  // The task's steps from update_plan; see Plan.tsx. Older saved chats don't have it.
+  plan: PlanStep[] | null;
+}
+
+// One step of a plan. The model writes only the text; chat sets the status
+// as it runs and checks each step.
+export interface PlanStep {
+  // Stays the same when the step is edited or rerun; its messages carry it.
+  id: string;
+  text: string;
+  status: "pending" | "running" | "done" | "failed";
+  // Why a check failed or the step stopped, shown under the step.
+  note?: string;
+  // An earlier step was rerun after this one was done, so it may be out of date.
+  stale?: boolean;
 }
 
 // One row in the sessions panel.

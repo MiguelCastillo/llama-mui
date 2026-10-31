@@ -18,6 +18,7 @@ import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
+import ChecklistOutlinedIcon from "@mui/icons-material/ChecklistOutlined";
 import { type ToolGroup, getConnectors, getModelSettings, getTools, listModels, setToolEnabled } from "./api";
 
 // Models on the selected server with Think off. Without it, small models
@@ -31,6 +32,7 @@ async function modelsNotThinking(): Promise<string[]> {
 
 // Per-group icons; groups not listed here get a generic one.
 const GROUP_UI: Record<string, { icon: ReactNode }> = {
+  plan: { icon: <ChecklistOutlinedIcon /> },
   disk: { icon: <FolderOutlinedIcon /> },
   write: { icon: <EditOutlinedIcon /> },
   terminal: { icon: <TerminalOutlinedIcon /> },
