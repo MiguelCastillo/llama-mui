@@ -45,6 +45,7 @@ import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import SearchOffIcon from "@mui/icons-material/SearchOff";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
+import { keyframes } from "@mui/material/styles";
 import {
   type ChatMessage,
   type StepStats,
@@ -979,7 +980,7 @@ function MessageBubble({
                 ))}
             </Fragment>
           ))}
-          {waiting && <Typography>…</Typography>}
+          {waiting && <TypingDots />}
         </Stack>
       </Paper>
       {errorLine}
@@ -1125,6 +1126,37 @@ function AccessPrompt({ target, onDecide }: { target: AttachmentTarget; onDecide
         </Button>
       </Stack>
     </Alert>
+  );
+}
+
+// Three dots that grow and shrink in turn while a reply hasn't started.
+const typingDot = keyframes({
+  "0%, 80%, 100%": { transform: "scale(0.4)", opacity: 0.4 },
+  "40%": { transform: "scale(1)", opacity: 1 },
+});
+
+function TypingDots() {
+  return (
+    <Box
+      role="status"
+      aria-label="Waiting for a reply"
+      // A line of text tall, so the bubble doesn't jump when words arrive.
+      sx={{ display: "flex", alignItems: "center", gap: 0.5, height: "1.5em" }}
+    >
+      {[0, 0.2, 0.4].map((delay) => (
+        <Box
+          key={delay}
+          sx={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            bgcolor: "text.secondary",
+            animation: `${typingDot} 1.4s ease-in-out ${delay}s infinite`,
+            "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+          }}
+        />
+      ))}
+    </Box>
   );
 }
 
