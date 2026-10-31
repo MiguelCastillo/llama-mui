@@ -12,8 +12,31 @@ import {
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import type { SessionSummary } from "./api";
+import { useState } from "react";
 
-const WIDTH = 260;
+const DEFAULT_WIDTH = 260;
+const MIN_WIDTH = 200;
+const MAX_WIDTH = 480;
+
+// Load the saved width, or default to 260.
+function loadWidth(): number {
+  try {
+    const v = localStorage.getItem("llama-mui:sessionsWidth");
+    const n = Number(v);
+    if (!Number.isNaN(n) && n >= MIN_WIDTH && n <= MAX_WIDTH) return n;
+  } catch {
+    // Storage unavailable; use default.
+  }
+  return DEFAULT_WIDTH;
+}
+// Save the width, clamped to the valid range.
+function saveWidth(width: number) {
+  try {
+    localStorage.setItem("llama-mui:sessionsWidth", String(width));
+  } catch {
+    // Storage unavailable; that's okay.
+  }
+}
 
 // When a chat was last used: "just now", "5m ago", "3h ago", or a date.
 function ago(t: number): string {
@@ -49,8 +72,17 @@ export default function SessionsPanel({
   onDelete: (id: string) => void;
   onClose: () => void;
 }) {
+  const [width, setWidth] = useState(loadWidth);
   const list = (
-    <Box sx={{ width: WIDTH, height: "100%", display: "flex", flexDirection: "column" }}>
+    <Box
+      sx={{
+        width: width,
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        ...(narrow && { width: DEFAULT_WIDTH }),
+      }}
+    >
       <Box sx={{ display: "flex", alignItems: "center", pl: 2, pr: 1, pt: 1, pb: 0.5 }}>
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
           Chats
@@ -116,5 +148,52 @@ export default function SessionsPanel({
     );
   }
   if (!open) return null;
-  return <Box sx={{ flexShrink: 0, height: "100dvh", borderRight: 1, borderColor: "divider" }}>{list}</Box>;
+  return (
+    <Box
+      sx={{
+        flexShrink: 0,
+        height: "100dvh",
+        borderRight: 1,
+        borderColor: "divider",
+        position: "relative",
+        minWidth: MIN_WIDTH,
+        maxWidth: MAX_WIDTH,
+      }}
+    >
+      <Box
+        sx={{
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          right: 0,
+          width: 6,
+          cursor: "col-resize",
+          zIndex: 1,
+          "&:hover": { bgcolor: "action.hover" },
+          userSelect: "none",
+        }}
+        onDoubleClick={() => {
+          setWidth(DEFAULT_WIDTH);
+          saveWidth(DEFAULT_WIDTH);
+        }}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          let latestWidth = width;
+          const onMove = (ev: MouseEvent) => {
+            latestWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, ev.clientX));
+            setWidth(latestWidth);
+          };
+          const onUp = () => {
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+            setWidth(latestWidth);
+            saveWidth(latestWidth);
+          };
+          window.addEventListener("pointermove", onMove);
+          window.addEventListener("pointerup", onUp);
+        }}
+      />
+      {list}
+    </Box>
+  );
 }
