@@ -106,7 +106,8 @@ Each group adds a few lines to the system prompt while its tools are on.
   links (opened in a new tab) and code blocks with a Copy button. Text inside
   ``` blocks shows exactly as typed, and images show as links instead of
   loading. In your messages a single line break stays a line break. Turn it
-  off in **Settings → Chat** to see the raw text.
+  off in **Settings → Chat** to see the raw text, or switch one message with
+  the **<>** button in its bottom-right corner.
 - Context indicator under Send ("98% left"), orange then red as the window
   fills. Click it for tokens used of the model's window, generation speed and
   **Clear context**: the model forgets everything so far, but the transcript

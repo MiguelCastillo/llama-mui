@@ -45,6 +45,7 @@ import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import SearchOffIcon from "@mui/icons-material/SearchOff";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
+import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
 import { keyframes } from "@mui/material/styles";
 import {
   type ChatMessage,
@@ -899,6 +900,10 @@ function MessageBubble({
   // Disabled state for the resend button.
   resendDisabled?: boolean;
 }) {
+  // This message's own choice of formatted or raw text; null follows
+  // Settings → Chat. Declared before the early return below, as hooks must be.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const showMarkdown = override ?? renderMarkdown;
   const isUser = parts[0].role === "user";
   const last = parts[parts.length - 1];
   const waiting = showSteps
@@ -936,8 +941,8 @@ function MessageBubble({
         sx={{
           px: 2,
           py: 1.5,
-          // Your messages span the chat; replies grow with their text.
-          width: isUser ? "100%" : undefined,
+          // Messages and replies both span the chat.
+          width: "100%",
           maxWidth: "100%",
           bgcolor: isUser ? "primary.main" : "background.paper",
           color: isUser ? "primary.contrastText" : "text.primary",
@@ -967,7 +972,7 @@ function MessageBubble({
                 </Accordion>
               )}
               {m.content &&
-                (!renderMarkdown ? (
+                (!showMarkdown ? (
                   <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</Typography>
                 ) : m.role === "assistant" ? (
                   <MarkdownRenderer content={m.content} />
@@ -981,6 +986,21 @@ function MessageBubble({
             </Fragment>
           ))}
           {waiting && <TypingDots />}
+          {!streaming && parts.some((m) => m.content) && (
+            <Box sx={{ display: "flex", justifyContent: "flex-end", mb: -1, mr: -1 }}>
+              <Tooltip title={showMarkdown ? "Show raw text" : "Show formatted"}>
+                <IconButton
+                  size="small"
+                  onClick={() => setOverride(!showMarkdown)}
+                  aria-pressed={!showMarkdown}
+                  // The theme's grey would vanish on your blue messages.
+                  sx={{ color: isUser ? "inherit" : "text.secondary" }}
+                >
+                  <CodeOutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          )}
         </Stack>
       </Paper>
       {errorLine}
