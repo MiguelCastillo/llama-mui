@@ -219,7 +219,7 @@ export function disputePrompt(i: number, missing: string): string {
 export interface Dispute {
   // Whether the check is right: "STEP NOT DONE" agrees with it, "STEP DONE" doesn't.
   verdict: "right" | "wrong" | null;
-  // It called read_file this turn.
+  // It called read_file during this run of the step.
   read: boolean;
   // Lines it quoted, and those that aren't in anything it read.
   quotes: number;
@@ -237,17 +237,25 @@ function quotesIn(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) out.push(...m[1].split("\n"));
   for (const m of text.replace(/```[\s\S]*?```/g, "").matchAll(/`([^`\n]+)`/g)) out.push(m[1]);
-  // Small models copy line numbers in ("20:  connectorId: string,").
-  return out.map((q) => norm(q.replace(/^\s*\d+\s*[:|]\s?/, ""))).filter((q) => q.length >= 12);
+  // Small models copy line numbers in ("20:  connectorId: string,"), label
+  // a quote with a comment ("// Lines 114-130 show the search route"), and
+  // skip parts with "...": none of those are claims about the file.
+  return out
+    .filter((q) => !/^\s*(\/\/|#)\s*lines?\s+\d/i.test(q) && !/^\s*(\.\.\.|…)\s*$/.test(q))
+    .map((q) => norm(q.replace(/^\s*\d+\s*[:|]\s?/, "")))
+    .filter((q) => q.length >= 12);
 }
 
-// Tests a retry turn's answer to disputePrompt against its tool calls: a
-// claim the check is wrong counts only with quotes from files it just read.
-export function weighDispute(messages: ChatMessage[]): Dispute {
-  const results = new Map(messages.filter((m) => m.role === "tool").map((m) => [m.toolCallId, m.content]));
+// Tests a retry turn's answer to disputePrompt against the tool calls: a
+// claim the check is wrong counts only with quotes from files it read.
+// `messages` is the retry turn; `step` is this run of the step, retry
+// included, since a read in the step's first turn is as good (the model read
+// the file there, then quoted it correctly in the retry).
+export function weighDispute(messages: ChatMessage[], step: ChatMessage[]): Dispute {
+  const results = new Map(step.filter((m) => m.role === "tool").map((m) => [m.toolCallId, m.content]));
   const ok = (id: string) => !(results.get(id) ?? "Error:").startsWith("Error:");
   const calls = messages.flatMap((m) => m.toolCalls ?? []);
-  const readCalls = calls.filter((c) => c.name === "read_file" && ok(c.id));
+  const readCalls = step.flatMap((m) => m.toolCalls ?? []).filter((c) => c.name === "read_file" && ok(c.id));
   const seen = norm(readCalls.map((c) => results.get(c.id)).join("\n"));
   const replyText = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content ?? "";
   const verdicts = [...replyText.matchAll(/STEP (NOT )?DONE/gi)];

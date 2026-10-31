@@ -772,14 +772,15 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // Checks a step's turn with reviewStep. Null if it couldn't be checked
   // (stopped, or the server failed), which leaves the step open. The files
-  // are the ones the step changed in any run: a rerun that finds the work
-  // already done changes nothing, and the check then saw no file at all.
-  const checkStep = async (step: string, stepMessages: ChatMessage[], allRuns: ChatMessage[]) => {
+  // are the ones any step of the plan changed, in any run: a step whose work
+  // is already done (by a rerun before, or by an earlier step) changes
+  // nothing, and the check then saw no file at all.
+  const checkStep = async (step: string, stepMessages: ChatMessage[], planMessages: ChatMessage[]) => {
     if (!connector) return null;
     const controller = new AbortController();
     setAbort(controller);
     try {
-      const files = await readWhole(filesChanged(allRuns));
+      const files = await readWhole(filesChanged(planMessages));
       const room = checkRoom(models.find((m) => m.id === model)?.contextSize);
       return await reviewStep(
         { connectorId: connector.id, model, think: thinkOn, room },
@@ -817,7 +818,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         const start = msgs.length;
         let r = await reply(stepPrompt(steps, i), msgs, { planStep: id });
         msgs = r.messages;
-        let check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep === id)) : null;
+        let check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
         if (check && !check.done && !check.unchecked) {
           const missing = check.missing ?? "";
           const retryStart = msgs.length;
@@ -826,12 +827,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           // Said the check is wrong and changed nothing: checking again would
           // only repeat the check, so the step waits for the user. Shown
           // evidence makes it disputed; a bare claim leaves it failed.
-          const d = r.ok ? weighDispute(msgs.slice(retryStart)) : null;
+          const d = r.ok ? weighDispute(msgs.slice(retryStart), msgs.slice(start)) : null;
           if (d?.verdict === "wrong" && !d.changed) {
             setStep(i, { status: disputeHolds(d) ? "disputed" : "failed", note: disputeNote(missing, d) });
             break;
           }
-          check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep === id)) : null;
+          check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
         }
         if (!check) {
           setStep(i, r.error ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}` } : { status: "pending" });

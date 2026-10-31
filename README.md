@@ -146,16 +146,17 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
 - Each step is one turn: chat sends "Do step 2 of 4: …" with the plan so far,
   and the model works on that step only, with all its tools.
 - Then chat **checks** the step: one more call to the model, with no tools,
-  given the step, **every file the step wrote or edited, in this run or an
-  earlier one, whole, as it is now**, the changes made during it (for each change you approved, the diff
+  given the step, **every file any step of the plan wrote or edited, in any
+  run, whole, as it is now**, the changes made during it (for each change you approved, the diff
   you saw; each change cut at 12,000 characters, all of them at 24,000), and
   the reply.
   - Whole files, because diffs alone misled the check: a hunk hid a
     function's first line, so its parameter looked undefined, and a rerun's
     changes were only its fixes, so a route the first attempt wrote looked
-    missing. Code that's in the file counts, whoever wrote it. Earlier runs
-    count too: a rerun that found the work already done changed nothing, and
-    the check, seeing no file, said the file was never created.
+    missing. Code that's in the file counts, whoever wrote it. Other runs
+    and steps count too: a step whose work was already done (by a rerun, or
+    by an earlier step) changed nothing, and the check, seeing no file, said
+    the file was never created.
   - The files get half the model's context (its context size from the
     server, or 32,000 tokens if it's unknown, at about 4 characters a
     token). Files that don't fit, or can't be read, aren't cut or swapped
@@ -182,7 +183,8 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
   - **Check right** (or no answer): it fixes the step, and the step is
     checked again. Still not done, and the step gets ✗ with "Not done: …"
     under it, and the plan stops.
-  - **Check wrong**, with evidence: it read files in that turn, quoted lines,
+  - **Check wrong**, with evidence: it read files during the step (in the
+    step's turn or the retry), quoted lines,
     and every quoted line is in what it read (`weighDispute`; inline code
     under 12 characters doesn't count, since any name is found somewhere).
     The step gets **?** with both sides under it, and the plan stops for you:
