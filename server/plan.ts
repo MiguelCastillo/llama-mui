@@ -1,7 +1,8 @@
 // update_plan: the model writes down the steps of a task that changes files.
 // Small models say they're done when they aren't, so chat runs the plan one
 // step per turn and checks each step (see src/Plan.tsx). The server only
-// checks the steps' shape; chat keeps the plan and shows it.
+// checks the steps' shape; chat keeps the plan and shows it. The rules for
+// when plans are made and who marks steps done are in README, "How plans work".
 
 import { ToolError, type ToolSpec, fn } from "./toolkit.ts";
 
@@ -9,7 +10,7 @@ const MAX_STEPS = 12;
 const MAX_STEP_CHARS = 300;
 
 export const planInstructions =
-  "For a task that changes files, first call update_plan with the steps, all pending, then stop and wait: " +
+  "For a task that changes files, first call update_plan with the steps, then stop and wait: " +
   "the user reviews the plan and runs it. Each step is one change you can make in one turn, written so " +
   "someone could check it from the diff alone. When a message says \"Do step N\", do only that step, then " +
   "reply with one line saying what you changed. Call update_plan again only if the plan itself has to change. " +
@@ -34,7 +35,6 @@ const updatePlan: ToolSpec = {
             type: "object",
             properties: {
               text: { type: "string", description: "What this step changes, in one sentence." },
-              status: { type: "string", enum: ["pending", "done"], description: "Default pending." },
             },
             required: ["text"],
           },

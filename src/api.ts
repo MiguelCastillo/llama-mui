@@ -247,8 +247,8 @@ export interface Session {
   plan: PlanStep[] | null;
 }
 
-// One step of a plan. Chat sets running, done and failed as it runs and
-// checks each step; the model only writes pending or done.
+// One step of a plan. The model writes only the text; chat sets the status
+// as it runs and checks each step.
 export interface PlanStep {
   // Stays the same when the step is edited or rerun; its messages carry it.
   id: string;

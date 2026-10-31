@@ -626,16 +626,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           }
           if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) ran.clear();
           if (call.name === "update_plan" && !result.startsWith("Error:")) {
-            const old = planRef.current;
-            const steps = planFromCall(call.arguments, planRunningRef.current ? old?.map((st) => st.id) : []);
-            // While the plan runs, only chat ticks steps off: the model can
-            // reword or add steps, but not mark its own work done.
-            if (steps)
-              changePlan(
-                planRunningRef.current && old
-                  ? steps.map((st, j) => ({ ...st, status: old[j]?.status ?? "pending", note: old[j]?.note }))
-                  : steps,
-              );
+            const steps = planFromCall(call.arguments, planRef.current ?? [], planRunningRef.current);
+            if (steps) changePlan(steps);
           }
           lastToolResults.push(history.length);
           history = [

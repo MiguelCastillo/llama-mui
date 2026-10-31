@@ -27,22 +27,24 @@ export const PLANNING_TOOLS = new Set([
   "locate_path",
 ]);
 export const PLANNING_NOTE =
-  "Right now, only plan. Read what you need, then call update_plan with the steps for this request, all " +
-  "pending, and stop. Don't change any files yet: the user reviews the plan and runs it. If the request " +
-  "doesn't change files, answer it directly instead.";
+  "Right now, only plan. Read what you need, then call update_plan with the steps for this request, and " +
+  "stop. Don't change any files yet: the user reviews the plan and runs it. If the request doesn't change " +
+  "files, answer it directly instead.";
 
-// The plan from an update_plan call's arguments. Statuses other than done
-// start pending: running and failed are chat's to set. `ids` keeps the ids of
-// steps that already exist, by position, so their messages stay with them.
-export function planFromCall(args: string, ids: string[] = []): PlanStep[] | null {
+// The plan from an update_plan call's arguments, merged with the plan so far.
+// Only chat's check ticks a step off, so a step keeps its id, status and note
+// only if it's the same step as before, and otherwise starts pending: while
+// the plan runs, the step in the same position (the model may reword the step
+// it's on); otherwise, the step with the same text. See README, "How plans work".
+export function planFromCall(args: string, old: PlanStep[], running: boolean): PlanStep[] | null {
   try {
     const steps = JSON.parse(args).steps;
     if (!Array.isArray(steps)) return null;
-    return steps.map((s: any, i: number) => ({
-      id: ids[i] ?? crypto.randomUUID(),
-      text: String(typeof s === "string" ? s : s.text).trim(),
-      status: s?.status === "done" ? "done" : "pending",
-    }));
+    return steps.map((s: any, i: number) => {
+      const text = String(typeof s === "string" ? s : s.text).trim();
+      const same = running ? old[i] : old.find((o) => o.text === text);
+      return same ? { ...same, text } : { id: crypto.randomUUID(), text, status: "pending" };
+    });
   } catch {
     return null;
   }
