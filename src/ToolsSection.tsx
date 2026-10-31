@@ -2,36 +2,31 @@ import { type ReactNode, useEffect, useState } from "react";
 import {
   Alert,
   Box,
-  Button,
   CircularProgress,
   Divider,
-  IconButton,
   List,
   ListItem,
   ListItemText,
   Paper,
   Stack,
   Switch,
-  TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
-import AddIcon from "@mui/icons-material/Add";
 import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
-import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
-import { type ToolsState, addDirectory, getDirectories, getTools, removeDirectory, setToolEnabled } from "./api";
+import { type ToolGroup, getTools, setToolEnabled } from "./api";
 
-// Per-group extras: an icon, and settings the group needs before its tools
-// work. Groups not listed here get a generic icon and no extra settings.
-const GROUP_UI: Record<string, { icon: ReactNode; Setup?: (p: { onChange: () => void }) => ReactNode }> = {
-  disk: { icon: <FolderOutlinedIcon />, Setup: DiskFolders },
+// Per-group icons; groups not listed here get a generic one.
+const GROUP_UI: Record<string, { icon: ReactNode }> = {
+  disk: { icon: <FolderOutlinedIcon /> },
+  write: { icon: <EditOutlinedIcon /> },
   web: { icon: <PublicOutlinedIcon /> },
 };
 
 export default function ToolsSection() {
-  const [state, setState] = useState<ToolsState | null>(null);
+  const [state, setState] = useState<{ groups: ToolGroup[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = () =>
@@ -91,16 +86,6 @@ export default function ToolsSection() {
                 </Box>
               </Stack>
 
-              {ui?.Setup && (
-                <Box sx={{ px: 2, pb: 2 }}>
-                  <ui.Setup onChange={reload} />
-                </Box>
-              )}
-              {g.unavailable && (
-                <Alert severity="info" sx={{ mx: 2, mb: 2 }}>
-                  {g.unavailable}
-                </Alert>
-              )}
 
               <Divider />
               <List disablePadding>
@@ -142,71 +127,6 @@ export default function ToolsSection() {
           );
         })
       )}
-    </Stack>
-  );
-}
-
-// The folders the disk tools may read.
-function DiskFolders({ onChange }: { onChange: () => void }) {
-  const [directories, setDirectories] = useState<string[] | null>(null);
-  const [path, setPath] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    getDirectories()
-      .then((r) => setDirectories(r.directories))
-      .catch((e) => setError(e.message));
-  }, []);
-
-  const update = (p: Promise<{ directories: string[] }>, after?: () => void) =>
-    p
-      .then((r) => {
-        setDirectories(r.directories);
-        setError(null);
-        after?.();
-        onChange();
-      })
-      .catch((e) => setError(e.message));
-
-  return (
-    <Stack spacing={1}>
-      <Typography variant="subtitle2">Folders</Typography>
-      {directories?.map((d) => (
-        <Paper key={d} variant="outlined" sx={{ pl: 1.5, py: 0.5, display: "flex", alignItems: "center", gap: 1 }}>
-          <Typography variant="body2" sx={{ flexGrow: 1, fontFamily: "monospace", wordBreak: "break-all" }}>
-            {d}
-          </Typography>
-          <Tooltip title="Remove">
-            <IconButton size="small" onClick={() => update(removeDirectory(d))}>
-              <DeleteOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Paper>
-      ))}
-      <Stack
-        component="form"
-        direction="row"
-        spacing={1}
-        sx={{ alignItems: "flex-start", pt: 0.5 }}
-        onSubmit={(e) => {
-          e.preventDefault();
-          update(addDirectory(path), () => setPath(""));
-        }}
-      >
-        <TextField
-          fullWidth
-          size="small"
-          label="Add a folder"
-          placeholder="~/Projects/notes"
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          error={!!error}
-          helperText={error ?? "A full path. ~ means your home folder. Subfolders are included."}
-        />
-        <Button type="submit" variant="outlined" startIcon={<AddIcon />} disabled={!path.trim()} sx={{ flexShrink: 0 }}>
-          Add
-        </Button>
-      </Stack>
     </Stack>
   );
 }

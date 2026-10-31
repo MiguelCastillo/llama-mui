@@ -1,18 +1,20 @@
-// Read-only disk tools, limited to the folders listed under Settings → Tools →
-// Disk, plus the routes that manage that list.
+// Read-only disk tools, limited to the files and folders attached to the chat
+// the call came from, plus the route chat uses to check an attachment.
 //
 // Every path the model sends goes through resolveAllowed(), which checks it
-// against the allowed folders both as written and after resolving symlinks,
-// so neither "../" nor a symlink inside an allowed folder can reach outside.
-// Walks for find_files and grep skip symlinks for the same reason.
+// against the attachments after resolving symlinks and "../", so neither can
+// reach outside. A path outside isn't refused outright: it throws
+// AccessNeeded, and chat asks the user whether to attach it. Walks for
+// find_files and grep skip symlinks, so they never leave what's attached.
 
+import { execFile } from "node:child_process";
 import type { Dirent } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
-import { SETTINGS_FILE, type Store, load, save } from "./store.ts";
-import { ToolError, type ToolSpec, fn } from "./toolkit.ts";
+import { SETTINGS_FILE } from "./store.ts";
+import { AccessNeeded, type AttachmentTarget, ToolError, type ToolSpec, fn } from "./toolkit.ts";
 
 const MAX_LIST_ENTRIES = 300;
 const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
@@ -28,26 +30,33 @@ const SKIP_DIRS = new Set([".git", "node_modules"]);
 
 const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p);
 
-const isInside = (child: string, root: string) =>
+export const isInside = (child: string, root: string) =>
   child === root || child.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
 
-// settings.json holds API keys, so no tool may read it even inside an allowed folder.
-const isSettingsFile = (p: string) => p.startsWith(SETTINGS_FILE);
+// settings.json holds API keys, so no tool may read it even inside an attached folder.
+export const isSettingsFile = (p: string) => p.startsWith(SETTINGS_FILE);
 
-async function resolveAllowed(roots: string[], raw: unknown): Promise<string> {
-  if (roots.length === 0) throw new ToolError("No folders are allowed. The user can add some in Settings → Tools.");
+// The path the model sent, made absolute: ~ expanded, "../" resolved.
+export async function toAbsolute(roots: string[], raw: unknown): Promise<{ given: string; abs: string }> {
   const given = expandHome(String(raw ?? "").trim());
   if (!given) throw new ToolError("path is required");
-  // With a single allowed folder, relative paths are unambiguous; small
+  // With a single attached folder, relative paths are unambiguous; small
   // models often send them.
-  let abs: string;
-  if (path.isAbsolute(given)) abs = path.resolve(given);
-  else if (roots.length === 1) abs = path.resolve(roots[0], given);
-  else throw new ToolError(`Use an absolute path inside one of: ${roots.join(", ")}`);
+  if (path.isAbsolute(given)) return { given, abs: path.resolve(given) };
+  if (roots.length === 1 && (await stat(roots[0])).isDirectory()) return { given, abs: path.resolve(roots[0], given) };
+  throw new ToolError(roots.length ? `Use an absolute path inside one of: ${roots.join(", ")}` : "Use an absolute path");
+}
 
-  // Checking before realpath keeps errors from revealing what exists outside.
-  const outside = new ToolError(`${given} is outside the folders you may read: ${roots.join(", ")}`);
-  if (!roots.some((r) => isInside(abs, r))) throw outside;
+// Throws AccessNeeded for the attachment that would cover `real`.
+export async function needAccess(real: string): Promise<never> {
+  const target = await resolveAttachment(real).catch((e) => {
+    throw new ToolError(e.message);
+  });
+  throw new AccessNeeded(target);
+}
+
+async function resolveAllowed(roots: string[], raw: unknown): Promise<string> {
+  const { given, abs } = await toAbsolute(roots, raw);
   let real: string;
   try {
     real = await realpath(abs);
@@ -55,15 +64,15 @@ async function resolveAllowed(roots: string[], raw: unknown): Promise<string> {
     if (e.code === "ENOENT" || e.code === "ENOTDIR") throw new ToolError(`${given} does not exist`);
     throw e;
   }
-  if (!roots.some((r) => isInside(real, r))) throw outside;
   if (isSettingsFile(real)) throw new ToolError(`${given} holds this app's API keys and can't be read`);
+  if (!roots.some((r) => isInside(real, r))) await needAccess(real);
   return real;
 }
 
 const formatSize = (n: number) =>
   n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
-const looksBinary = (buf: Buffer) => buf.subarray(0, 8000).includes(0);
+export const looksBinary = (buf: Buffer) => buf.subarray(0, 8000).includes(0);
 
 const clip = (s: string) =>
   s.length > MAX_OUTPUT_CHARS ? `${s.slice(0, MAX_OUTPUT_CHARS)}\n… (output cut at ${MAX_OUTPUT_CHARS} characters)` : s;
@@ -86,10 +95,18 @@ interface WalkResult {
 }
 
 // Breadth-first, so shallow files come first. Yields files and directories.
+// A start that is a file (an attached file, or grep on one file) is yielded
+// as-is instead of walked.
 function walk(starts: string[]): WalkResult {
   let visited = 0;
   async function* files() {
-    const queue = [...starts];
+    const queue: string[] = [];
+    for (const start of starts) {
+      if (!(await stat(start).catch(() => null))?.isFile()) queue.push(start);
+      else if (!isSettingsFile(start) && ++visited <= MAX_WALK_FILES) {
+        yield { full: start, entry: { name: path.basename(start), isFile: () => true, isDirectory: () => false } as Dirent };
+      }
+    }
     while (queue.length) {
       const dir = queue.shift()!;
       const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
@@ -120,8 +137,11 @@ function summarize(results: string[], capped: boolean, none: string): string {
   return clip(`${results.join("\n")}${note}`);
 }
 
-const startsFor = async (store: Store, raw: unknown) =>
-  raw ? [await resolveAllowed(store.directories, raw)] : [...store.directories];
+async function startsFor(roots: string[], raw: unknown): Promise<string[]> {
+  if (raw) return [await resolveAllowed(roots, raw)];
+  if (roots.length === 0) throw new ToolError("Nothing is attached to this chat yet; pass an absolute path");
+  return [...roots];
+}
 
 const listDirectory: ToolSpec = {
   name: "list_directory",
@@ -130,12 +150,16 @@ const listDirectory: ToolSpec = {
   summary: "See which files and folders a folder contains, with sizes.",
   definition: fn(
     "list_directory",
-    "List the files and folders in a directory. Call it with no path to see the folders you may read.",
+    "List the files and folders in a directory. Call it with no path to see what's attached to this chat.",
     { type: "object", properties: { path: { type: "string", description: "Absolute path of the directory." } } },
   ),
-  async run(store, args) {
-    const roots = store.directories;
-    if (!args.path) return `Folders you may read:\n${roots.map((r) => `${r}/`).join("\n")}`;
+  async run({ attachments: roots }, args) {
+    if (!args.path) {
+      const lines = await Promise.all(
+        roots.map(async (r) => ((await stat(r).catch(() => null))?.isDirectory() ? `${r}/` : r)),
+      );
+      return roots.length ? `Attached to this chat:\n${lines.join("\n")}` : "Nothing is attached to this chat.";
+    }
     const dir = await resolveAllowed(roots, args.path);
     if (!(await stat(dir)).isDirectory()) throw new ToolError(`${dir} is a file; use read_file`);
     const entries = (await readdir(dir, { withFileTypes: true })).sort(byTypeThenName);
@@ -170,8 +194,8 @@ const readTextFile: ToolSpec = {
       required: ["path"],
     },
   ),
-  async run(store, args) {
-    const file = await resolveAllowed(store.directories, args.path);
+  async run({ attachments }, args) {
+    const file = await resolveAllowed(attachments, args.path);
     const s = await stat(file);
     if (s.isDirectory()) throw new ToolError(`${file} is a directory; use list_directory`);
     if (s.size > MAX_READ_FILE_BYTES) throw new ToolError(`${file} is ${formatSize(s.size)}, too large to read`);
@@ -200,16 +224,16 @@ const findFiles: ToolSpec = {
       type: "object",
       properties: {
         pattern: { type: "string", description: "Name pattern, e.g. \"*.md\" or \"invoice\"." },
-        path: { type: "string", description: "Directory to search in. Defaults to every allowed folder." },
+        path: { type: "string", description: "Directory to search in. Defaults to everything attached." },
       },
       required: ["pattern"],
     },
   ),
-  async run(store, args) {
+  async run({ attachments }, args) {
     const raw = String(args.pattern ?? "").trim();
     if (!raw) throw new ToolError("pattern is required");
     const re = namePattern(raw);
-    const w = walk(await startsFor(store, args.path));
+    const w = walk(await startsFor(attachments, args.path));
     const results: string[] = [];
     for await (const { full, entry } of w.files) {
       if (re.test(entry.name)) results.push(entry.isDirectory() ? `${full}/` : full);
@@ -231,14 +255,14 @@ const grep: ToolSpec = {
       type: "object",
       properties: {
         pattern: { type: "string", description: "Regular expression, e.g. \"TODO|FIXME\" or \"function \\\\w+Chat\"." },
-        path: { type: "string", description: "File or directory to search. Defaults to every allowed folder." },
+        path: { type: "string", description: "File or directory to search. Defaults to everything attached." },
         include: { type: "string", description: "Only search files whose name matches this, e.g. \"*.ts\"." },
         ignore_case: { type: "boolean", description: "Match regardless of case. Default false." },
       },
       required: ["pattern"],
     },
   ),
-  async run(store, args) {
+  async run({ attachments }, args) {
     const raw = String(args.pattern ?? "");
     if (!raw) throw new ToolError("pattern is required");
     let re: RegExp;
@@ -249,18 +273,9 @@ const grep: ToolSpec = {
     }
     const include = args.include ? namePattern(String(args.include)) : null;
 
-    // A file path searches just that file; a directory is walked.
-    const starts = await startsFor(store, args.path);
-    const single = args.path && (await stat(starts[0])).isFile() ? starts[0] : null;
-    const w = walk(single ? [] : starts);
-    const candidates = single
-      ? (async function* () {
-          yield { full: single, entry: { isFile: () => true, name: path.basename(single) } as Dirent };
-        })()
-      : w.files;
-
+    const w = walk(await startsFor(attachments, args.path));
     const results: string[] = [];
-    for await (const { full, entry } of candidates) {
+    for await (const { full, entry } of w.files) {
       if (!entry.isFile() || (include && !include.test(entry.name))) continue;
       const s = await stat(full).catch(() => null);
       if (!s || s.size > MAX_GREP_FILE_BYTES) continue;
@@ -279,38 +294,70 @@ const grep: ToolSpec = {
 
 export const DISK_TOOLS = [listDirectory, readTextFile, findFiles, grep];
 
-async function validateDirectory(raw: unknown): Promise<string> {
+// Resolves a path the user wants to attach: ~ expanded, symlinks followed.
+// Throws a message meant for the user if it can't be attached.
+async function resolveAttachment(raw: unknown): Promise<AttachmentTarget> {
   const given = expandHome(String(raw ?? "").trim());
-  if (!path.isAbsolute(given)) throw new HttpError(400, "Enter a full path, like ~/Projects or /Users/you/notes");
+  if (!path.isAbsolute(given)) throw new Error("Enter a full path, like ~/Projects or /Users/you/notes.txt");
   let real: string;
   try {
     real = await realpath(given);
   } catch {
-    throw new HttpError(400, `${given} does not exist`);
+    throw new Error(`${given} does not exist`);
   }
-  if (!(await stat(real)).isDirectory()) throw new HttpError(400, `${real} is a file, not a folder`);
-  return real;
+  if (isSettingsFile(real)) throw new Error("That file holds this app's API keys and can't be attached");
+  const s = await stat(real);
+  if (!s.isFile() && !s.isDirectory()) throw new Error(`${real} is not a file or folder`);
+  return { path: real, kind: s.isDirectory() ? "folder" : "file" };
 }
 
-// Handles /api/directories; returns false for anything else.
-export async function directoryRoutes({ req, res, parts, method }: Route): Promise<boolean> {
-  if (parts[0] !== "directories" || parts.length !== 1) return false;
-  if (method === "GET") {
-    sendJson(res, 200, { directories: (await load()).directories });
+// Re-checks the attachments a chat sends with each request, since the
+// browser could send anything: keeps the ones that still resolve.
+export async function checkAttachments(raw: unknown): Promise<string[]> {
+  const given = Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string") : [];
+  const resolved = await Promise.all(given.map((p) => resolveAttachment(p).catch(() => null)));
+  return [...new Set(resolved.filter((r) => r !== null).map((r) => r.path))];
+}
+
+// Opens the macOS file or folder dialog and returns the POSIX paths picked,
+// or none if the user cancels. The browser can't do this: its file picker
+// hides where a file lives, and the disk tools need the real path.
+function pickPaths(kind: "file" | "folder"): Promise<string[]> {
+  const script = [
+    // Brings the dialog to the front; otherwise it can open behind the browser.
+    "activate",
+    `set picked to choose ${kind} with prompt "Attach to this chat" with multiple selections allowed`,
+    'set out to ""',
+    'repeat with p in picked\nset out to out & POSIX path of p & linefeed\nend repeat',
+    "out",
+  ].join("\n");
+  return new Promise((resolve, reject) =>
+    execFile("osascript", ["-e", script], (err, stdout, stderr) => {
+      // -128 is "User canceled".
+      if (err) return stderr.includes("-128") ? resolve([]) : reject(new Error(stderr.trim() || err.message));
+      resolve(stdout.split("\n").filter(Boolean));
+    }),
+  );
+}
+
+// Handles /api/attachments/{check,pick}; returns false for anything else.
+export async function attachmentRoutes({ req, res, parts, method }: Route): Promise<boolean> {
+  if (parts[0] !== "attachments" || method !== "POST") return false;
+  if (parts[1] === "check") {
+    const { path: raw } = await readJson(req);
+    try {
+      sendJson(res, 200, await resolveAttachment(raw));
+    } catch (e: any) {
+      throw new HttpError(400, e.message);
+    }
     return true;
   }
-  // The path goes in the body for both, since it's full of slashes.
-  if (method === "POST" || method === "DELETE") {
-    const body = await readJson(req);
-    const store = await load();
-    if (method === "POST") {
-      const dir = await validateDirectory(body.path);
-      if (!store.directories.includes(dir)) store.directories.push(dir);
-    } else {
-      store.directories = store.directories.filter((d) => d !== body.path);
-    }
-    await save(store);
-    sendJson(res, 200, { directories: store.directories });
+  if (parts[1] === "pick") {
+    if (process.platform !== "darwin") throw new HttpError(501, "The file dialog is only available on macOS");
+    const { kind } = await readJson(req);
+    const picked = await pickPaths(kind === "folder" ? "folder" : "file");
+    const targets = await Promise.all(picked.map((p) => resolveAttachment(p).catch(() => null)));
+    sendJson(res, 200, { attachments: targets.filter((t) => t !== null) });
     return true;
   }
   return false;

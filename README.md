@@ -27,12 +27,26 @@ reach and switched on or off one by one (`server/tools.ts`). With the
 **Tools** switch on in chat, the model gets every tool that's on and ready.
 Tool calls and their results show in the reply.
 
-The **Disk** group (`server/disk.ts`) has read-only tools limited to the folders
-you add there: `list_directory`, `read_file`, `find_files` (names, with `*`
-wildcards) and `grep` (regular expressions over file contents). Every path is
-checked against the allowed folders before and after resolving symlinks, so
-`../` and symlinks can't reach outside them, and `settings.json` itself is
-never readable or searchable.
+The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
+`read_file`, `find_files` (names, with `*` wildcards) and `grep` (regular
+expressions over file contents). They read only what's attached to the chat.
+The paperclip next to the message box opens the chat's attachments, each
+marked with whether you added it or the model asked for it, and a field to
+attach more; a new chat starts with nothing attached. When the model asks for
+a path that isn't attached, the reply pauses on an Allow / Deny prompt;
+allowing attaches it for the rest of the chat, and denying tells the model no.
+The server re-checks the attachments on every call, and every path the model
+sends is checked against them after resolving symlinks and `../`. Searches
+skip symlinks, so they stay inside what's attached. `settings.json` itself
+can't be attached, read or searched.
+
+The **Write** group (`server/write.ts`) has `write_file` (create a file or
+replace all of it) and `edit_file` (replace exact text in a file). They work
+in what's attached, under the same rules as the disk tools, and nothing is
+written until you approve it: the reply pauses on the change as a diff, with
+Approve / Deny. The server writes only if the change is still exactly the
+diff you approved; if the file changed in between, you're asked again. Files
+can't be deleted, and `settings.json` can't be written.
 
 The **Web** group (`server/web.ts`) has `web_search`, which sends the model's
 query to DuckDuckGo and returns titles, links and snippets. DuckDuckGo has no

@@ -76,7 +76,7 @@ const webSearch: ToolSpec = {
       required: ["query"],
     },
   ),
-  async run(_store, args) {
+  async run(_ctx, args) {
     const query = String(args.query ?? "").trim();
     if (!query) throw new ToolError("query is required");
     const count = Math.min(MAX_RESULTS, Math.max(1, Math.floor(Number(args.max_results) || DEFAULT_RESULTS)));

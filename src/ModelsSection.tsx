@@ -11,6 +11,7 @@ import {
   Paper,
   Stack,
   Switch,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import {
@@ -86,12 +87,12 @@ export default function ModelsSection() {
         <Paper variant="outlined">
           <List disablePadding>
             {models.map((m, i) => (
-              <ListItem key={m.id} divider={i < models.length - 1} sx={{ flexWrap: "wrap", gap: 1 }}>
+              <ListItem key={m.id} divider={i < models.length - 1} sx={{ gap: 2 }}>
                 <ListItemText
-                  sx={{ minWidth: 240 }}
+                  sx={{ minWidth: 0 }}
                   primary={
-                    <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-                      <Typography sx={{ fontFamily: "monospace", wordBreak: "break-all" }}>{m.id}</Typography>
+                    <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: "center", flexWrap: "wrap" }}>
+                      <Typography sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>{m.id}</Typography>
                       <Chip
                         size="small"
                         variant="outlined"
@@ -102,14 +103,21 @@ export default function ModelsSection() {
                   }
                   secondary={m.contextSize ? `${m.contextSize.toLocaleString()}-token context` : undefined}
                 />
-                <FormControlLabel
-                  label="Think before answering"
-                  labelPlacement="start"
-                  control={
-                    <Switch checked={settingsFor(m.id)!.think} onChange={(e) => setThink(m.id, e.target.checked)} />
-                  }
-                  sx={{ ml: "auto" }}
-                />
+                {/* Short label so it stays on the model's line; the note below explains it. */}
+                <Tooltip title="Think before answering">
+                  <FormControlLabel
+                    label="Think"
+                    labelPlacement="start"
+                    control={
+                      <Switch
+                        checked={settingsFor(m.id)!.think}
+                        onChange={(e) => setThink(m.id, e.target.checked)}
+                        slotProps={{ input: { "aria-label": `Think before answering with ${m.id}` } }}
+                      />
+                    }
+                    sx={{ ml: "auto", mr: 0, flexShrink: 0 }}
+                  />
+                </Tooltip>
               </ListItem>
             ))}
           </List>
@@ -117,7 +125,7 @@ export default function ModelsSection() {
       )}
 
       <Typography variant="body2" color="text.secondary">
-        <b>Think before answering</b> lets a reasoning model (like Qwen) work through the problem first; its thoughts
+        <b>Think</b> (before answering) lets a reasoning model (like Qwen) work through the problem first; its thoughts
         show in a collapsible panel above the reply. It helps with hard questions but is slower, and small models can
         spend minutes on simple ones. Models whose chat template has no thinking mode ignore it. While the chat's
         Tools switch is on, thinking is always on, whatever this says: without it, small models mostly answer from

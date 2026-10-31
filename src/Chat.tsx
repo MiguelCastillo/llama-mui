@@ -4,6 +4,7 @@ import {
   AccordionDetails,
   AccordionSummary,
   Alert,
+  Badge,
   Box,
   Button,
   ButtonBase,
@@ -31,24 +32,34 @@ import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
+import AttachFileIcon from "@mui/icons-material/AttachFile";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
+import InsertDriveFileOutlinedIcon from "@mui/icons-material/InsertDriveFileOutlined";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import LayersClearOutlinedIcon from "@mui/icons-material/LayersClearOutlined";
+import CloseIcon from "@mui/icons-material/Close";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import {
   type ChatMessage,
   type StepStats,
   type ToolCall,
   type ModelSettings,
   type Preferences,
-  type ToolsState,
+  type Attachment,
+  type AttachmentTarget,
+  type Change,
+  type ToolContext,
   type Usage,
   type Connector,
   type Model,
+  checkAttachment,
+  pickAttachments,
   getConnectors,
   getModelSettings,
   getPreferences,
-  getTools,
+  getToolContext,
   listModels,
   runTool,
   streamChat,
@@ -103,12 +114,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     models: Record<string, ModelSettings>;
   } | null>(null);
   const [toolsWanted, setToolsWanted] = useState(true);
-  const [tools, setTools] = useState<ToolsState>({
-    groups: [],
-    directories: [],
-    definitions: [],
-    systemPrompt: null,
-  });
+  // Files and folders this chat's disk tools may read; New chat clears them.
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // What a reply is waiting on the user for: a path the model asked for that
+  // isn't attached, or a change to a file. Cleared once they answer.
+  const [pending, setPending] = useState<{
+    ask: { needsAccess: AttachmentTarget } | { needsApproval: Change };
+    decide: (allow: boolean) => void;
+  } | null>(null);
+  // What to offer the model given those attachments and Settings → Tools.
+  const [toolContext, setToolContext] = useState<ToolContext>({ definitions: [], systemPrompt: null });
   const [error, setError] = useState<string | null>(null);
   // Token count after the latest reply; it covers the whole conversation.
   const [usage, setUsage] = useState<Usage | null>(null);
@@ -154,9 +169,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         else setModels([]);
       })
       .catch((e) => setError(e.message));
-    getTools()
-      .then(setTools)
-      .catch((e) => setError(e.message));
     getPreferences()
       .then(setPrefs)
       .catch((e) => setError(e.message));
@@ -165,18 +177,45 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .catch((e) => setError(e.message));
   }, [visible]);
 
-  // On only when the user wants tools and Settings leaves some ready to use.
-  const toolsOn = toolsWanted && tools.definitions.length > 0;
-  const toolCount = tools.definitions.length;
+  // Settings → Tools or the attachments may have changed what's available.
+  useEffect(() => {
+    if (!visible) return;
+    getToolContext(attachments.map((a) => a.path))
+      .then(setToolContext)
+      .catch((e) => setError(e.message));
+  }, [visible, attachments]);
+
+  // On only when the user wants tools and some are ready in this chat.
+  const toolsOn = toolsWanted && toolContext.definitions.length > 0;
+  const toolCount = toolContext.definitions.length;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, pending]);
+
+  const attach = (a: Attachment) => setAttachments((as) => (as.some((x) => x.path === a.path) ? as : [...as, a]));
+
+  // Shows the prompt and resolves with the user's answer; stopping the reply
+  // counts as deny.
+  const askUser = (ask: NonNullable<typeof pending>["ask"], signal: AbortSignal) =>
+    new Promise<boolean>((resolve) => {
+      const decide = (allow: boolean) => {
+        signal.removeEventListener("abort", onAbort);
+        setPending(null);
+        resolve(allow);
+      };
+      const onAbort = () => decide(false);
+      signal.addEventListener("abort", onAbort);
+      setPending({ ask, decide });
+    });
 
   const send = async () => {
     const text = input.trim();
     if (!text || !model || !connector || abort) return;
     const connectorId = connector.id;
+    // Fixed for this reply, even if the user changes attachments meanwhile;
+    // only paths the user allows mid-reply are added.
+    let attached = attachments.map((a) => a.path);
     const forgotten = messages.slice(0, contextStart);
     let history: ChatMessage[] = [...messages.slice(contextStart), { role: "user", content: text }];
     setInput("");
@@ -202,11 +241,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             connectorId,
             model,
             messages:
-              toolsOn && tools.systemPrompt ? [{ role: "system", content: tools.systemPrompt }, ...history] : history,
+              toolsOn && toolContext.systemPrompt
+                ? [{ role: "system", content: toolContext.systemPrompt }, ...history]
+                : history,
             // Thinking is forced on while tools are offered: without it, small
             // models (Qwen 9B) mostly answer from memory instead of calling them.
             think: toolsOn || !!(modelSettings?.models[model] ?? modelSettings?.defaults)?.think,
-            tools: toolsOn ? tools.definitions : undefined,
+            tools: toolsOn ? toolContext.definitions : undefined,
           },
           (d) => {
             if (d.reasoning) {
@@ -233,8 +274,40 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
         for (const call of toolCalls) {
           if (controller.signal.aborted) return;
-          const started = performance.now();
-          const result = await runTool(call).catch((e) => `Error: ${e.message}`);
+          let started = performance.now();
+          let result: string;
+          try {
+            // A call can need the user more than once: access to a folder,
+            // then approval of the change it makes there.
+            let outcome = await runTool(call, attached);
+            while (!("result" in outcome)) {
+              const allowed = await askUser(outcome, controller.signal);
+              if (controller.signal.aborted) return;
+              // Time spent waiting on the user isn't the tool's.
+              started = performance.now();
+              if ("needsAccess" in outcome) {
+                const target = outcome.needsAccess;
+                if (!allowed) {
+                  outcome = { result: `Error: the user didn't allow access to ${target.path}` };
+                  break;
+                }
+                attached = [...attached, target.path];
+                attach({ ...target, source: "request" });
+                outcome = await runTool(call, attached);
+              } else {
+                const change = outcome.needsApproval;
+                if (!allowed) {
+                  outcome = { result: `Error: the user didn't approve this change to ${change.path}; nothing was written` };
+                  break;
+                }
+                // Asks again if the file changed since the preview.
+                outcome = await runTool(call, attached, change.diff);
+              }
+            }
+            result = outcome.result;
+          } catch (e: any) {
+            result = `Error: ${e.message}`;
+          }
           lastToolResults.push(history.length);
           history = [
             ...history,
@@ -386,6 +459,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 setMessages([]);
                 setUsage(null);
                 setContextStart(0);
+                setAttachments([]);
               }}
               disabled={!!abort}
             >
@@ -432,6 +506,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             ))}
             {/* Cleared after the last message: the divider goes at the end. */}
             {contextStart > 0 && contextStart === messages.length && <ContextDivider />}
+            {pending &&
+              ("needsAccess" in pending.ask ? (
+                <AccessPrompt target={pending.ask.needsAccess} onDecide={pending.decide} />
+              ) : (
+                <ChangePrompt change={pending.ask.needsApproval} onDecide={pending.decide} />
+              ))}
             {error && <Alert severity="error">{error}</Alert>}
             <div ref={bottomRef} />
           </Stack>
@@ -441,6 +521,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       <Paper square elevation={3} sx={{ py: 2 }}>
         <Container maxWidth="md">
           <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
+            <AttachmentsPanel
+              attachments={attachments}
+              onAdd={attach}
+              onRemove={(p) => setAttachments((as) => as.filter((x) => x.path !== p))}
+            />
             <TextField
               fullWidth
               multiline
@@ -605,6 +690,256 @@ function ToolCallView({ call, result: resultMessage }: { call: ToolCall; result?
         </Typography>
       </AccordionDetails>
     </Accordion>
+  );
+}
+
+const SOURCE_LABEL: Record<Attachment["source"], string> = {
+  manual: "Added by you",
+  request: "Model asked, you allowed",
+};
+
+const AttachmentIcon = ({ kind }: { kind: Attachment["kind"] }) =>
+  kind === "folder" ? <FolderOutlinedIcon fontSize="small" /> : <InsertDriveFileOutlinedIcon fontSize="small" />;
+
+// Paperclip next to the message box. Opens this chat's attachments, each
+// marked with how it got there. More can be picked in the system dialog, or
+// typed as a path, which the server checks first (it must exist; ~ works).
+function AttachmentsPanel({
+  attachments,
+  onAdd,
+  onRemove,
+}: {
+  attachments: Attachment[];
+  onAdd: (a: Attachment) => void;
+  onRemove: (path: string) => void;
+}) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [path, setPath] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  // True while the system dialog is open.
+  const [picking, setPicking] = useState(false);
+  const close = () => {
+    setAnchor(null);
+    setPath("");
+    setError(null);
+  };
+  const pick = (kind: Attachment["kind"]) => {
+    setPicking(true);
+    setError(null);
+    pickAttachments(kind)
+      .then((as) => as.forEach((a) => onAdd({ ...a, source: "manual" })))
+      .catch((e) => setError(e.message))
+      .finally(() => setPicking(false));
+  };
+  const add = () =>
+    checkAttachment(path)
+      .then((a) => {
+        onAdd({ ...a, source: "manual" });
+        setPath("");
+      })
+      .catch((e) => setError(e.message));
+
+  return (
+    <>
+      <Tooltip title="Files and folders in this chat">
+        {/* mt centers it on a one-line input (56px). */}
+        <IconButton onClick={(e) => setAnchor(e.currentTarget)} sx={{ mt: 1 }}>
+          <Badge badgeContent={attachments.length} color="primary">
+            <AttachFileIcon />
+          </Badge>
+        </IconButton>
+      </Tooltip>
+      <Popover
+        open={!!anchor}
+        anchorEl={anchor}
+        onClose={close}
+        anchorOrigin={{ vertical: "top", horizontal: "left" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "left" }}
+        slotProps={{ paper: { sx: { p: 2, width: 480, maxWidth: "calc(100vw - 32px)" } } }}
+      >
+        <Stack spacing={2}>
+          <Box>
+            <Typography variant="subtitle2">Attached to this chat</Typography>
+            <Typography variant="caption" color="text.secondary">
+              The model can read these, folders with their subfolders, and asks you before changing them or reading
+              anything else.
+            </Typography>
+          </Box>
+          {attachments.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">
+              Nothing yet.
+            </Typography>
+          ) : (
+            <Stack divider={<Divider flexItem />} sx={{ maxHeight: 280, overflowY: "auto" }}>
+              {attachments.map((a) => (
+                <Stack key={a.path} direction="row" spacing={1.5} sx={{ alignItems: "center", py: 0.75 }}>
+                  <Box sx={{ display: "flex", color: "text.secondary" }}>
+                    <AttachmentIcon kind={a.kind} />
+                  </Box>
+                  <Box sx={{ minWidth: 0, flexGrow: 1 }}>
+                    <Typography variant="body2" noWrap>
+                      {a.path.split("/").pop() || a.path}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" component="div" sx={{ overflowWrap: "anywhere" }}>
+                      {a.path}
+                    </Typography>
+                  </Box>
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={a.source === "manual" ? "You added" : "Model asked"}
+                    color={a.source === "manual" ? "default" : "warning"}
+                    title={SOURCE_LABEL[a.source]}
+                    sx={{ flexShrink: 0 }}
+                  />
+                  <Tooltip title="Remove from this chat">
+                    <IconButton size="small" onClick={() => onRemove(a.path)} aria-label={`Remove ${a.path}`}>
+                      <CloseIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Stack>
+              ))}
+            </Stack>
+          )}
+          <Stack direction="row" spacing={1}>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<InsertDriveFileOutlinedIcon />}
+              disabled={picking}
+              onClick={() => pick("file")}
+            >
+              Choose files…
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<FolderOutlinedIcon />}
+              disabled={picking}
+              onClick={() => pick("folder")}
+            >
+              Choose folders…
+            </Button>
+            {picking && <CircularProgress size={18} sx={{ alignSelf: "center" }} />}
+          </Stack>
+          <Stack
+            component="form"
+            direction="row"
+            spacing={1}
+            sx={{ alignItems: "flex-start" }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              add();
+            }}
+          >
+            <TextField
+              fullWidth
+              size="small"
+              label="Or type a path"
+              placeholder="~/Projects/notes"
+              value={path}
+              onChange={(e) => {
+                setPath(e.target.value);
+                setError(null);
+              }}
+              error={!!error}
+              helperText={error}
+            />
+            <Button type="submit" variant="contained" disabled={!path.trim()} sx={{ flexShrink: 0, mt: 0.25 }}>
+              Attach
+            </Button>
+          </Stack>
+        </Stack>
+      </Popover>
+    </>
+  );
+}
+
+// Shown in the conversation while a reply waits: the model asked to read a
+// path that isn't attached. Allowing attaches it for the rest of the chat.
+function AccessPrompt({ target, onDecide }: { target: AttachmentTarget; onDecide: (allow: boolean) => void }) {
+  return (
+    <Alert severity="warning" icon={<AttachmentIcon kind={target.kind} />}>
+      <Typography variant="body2">
+        The model wants to read this {target.kind}, which isn't attached to this chat:
+      </Typography>
+      <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere", my: 0.5 }}>
+        {target.path}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" component="div">
+        Allowing attaches it to this chat{target.kind === "folder" ? ", subfolders included" : ""}. Changes to it
+        still need your approval.
+      </Typography>
+      <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+        <Button size="small" variant="contained" color="warning" onClick={() => onDecide(true)}>
+          Allow
+        </Button>
+        <Button size="small" variant="outlined" color="inherit" onClick={() => onDecide(false)}>
+          Deny
+        </Button>
+      </Stack>
+    </Alert>
+  );
+}
+
+const CHANGE_VERB: Record<Change["action"], string> = {
+  create: "create",
+  overwrite: "replace everything in",
+  edit: "change",
+};
+
+// Shown while a reply waits on a file change: the diff, and Approve / Deny.
+// Nothing is written until the user approves.
+function ChangePrompt({ change, onDecide }: { change: Change; onDecide: (allow: boolean) => void }) {
+  return (
+    <Alert severity="info" icon={<EditOutlinedIcon fontSize="small" />} sx={{ "& .MuiAlert-message": { minWidth: 0, flexGrow: 1 } }}>
+      <Typography variant="body2">The model wants to {CHANGE_VERB[change.action]} this file:</Typography>
+      <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere", my: 0.5 }}>
+        {change.path}
+      </Typography>
+      <DiffView diff={change.diff} />
+      <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+        <Button size="small" variant="contained" onClick={() => onDecide(true)}>
+          Approve
+        </Button>
+        <Button size="small" variant="outlined" color="inherit" onClick={() => onDecide(false)}>
+          Deny
+        </Button>
+      </Stack>
+    </Alert>
+  );
+}
+
+// Unified diff with added lines green and removed lines red.
+function DiffView({ diff }: { diff: string }) {
+  const lines = diff.replace(/\n$/, "").split("\n");
+  return (
+    <Box
+      component="pre"
+      sx={{
+        m: 0,
+        p: 1,
+        maxHeight: 320,
+        overflow: "auto",
+        borderRadius: 1,
+        bgcolor: "background.default",
+        fontFamily: "monospace",
+        fontSize: "0.8rem",
+      }}
+    >
+      {lines.map((l, i) => (
+        <Box
+          key={i}
+          component="div"
+          sx={{
+            whiteSpace: "pre",
+            color: l.startsWith("+") ? "success.main" : l.startsWith("-") ? "error.main" : l.startsWith("@@") ? "info.main" : "text.secondary",
+          }}
+        >
+          {l || " "}
+        </Box>
+      ))}
+    </Box>
   );
 }
 

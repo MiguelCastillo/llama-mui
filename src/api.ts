@@ -1,5 +1,5 @@
-// Client for the dev server's /api routes: settings (connectors and
-// directories), the file tools, and llama.cpp's OpenAI-compatible API proxied
+// Client for the dev server's /api routes: settings, attachments, the model's
+// tools, and llama.cpp's OpenAI-compatible API proxied
 // per connector at /api/c/<id>/v1. The dev server adds each connector's key,
 // so none of this code ever sees one.
 
@@ -132,9 +132,29 @@ export interface Preferences {
 export const getPreferences = () => call<Preferences>("GET", "/api/preferences");
 export const updatePreferences = (changes: Partial<Preferences>) => call<Preferences>("PATCH", "/api/preferences", changes);
 
-export const getDirectories = () => call<{ directories: string[] }>("GET", "/api/directories");
-export const addDirectory = (path: string) => call<{ directories: string[] }>("POST", "/api/directories", { path });
-export const removeDirectory = (path: string) => call<{ directories: string[] }>("DELETE", "/api/directories", { path });
+// A file or folder that can be attached to a chat, as the server resolved it.
+export interface AttachmentTarget {
+  path: string;
+  kind: "file" | "folder";
+}
+
+// A file or folder attached to one chat. Only the disk tools in that chat can
+// read it; the server re-checks every path on each call.
+export interface Attachment extends AttachmentTarget {
+  // "manual": attached with the paperclip. "request": the model asked for it
+  // and the user allowed it.
+  source: "manual" | "request";
+}
+
+// Resolves a path the user typed (~ expanded, symlinks followed), or throws
+// a message saying why it can't be attached.
+export const checkAttachment = (path: string) =>
+  call<AttachmentTarget>("POST", "/api/attachments/check", { path });
+
+// Opens the system file or folder dialog on the machine running the server
+// (macOS only); resolves with what was picked, or nothing if cancelled.
+export const pickAttachments = (kind: AttachmentTarget["kind"]) =>
+  call<{ attachments: AttachmentTarget[] }>("POST", "/api/attachments/pick", { kind }).then((r) => r.attachments);
 
 export interface ToolInfo {
   name: string;
@@ -147,25 +167,39 @@ export interface ToolGroup {
   id: string;
   label: string;
   description: string;
-  // Why this group's tools can't be offered yet, or null when they can.
-  unavailable: string | null;
   tools: ToolInfo[];
 }
 
-export interface ToolsState {
-  groups: ToolGroup[];
-  directories: string[];
-  // Definitions of the tools that are on and ready, for sending to the model.
+// For Settings → Tools: every group and each tool's on/off state.
+export const getTools = () => call<{ groups: ToolGroup[] }>("GET", "/api/tools");
+export const setToolEnabled = (name: string, enabled: boolean) => call("PUT", `/api/tools/${name}`, { enabled });
+
+export interface ToolContext {
+  // Definitions of the tools that are on and ready in this chat, for the model.
   definitions: unknown[];
   // Guidance for those tools, to send as the system message; null if none.
   systemPrompt: string | null;
 }
 
-// Tool definitions come from the server so they match what it can run.
-export const getTools = () => call<ToolsState>("GET", "/api/tools");
-export const setToolEnabled = (name: string, enabled: boolean) => call("PUT", `/api/tools/${name}`, { enabled });
-export const runTool = (c: ToolCall) =>
-  call<{ result: string }>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments }).then((r) => r.result);
+// What to offer the model in a chat with these attachments. Tool definitions
+// come from the server so they match what it can run.
+export const getToolContext = (attachments: string[]) =>
+  call<ToolContext>("POST", "/api/tools/context", { attachments });
+// A change a write tool wants to make, shown to the user before it's written.
+export interface Change {
+  path: string;
+  action: "create" | "overwrite" | "edit";
+  // Unified diff hunks.
+  diff: string;
+}
+
+// Text for the model, a path outside the attachments that the user must allow
+// before the call can run, or a change the user must approve.
+export type ToolOutcome = { result: string } | { needsAccess: AttachmentTarget } | { needsApproval: Change };
+// `approved` is the diff of a change the user allowed; the server writes only
+// if the call would still make exactly that change.
+export const runTool = (c: ToolCall, attachments: string[], approved?: string) =>
+  call<ToolOutcome>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments, attachments, approved });
 
 export interface Usage {
   // Everything now in the model's context: prompt, tools, history and reply.

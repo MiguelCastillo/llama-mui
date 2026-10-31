@@ -24,6 +24,7 @@ import {
   Toolbar,
   Tooltip,
   Typography,
+  useMediaQuery,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
@@ -74,7 +75,7 @@ export default function Settings({ section, onClose }: { section: string; onClos
       </AppBar>
       <Container maxWidth="lg" sx={{ py: 3 }}>
         <Stack direction={{ xs: "column", md: "row" }} spacing={3}>
-          <List component="nav" sx={{ width: { md: 220 }, flexShrink: 0 }}>
+          <List component="nav" sx={{ width: { md: 180 }, flexShrink: 0 }}>
             {SECTIONS.map((s) => (
               <ListItemButton
                 key={s.id}
@@ -99,6 +100,7 @@ export default function Settings({ section, onClose }: { section: string; onClos
 type Status = "checking" | TestResult;
 
 function ConnectorsSection() {
+  const narrow = useMediaQuery((t) => t.breakpoints.down("sm"));
   const [list, setList] = useState<ConnectorList | null>(null);
   const [statuses, setStatuses] = useState<Record<string, Status>>({});
   const [error, setError] = useState<string | null>(null);
@@ -136,7 +138,13 @@ function ConnectorsSection() {
             llama.cpp servers this app can talk to. Chat uses the selected one.
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setEditing(null)}>
+        <Button
+          variant="contained"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={() => setEditing(null)}
+          sx={{ flexShrink: 0, whiteSpace: "nowrap" }}
+        >
           Add server
         </Button>
       </Stack>
@@ -159,10 +167,12 @@ function ConnectorsSection() {
             key={c.id}
             variant="outlined"
             sx={{
-              p: 1.5,
+              py: 1,
+              pl: 0.5,
+              pr: 1,
               display: "flex",
               alignItems: "center",
-              gap: 1.5,
+              gap: 1,
               borderColor: c.id === list.activeId ? "primary.main" : undefined,
             }}
           >
@@ -172,21 +182,41 @@ function ConnectorsSection() {
               slotProps={{ input: { "aria-label": `Use ${c.name}` } }}
             />
             <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-              <Typography sx={{ fontWeight: 500 }}>{c.name}</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", wordBreak: "break-all" }}>
-                {c.url}
-                {c.hasKey ? "  ·  key saved" : "  ·  no key"}
+              <Typography sx={{ fontWeight: 500 }} noWrap>
+                {c.name}
               </Typography>
+              {/* The URL wraps only at its own edge; the key state stays whole. */}
+              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ fontFamily: "monospace", overflowWrap: "anywhere", fontSize: narrow ? "0.8rem" : undefined }}
+                >
+                  {c.url}
+                </Typography>
+                <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", color: "text.secondary" }}>
+                  <KeyOutlinedIcon sx={{ fontSize: 14 }} color={c.hasKey ? "success" : "disabled"} />
+                  <Typography variant="caption" sx={{ whiteSpace: "nowrap" }}>
+                    {c.hasKey ? "key saved" : "no key"}
+                  </Typography>
+                </Stack>
+              </Stack>
+              {/* On phones the status moves under the address so it has room. */}
+              {narrow && (
+                <Box sx={{ mt: 0.5 }}>
+                  <StatusChip status={statuses[c.id]} onRetry={() => check(c.id)} />
+                </Box>
+              )}
             </Box>
-            <StatusChip status={statuses[c.id]} onRetry={() => check(c.id)} />
+            {!narrow && <StatusChip status={statuses[c.id]} onRetry={() => check(c.id)} />}
             <Tooltip title="Edit">
-              <IconButton onClick={() => setEditing(c)}>
-                <EditOutlinedIcon />
+              <IconButton size="small" onClick={() => setEditing(c)}>
+                <EditOutlinedIcon fontSize="small" />
               </IconButton>
             </Tooltip>
             <Tooltip title="Delete">
-              <IconButton onClick={() => setDeleting(c)}>
-                <DeleteOutlinedIcon />
+              <IconButton size="small" onClick={() => setDeleting(c)}>
+                <DeleteOutlinedIcon fontSize="small" />
               </IconButton>
             </Tooltip>
           </Paper>

@@ -1,6 +1,5 @@
-// The app's saved settings: llama servers (with their keys), the folders the
-// model may read, which tools are turned off, per-model options, and chat
-// display preferences. Lives in settings.json, readable only by the owner,
+// The app's saved settings: llama servers (with their keys), which tools are
+// turned off, per-model options, and chat display preferences. Lives in settings.json, readable only by the owner,
 // and only this server code touches it.
 
 import { readFile, rename, writeFile } from "node:fs/promises";
@@ -29,8 +28,6 @@ export interface ModelSettings {
 export interface Store {
   activeId: string | null;
   connectors: Connector[];
-  // Absolute, symlink-resolved folder paths the disk tools may read.
-  directories: string[];
   // Tools are on by default, so new ones show up enabled.
   disabledTools: string[];
   preferences: Preferences;
@@ -44,7 +41,6 @@ export const SETTINGS_FILE = path.resolve("settings.json");
 const empty = (): Store => ({
   activeId: null,
   connectors: [],
-  directories: [],
   disabledTools: [],
   preferences: { showContextMeter: true, showSteps: true },
   models: {},
