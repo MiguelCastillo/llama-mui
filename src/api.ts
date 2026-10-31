@@ -223,6 +223,30 @@ export interface ToolCallContext {
 export const runTool = (c: ToolCall, context: ToolCallContext) =>
   call<ToolOutcome>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments, ...context });
 
+// A saved chat: everything needed to reopen it where it was left.
+export interface Session {
+  id: string;
+  title: string;
+  model: string;
+  messages: ChatMessage[];
+  contextStart: number;
+  attachments: Attachment[];
+  usage: Usage | null;
+}
+
+// One row in the sessions panel.
+export interface SessionSummary {
+  id: string;
+  title: string;
+  updatedAt: number;
+}
+
+// Saved chats, newest first, and the calls to open, save and delete one.
+export const listSessions = () => call<SessionSummary[]>("GET", "/api/chats");
+export const getSession = (id: string) => call<Session>("GET", `/api/chats/${id}`);
+export const saveSession = (s: Session) => call<SessionSummary>("PUT", `/api/chats/${s.id}`, s);
+export const deleteSession = (id: string) => call<{ id: string }>("DELETE", `/api/chats/${id}`);
+
 export interface Usage {
   // Everything now in the model's context: prompt, tools, history and reply.
   contextTokens: number;

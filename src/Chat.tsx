@@ -55,6 +55,8 @@ import {
   type AttachmentTarget,
   type Approval,
   type ToolContext,
+  type Session,
+  type SessionSummary,
   type Usage,
   type Connector,
   type Model,
@@ -65,10 +67,16 @@ import {
   getToolContext,
   listModels,
   pickAttachments,
+  deleteSession,
+  getSession,
+  listSessions,
   runTool,
+  saveSession,
   streamChat,
 } from "./api";
 import ChatSettings, { AttachmentIcon } from "./ChatSettings";
+import SessionsPanel from "./SessionsPanel";
+import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
@@ -78,6 +86,27 @@ const TOOLBAR_KEY = "llama-mui:toolbarOpen";
 // Off until the user turns it on: tools can read files, change them and run
 // commands, so they're something to opt into.
 const TOOLS_KEY = "llama-mui:toolsOn";
+// Whether the chats panel is open (wide screens; on phones it's a drawer).
+const SESSIONS_OPEN_KEY = "llama-mui:sessionsOpen";
+// Which saved chat is open, so a reload reopens it.
+const SESSION_KEY = "llama-mui:sessionId";
+function loadSessionId(): string {
+  try {
+    const id = localStorage.getItem(SESSION_KEY);
+    if (id) return id;
+  } catch {
+    // Falls through to a new chat.
+  }
+  return crypto.randomUUID();
+}
+function saveSessionId(id: string) {
+  try {
+    localStorage.setItem(SESSION_KEY, id);
+  } catch {
+    // Not remembered; a reload starts a new chat.
+  }
+}
+
 function loadFlag(key: string, fallback: boolean): boolean {
   try {
     const v = localStorage.getItem(key);
@@ -161,6 +190,101 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
   const [abort, setAbort] = useState<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // The saved chat this is, and the list for the chats panel. Nothing is
+  // saved until the open session has loaded, so an empty screen can't
+  // overwrite it.
+  const [sessionId, setSessionId] = useState(loadSessionId);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [sessionsOpen, setSessionsOpenState] = useState(() => loadFlag(SESSIONS_OPEN_KEY, true));
+  const setSessionsOpen = (open: boolean) => {
+    setSessionsOpenState(open);
+    saveFlag(SESSIONS_OPEN_KEY, open);
+  };
+  // On phones the panel is a drawer that starts closed every time.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // What was last saved or loaded, so opening a chat doesn't save it again
+  // (which would move it to the top of the list).
+  const savedKey = useRef("");
+  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage]);
+
+  const applySession = (s: Session) => {
+    savedKey.current = keyOf(s);
+    setMessages(s.messages);
+    setContextStart(s.contextStart);
+    setAttachments(s.attachments);
+    setUsage(s.usage);
+    if (s.model) setModel(s.model);
+  };
+
+  // A session that was never saved (or was deleted) opens as a new chat.
+  const loadSession = (id: string) => {
+    setLoaded(false);
+    getSession(id)
+      .then(applySession)
+      .catch(() => {})
+      .finally(() => setLoaded(true));
+  };
+
+  useEffect(() => {
+    saveSessionId(sessionId);
+    loadSession(sessionId);
+    listSessions()
+      .then(setSessions)
+      .catch((e) => setError(e.message));
+  }, []);
+
+  const saveNow = () => {
+    if (!loaded || messages.length === 0) return;
+    const session: Session = {
+      id: sessionId,
+      title: (messages.find((m) => m.role === "user")?.content ?? "New chat").slice(0, 80),
+      model,
+      messages,
+      contextStart,
+      attachments,
+      usage,
+    };
+    const key = keyOf(session);
+    if (key === savedKey.current) return;
+    savedKey.current = key;
+    saveSession(session)
+      .then((summary) => setSessions((ss) => [summary, ...ss.filter((x) => x.id !== summary.id)]))
+      .catch((e) => setError(e.message));
+  };
+
+  // Saves a moment after the chat stops changing, so a streaming reply is
+  // saved when it pauses rather than on every token.
+  useEffect(() => {
+    const timer = setTimeout(saveNow, 800);
+    return () => clearTimeout(timer);
+  }, [loaded, messages, contextStart, attachments, usage, model]);
+
+  // Switches to another chat, saving this one first unless it was deleted.
+  const openSession = (id: string, saveFirst = true) => {
+    if (abort) return;
+    if (saveFirst) saveNow();
+    setSessionId(id);
+    saveSessionId(id);
+    savedKey.current = "";
+    setMessages([]);
+    setUsage(null);
+    setContextStart(0);
+    setAttachments([]);
+    setDrawerOpen(false);
+    loadSession(id);
+  };
+  const newChat = () => openSession(crypto.randomUUID());
+  const removeSession = (id: string) => {
+    if (!window.confirm("Delete this chat? This can't be undone.")) return;
+    deleteSession(id)
+      .then(() => {
+        setSessions((ss) => ss.filter((x) => x.id !== id));
+        if (id === sessionId) openSession(crypto.randomUUID(), false);
+      })
+      .catch((e) => setError(e.message));
+  };
 
   const refreshModels = (connectorId: string) =>
     listModels(connectorId)
@@ -413,7 +537,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
 
   return (
-    <Box sx={{ height: "100dvh", display: "flex", flexDirection: "column", position: "relative" }}>
+    <Box sx={{ display: "flex", height: "100dvh" }}>
+      <SessionsPanel
+        sessions={sessions}
+        currentId={sessionId}
+        open={narrow ? drawerOpen : sessionsOpen}
+        narrow={narrow}
+        busy={!!abort}
+        onSelect={(id) => id !== sessionId && openSession(id)}
+        onNew={newChat}
+        onDelete={removeSession}
+        onClose={() => setDrawerOpen(false)}
+      />
+      <Box sx={{ flexGrow: 1, minWidth: 0, height: "100dvh", display: "flex", flexDirection: "column", position: "relative" }}>
       {/* Floating toolbar in the top-right corner. Collapsing slides the
           controls away to the right (up, on phones); the expand, New chat
           and Settings buttons always stay. */}
@@ -525,21 +661,21 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             )}
           </IconButton>
         </Tooltip>
-        <Tooltip title="New chat">
-          <span>
-            <IconButton
-              onClick={() => {
-                setMessages([]);
-                setUsage(null);
-                setContextStart(0);
-                setAttachments([]);
-              }}
-              disabled={!!abort}
-            >
-              <AddCommentIcon />
-            </IconButton>
-          </span>
+        <Tooltip title={(narrow ? drawerOpen : sessionsOpen) ? "Hide chats" : "Show chats"}>
+          <IconButton onClick={() => (narrow ? setDrawerOpen(!drawerOpen) : setSessionsOpen(!sessionsOpen))}>
+            <ViewSidebarOutlinedIcon />
+          </IconButton>
         </Tooltip>
+        {/* New chat lives in the Chats panel; here only while that's hidden. */}
+        {!(narrow ? drawerOpen : sessionsOpen) && (
+          <Tooltip title="New chat">
+            <span>
+              <IconButton onClick={newChat} disabled={!!abort}>
+                <AddCommentIcon />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
         <Tooltip title="Settings">
           <IconButton onClick={onOpenSettings}>
             <SettingsOutlinedIcon />
@@ -649,6 +785,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           </Stack>
         </Container>
       </Paper>
+      </Box>
     </Box>
   );
 }
@@ -719,7 +856,9 @@ function MessageBubble({
                 )
               )}
               {showSteps &&
-                m.toolCalls?.map((c) => <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} />)}
+                m.toolCalls?.map((c) => (
+                  <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} stopped={!streaming} />
+                ))}
             </Fragment>
           ))}
           {waiting && <Typography>…</Typography>}
@@ -730,7 +869,17 @@ function MessageBubble({
 }
 
 // One tool call: what was asked for, and the result once it's back.
-function ToolCallView({ call, result: resultMessage }: { call: ToolCall; result?: ChatMessage }) {
+// `stopped`: the reply isn't running any more, so a call with no result
+// won't get one (it was stopped, or the page reloaded mid-call).
+function ToolCallView({
+  call,
+  result: resultMessage,
+  stopped,
+}: {
+  call: ToolCall;
+  result?: ChatMessage;
+  stopped: boolean;
+}) {
   const result = resultMessage?.content;
   let args: any = {};
   try {
@@ -763,7 +912,7 @@ function ToolCallView({ call, result: resultMessage }: { call: ToolCall; result?
           widening the reply. */}
       <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ "& .MuiAccordionSummary-content": { minWidth: 0 } }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
-          {result === undefined ? (
+          {result === undefined && !stopped ? (
             <CircularProgress size={14} sx={{ flexShrink: 0 }} />
           ) : (
             <BuildOutlinedIcon fontSize="small" color={failed ? "error" : "action"} sx={{ flexShrink: 0 }} />
@@ -792,7 +941,10 @@ function ToolCallView({ call, result: resultMessage }: { call: ToolCall; result?
           component="pre"
           sx={{ m: 0, fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 300, overflowY: "auto" }}
         >
-          {result ?? `Running with ${call.arguments || "{}"}…`}
+          {result ??
+            (stopped
+              ? `Didn't finish: the reply stopped before this call returned. It was called with ${call.arguments || "{}"}.`
+              : `Running with ${call.arguments || "{}"}…`)}
         </Typography>
       </AccordionDetails>
     </Accordion>

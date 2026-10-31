@@ -4,6 +4,7 @@
 
 import type { Connect, Plugin } from "vite";
 import { connectorRoutes } from "./connectors.ts";
+import { chatRoutes } from "./chats.ts";
 import { attachmentRoutes } from "./disk.ts";
 import { HttpError, type Route, sendJson } from "./http.ts";
 import { modelSettingRoutes } from "./models.ts";
@@ -16,6 +17,7 @@ async function route(r: Route) {
   if (await attachmentRoutes(r)) return;
   if (await preferenceRoutes(r)) return;
   if (await modelSettingRoutes(r)) return;
+  if (await chatRoutes(r)) return;
   throw new HttpError(404, "Not found");
 }
 
