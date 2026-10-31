@@ -33,6 +33,25 @@ reach and switched on or off one by one (`server/tools.ts`). With the
 That switch starts off, and your browser remembers where you leave it. Tool
 calls and their results show in the reply.
 
+The **Plan** group (`server/plan.ts`) has `update_plan`, for tasks that
+change files. Small models often say they're done when they aren't, so with
+the **Plan** switch on in chat (next to **Tools**; on by default), a new
+message first gets a planning turn: the model can only read and call
+`update_plan`, so it writes the task's steps instead of starting on them.
+The steps show as a checklist with **Run** (`src/Plan.tsx`). Running sends
+the model one step per turn ("Do step 2 of 4: …"), then checks the step: one
+more call to the model, with no tools, compares the step with the changes
+made during it (the diffs you approved, with the lines around them) and
+answers done or what's missing. A step only gets its checkmark from that
+check, never from the model saying so. A step that isn't done gets one retry
+with what's missing, then stops the plan with a note under it. A step's
+messages (the "Do step" message, the reply and its tool calls) don't show in
+the chat; open the step to see them. They still go to the model, so later
+steps know what earlier ones did. While the
+plan isn't running you can edit, remove or rerun steps; rerunning one marks
+the done steps after it as possibly out of date. The plan is saved with the
+chat. The check works much better with **Think** on.
+
 The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 `read_file`, `find_files` (names, with `*` wildcards) and `grep` (regular
 expressions over file contents). They read only what's attached to the chat.

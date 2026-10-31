@@ -16,6 +16,7 @@ import {
   type ToolSpec,
 } from "./toolkit.ts";
 import { FETCH_TOOLS } from "./fetch.ts";
+import { PLAN_TOOLS, planInstructions } from "./plan.ts";
 import { TERMINAL_TOOLS } from "./terminal.ts";
 import { WEB_TOOLS } from "./web.ts";
 import { WRITE_TOOLS } from "./write.ts";
@@ -30,6 +31,14 @@ interface Group {
 }
 
 const GROUPS: Group[] = [
+  {
+    id: "plan",
+    label: "Plan",
+    description:
+      "Before changing files, the model writes the steps as a checklist. Chat runs one step per turn and " +
+      "checks each one, so a step that isn't really done shows up instead of a reply that says it is.",
+    instructions: () => planInstructions,
+  },
   {
     id: "disk",
     label: "Disk",
@@ -81,7 +90,7 @@ const GROUPS: Group[] = [
   },
 ];
 
-const TOOLS: ToolSpec[] = [...DISK_TOOLS, ...WRITE_TOOLS, ...TERMINAL_TOOLS, ...WEB_TOOLS, ...FETCH_TOOLS];
+const TOOLS: ToolSpec[] = [...PLAN_TOOLS, ...DISK_TOOLS, ...WRITE_TOOLS, ...TERMINAL_TOOLS, ...WEB_TOOLS, ...FETCH_TOOLS];
 
 const isOffered = (ctx: ToolContext, t: ToolSpec) => !ctx.store.disabledTools.includes(t.name);
 
