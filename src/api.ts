@@ -235,6 +235,8 @@ export interface Session {
   contextStart: number;
   attachments: Attachment[];
   usage: Usage | null;
+  // Failure of the last reply; see Chat.tsx. Older saved chats don't have it.
+  failed: string | null;
 }
 
 // One row in the sessions panel.

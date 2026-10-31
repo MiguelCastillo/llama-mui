@@ -44,6 +44,7 @@ import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import SearchOffIcon from "@mui/icons-material/SearchOff";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import {
   type ChatMessage,
   type StepStats,
@@ -86,6 +87,9 @@ const TOOLBAR_KEY = "llama-mui:toolbarOpen";
 // Off until the user turns it on: tools can read files, change them and run
 // commands, so they're something to opt into.
 const TOOLS_KEY = "llama-mui:toolsOn";
+// Saved as `failed` while a reply runs, so a chat reopened after the page
+// went away mid-reply offers to resend.
+const INTERRUPTED = "interrupted";
 // Whether the chats panel is open (wide screens; on phones it's a drawer).
 const SESSIONS_OPEN_KEY = "llama-mui:sessionsOpen";
 // Which saved chat is open, so a reload reopens it.
@@ -161,6 +165,15 @@ function callKey(call: ToolCall): string {
   }
 }
 
+// What happened to a failed reply, in the user's terms. Our server answers 502
+// when it can't reach the llama server; a TypeError means the request never
+// got an answer at all.
+function failureLine(failed: string): string {
+  if (failed === INTERRUPTED) return "The reply was cut off.";
+  if (failed.startsWith("TypeError") || failed.includes(": 502 ")) return "Couldn't reach the llama server.";
+  return "The llama server returned an error.";
+}
+
 export default function Chat({ visible, onOpenSettings }: { visible: boolean; onOpenSettings: () => void }) {
   // undefined until the first load, null when no server is configured.
   const [connector, setConnector] = useState<Connector | null | undefined>(undefined);
@@ -190,6 +203,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What to offer the model given those attachments and Settings → Tools.
   const [toolContext, setToolContext] = useState<ToolContext>({ definitions: [], systemPrompt: null });
   const [error, setError] = useState<string | null>(null);
+  // Failure of the last reply only; see retry().
+  const [failed, setFailed] = useState<string | null>(null);
   // Token count after the latest reply; it covers the whole conversation.
   const [usage, setUsage] = useState<Usage | null>(null);
   // Index of the first message the model still sees. Clear context moves it
@@ -221,7 +236,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What was last saved or loaded, so opening a chat doesn't save it again
   // (which would move it to the top of the list).
   const savedKey = useRef("");
-  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage]);
+  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed]);
 
   const applySession = (s: Session) => {
     savedKey.current = keyOf(s);
@@ -229,6 +244,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setContextStart(s.contextStart);
     setAttachments(s.attachments);
     setUsage(s.usage);
+    setFailed(s.failed ?? null);
     if (s.model) setModel(s.model);
   };
 
@@ -259,6 +275,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       contextStart,
       attachments,
       usage,
+      failed: abort ? INTERRUPTED : failed,
     };
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -273,7 +290,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   useEffect(() => {
     const timer = setTimeout(saveNow, 800);
     return () => clearTimeout(timer);
-  }, [loaded, messages, contextStart, attachments, usage, model]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -286,6 +303,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setUsage(null);
     setContextStart(0);
     setAttachments([]);
+    setFailed(null);
     setDrawerOpen(false);
     loadSession(id);
   };
@@ -380,17 +398,26 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       setPending({ ask, decide });
     });
 
+  // Sends a reply after the user types it.
   const send = async () => {
     const text = input.trim();
     if (!text || !model || !connector || abort) return;
+    setInput("");
+    reply(text, messages);
+  };
+
+  // Streams a reply, building history from `before` instead of `messages`.
+  // Called by `send()` for new messages, and by `retry()` for failed ones.
+  const reply = async (text: string, before: ChatMessage[]) => {
+    if (!connector) return;
     const connectorId = connector.id;
     // Fixed for this reply, even if the user changes attachments meanwhile;
     // only paths the user allows mid-reply are added.
     let attached = attachments.map((a) => a.path);
-    const forgotten = messages.slice(0, contextStart);
-    let history: ChatMessage[] = [...messages.slice(contextStart), { role: "user", content: text }];
-    setInput("");
+    const forgotten = before.slice(0, contextStart);
+    let history: ChatMessage[] = [...before.slice(contextStart), { role: "user", content: text }];
     setError(null);
+    setFailed(null);
 
     const controller = new AbortController();
     setAbort(controller);
@@ -546,12 +573,20 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         if (round === MAX_TOOL_ROUNDS - 1) stopReason ??= `Stopped after ${MAX_TOOL_ROUNDS} rounds of tool calls.`;
       }
     } catch (e) {
-      if (!controller.signal.aborted) setError(String(e));
+      if (!controller.signal.aborted) setFailed(String(e));
     } finally {
       setAbort(null);
       // The server loads models on demand, so a reply can change their status.
       refreshModels(connectorId);
     }
+  };
+
+  // Retries the last user message, dropping the failed reply.
+  const retry = () => {
+    const userMsg = [...messages].reverse().find((m) => m.role === "user");
+    if (!userMsg || !!abort) return;
+    const index = messages.indexOf(userMsg);
+    reply(userMsg.content, messages.slice(0, index));
   };
 
   // Tool results show inside the call that asked for them, and the assistant
@@ -565,6 +600,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (m.role === "assistant" && prev?.parts[0].role === "assistant" && i !== contextStart) prev.parts.push(m);
     else turns.push({ parts: [m], start: i });
   });
+  // The last turn that's a user message; only its reply can fail.
+  const lastFailedTurnIndex = turns.map((t) => t.parts[0].role).lastIndexOf("user");
   const hasContext = messages.length > contextStart;
   const showIndicator = hasContext && !!prefs?.showContextMeter;
 
@@ -765,6 +802,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   forgotten={t.start < contextStart}
                   showSteps={prefs?.showSteps ?? true}
                   renderMarkdown={prefs?.renderMarkdown ?? true}
+                  failed={i === lastFailedTurnIndex ? failed : undefined}
+                  onResend={i === lastFailedTurnIndex ? retry : undefined}
+                  resendDisabled={i === lastFailedTurnIndex ? !!abort : undefined}
                 />
               </Fragment>
             ))}
@@ -837,6 +877,9 @@ function MessageBubble({
   forgotten,
   showSteps,
   renderMarkdown,
+  failed,
+  onResend,
+  resendDisabled,
 }: {
   parts: ChatMessage[];
   streaming: boolean;
@@ -847,6 +890,12 @@ function MessageBubble({
   showSteps: boolean;
   // Off: messages show as typed, Markdown symbols and all (Settings → Chat).
   renderMarkdown: boolean;
+  // Error message for the last user message in this turn.
+  failed?: string | null;
+  // Callback for resending the last user message.
+  onResend?: () => void;
+  // Disabled state for the resend button.
+  resendDisabled?: boolean;
 }) {
   const isUser = parts[0].role === "user";
   const last = parts[parts.length - 1];
@@ -856,8 +905,30 @@ function MessageBubble({
   // With steps hidden, a finished reply that was all steps (e.g. stopped
   // mid-tool) would be an empty box.
   if (!isUser && !showSteps && !waiting && !parts.some((m) => m.content)) return null;
+  const hasError = !!failed;
+  const errorLine = failed && (
+    <Stack spacing={0.5} sx={{ alignItems: isUser ? "flex-end" : "flex-start", mt: 0.5, flexShrink: 0 }}>
+      <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+        <ErrorOutlineIcon fontSize="small" color="error" />
+        {/* The raw error is for debugging, so it waits on hover. */}
+        <Tooltip title={failed === INTERRUPTED ? "" : failed}>
+          <Typography variant="caption" color="error.main">
+            {failureLine(failed)}
+          </Typography>
+        </Tooltip>
+        <Button
+          size="small"
+          color="error"
+          onClick={onResend}
+          disabled={resendDisabled}
+        >
+          Resend
+        </Button>
+      </Stack>
+    </Stack>
+  );
   return (
-    <Box sx={{ display: "flex", justifyContent: isUser ? "flex-end" : "flex-start", opacity: forgotten ? 0.5 : 1 }}>
+    <Box sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", gap: 1, opacity: forgotten ? 0.5 : 1 }}>
       <Paper
         variant={isUser ? "elevation" : "outlined"}
         sx={{
@@ -868,6 +939,8 @@ function MessageBubble({
           maxWidth: "100%",
           bgcolor: isUser ? "primary.main" : "background.paper",
           color: isUser ? "primary.contrastText" : "text.primary",
+          // Only when failed: replies are outlined, and border: 0 would drop it.
+          ...(hasError && { border: 1, borderColor: "error.main" }),
         }}
       >
         <Stack spacing={1}>
@@ -908,6 +981,7 @@ function MessageBubble({
           {waiting && <Typography>…</Typography>}
         </Stack>
       </Paper>
+      {errorLine}
     </Box>
   );
 }

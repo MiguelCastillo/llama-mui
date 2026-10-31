@@ -91,6 +91,11 @@ Each group adds a few lines to the system prompt while its tools are on.
   it changes, so reloading the page reopens it. The **Chats** panel on the
   left lists them newest first; click one to switch, **+** starts a new chat,
   and the trash icon deletes one.
+- **Resend**: when a reply fails, your message gets a red outline and a line
+  saying what went wrong (the reply was cut off, the llama server couldn't be
+  reached, or it returned an error), with a **Resend** button. Hover the line
+  for the raw error. A reply cut off by a reload or closed tab can still be
+  resent after the chat reopens.
 
 - Model picker from the active server's `/v1/models`, showing which models are
   loaded. The server loads others on the first message.
