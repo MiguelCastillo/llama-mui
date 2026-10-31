@@ -8,6 +8,7 @@ import { type Preferences, load, save } from "./store.ts";
 const VALIDATORS: Record<keyof Preferences, (v: unknown) => boolean> = {
   showContextMeter: (v) => typeof v === "boolean",
   showSteps: (v) => typeof v === "boolean",
+  renderMarkdown: (v) => typeof v === "boolean",
 };
 
 // Handles /api/preferences; returns false for anything else.

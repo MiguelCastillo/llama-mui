@@ -727,6 +727,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   toolResults={toolResults}
                   forgotten={t.start < contextStart}
                   showSteps={prefs?.showSteps ?? true}
+                  renderMarkdown={prefs?.renderMarkdown ?? true}
                 />
               </Fragment>
             ))}
@@ -798,6 +799,7 @@ function MessageBubble({
   toolResults,
   forgotten,
   showSteps,
+  renderMarkdown,
 }: {
   parts: ChatMessage[];
   streaming: boolean;
@@ -806,6 +808,8 @@ function MessageBubble({
   forgotten: boolean;
   // Off: only the answer text shows, no thinking or tool calls (Settings → Chat).
   showSteps: boolean;
+  // Off: messages show as typed, Markdown symbols and all (Settings → Chat).
+  renderMarkdown: boolean;
 }) {
   const isUser = parts[0].role === "user";
   const last = parts[parts.length - 1];
@@ -848,13 +852,14 @@ function MessageBubble({
                   </AccordionDetails>
                 </Accordion>
               )}
-              {m.content && (
-                m.role === "assistant" ? (
+              {m.content &&
+                (!renderMarkdown ? (
+                  <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</Typography>
+                ) : m.role === "assistant" ? (
                   <MarkdownRenderer content={m.content} />
                 ) : (
-                  <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</Typography>
-                )
-              )}
+                  <MarkdownRenderer content={m.content} breaks onPrimary />
+                ))}
               {showSteps &&
                 m.toolCalls?.map((c) => (
                   <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} stopped={!streaming} />

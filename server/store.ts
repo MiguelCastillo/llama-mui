@@ -18,6 +18,8 @@ export interface Preferences {
   showContextMeter: boolean;
   // Thoughts and tool calls inside replies.
   showSteps: boolean;
+  // Formatting in messages; off shows the raw text.
+  renderMarkdown: boolean;
 }
 
 // Options for one model, keyed by its id (e.g. "unsloth/Qwen3.5-9B-GGUF:Q4_K_M"),
@@ -59,7 +61,7 @@ const empty = (): Store => ({
   activeId: null,
   connectors: [],
   disabledTools: [],
-  preferences: { showContextMeter: true, showSteps: true },
+  preferences: { showContextMeter: true, showSteps: true, renderMarkdown: true },
   models: {},
 });
 

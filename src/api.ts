@@ -128,6 +128,7 @@ export const updateModelSettings = (model: string, changes: Partial<ModelSetting
 export interface Preferences {
   showContextMeter: boolean;
   showSteps: boolean;
+  renderMarkdown: boolean;
 }
 export const getPreferences = () => call<Preferences>("GET", "/api/preferences");
 export const updatePreferences = (changes: Partial<Preferences>) => call<Preferences>("PATCH", "/api/preferences", changes);

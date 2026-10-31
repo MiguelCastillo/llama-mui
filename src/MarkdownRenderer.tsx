@@ -1,10 +1,15 @@
 import { type ReactNode, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Box, IconButton, Link, Typography, type SxProps, type Theme } from "@mui/material";
+import remarkBreaks from "remark-breaks";
+import { Box, IconButton, Link, Typography } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 
-const codeInlineStyle: SxProps<Theme> = {
+// On the user's primary-colored bubble the theme's greys disappear, so code
+// is tinted darker there.
+const ON_PRIMARY_TINT = "rgba(0, 0, 0, 0.15)";
+
+const codeInlineStyle = {
   fontFamily: "monospace",
   fontSize: "0.85em",
   bgcolor: "action.hover",
@@ -12,11 +17,11 @@ const codeInlineStyle: SxProps<Theme> = {
   borderRadius: 0.5,
 };
 
-function CodeBlock({ children }: { children?: ReactNode }) {
+function CodeBlock({ children, tint }: { children?: ReactNode; tint: string }) {
   const ref = useRef<HTMLPreElement>(null);
   return (
     <Box sx={{ position: "relative", my: 1.5 }}>
-      <Box component="pre" ref={ref} sx={{ m: 0, p: 1.5, pr: 5, overflowX: "auto", bgcolor: "action.hover", borderRadius: 1, fontFamily: "monospace", fontSize: "0.85em", "& code": { bgcolor: "transparent", p: 0, fontSize: "inherit" } }}>{children}</Box>
+      <Box component="pre" ref={ref} sx={{ m: 0, p: 1.5, pr: 5, overflowX: "auto", bgcolor: tint, borderRadius: 1, fontFamily: "monospace", fontSize: "0.85em", "& code": { bgcolor: "transparent", p: 0, fontSize: "inherit" } }}>{children}</Box>
       <IconButton size="small" aria-label="Copy code" onClick={() => navigator.clipboard.writeText(ref.current?.innerText ?? "").catch(() => {})} sx={{ position: "absolute", top: 4, right: 4 }}>
         <ContentCopyIcon fontSize="small" />
       </IconButton>
@@ -24,20 +29,33 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-export default function MarkdownRenderer({ content }: { content: string }) {
+// breaks: a single line break stays a line break, as in what the user typed.
+// onPrimary: colors for the user's primary-colored bubble.
+export default function MarkdownRenderer({
+  content,
+  breaks = false,
+  onPrimary = false,
+}: {
+  content: string;
+  breaks?: boolean;
+  onPrimary?: boolean;
+}) {
+  const tint = onPrimary ? ON_PRIMARY_TINT : "action.hover";
+
   return (
     <Box
       component="div"
       sx={{
         "& > :first-child": { mt: 0 },
         "& > :last-child": { mb: 0 },
+        overflowWrap: "break-word",
       }}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={breaks ? [remarkGfm, remarkBreaks] : [remarkGfm]}
         components={{
-          code: ({ children }) => <Box component="code" sx={codeInlineStyle}>{children}</Box>,
-          pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+          code: ({ children }) => <Box component="code" sx={{ ...codeInlineStyle, bgcolor: tint }}>{children}</Box>,
+          pre: ({ children }) => <CodeBlock tint={tint}>{children}</CodeBlock>,
           p: ({ children }) => (
             <Typography variant="body1" sx={{ my: 1, maxWidth: "100%" }}>
               {children}
@@ -46,8 +64,8 @@ export default function MarkdownRenderer({ content }: { content: string }) {
           ul: ({ children }) => <Box component="ul" sx={{ my: 1, pl: 3 }}>{children}</Box>,
           ol: ({ children }) => <Box component="ol" sx={{ my: 1, pl: 3 }}>{children}</Box>,
           li: ({ children }) => <Box component="li" sx={{ my: 0.25 }}>{children}</Box>,
-          a: ({ href, children }) => <Link href={href} target="_blank" rel="noopener noreferrer">{children}</Link>,
-          img: ({ src, alt }) => <Link href={src} target="_blank" rel="noopener noreferrer">{alt || src}</Link>,
+          a: ({ href, children }) => <Link href={href} target="_blank" rel="noopener noreferrer" color={onPrimary ? "inherit" : undefined}>{children}</Link>,
+          img: ({ src, alt }) => <Link href={src} target="_blank" rel="noopener noreferrer" color={onPrimary ? "inherit" : undefined}>{alt || src}</Link>,
           h1: ({ children }) => (
             <Typography variant="subtitle1" sx={{ fontWeight: 600, mt: 2, mb: 1 }}>
               {children}
@@ -90,7 +108,7 @@ export default function MarkdownRenderer({ content }: { content: string }) {
             <Box component="td" sx={{ p: 0.75, borderBottom: 1, borderColor: "divider" }}>{children}</Box>
           ),
           blockquote: ({ children }) => (
-            <Box component="blockquote" sx={{ borderLeft: 3, borderColor: "divider", pl: 2, mx: 0, my: 1.5, color: "text.secondary" }}>{children}</Box>
+            <Box component="blockquote" sx={{ borderLeft: 3, borderColor: "divider", pl: 2, mx: 0, my: 1.5, color: onPrimary ? "inherit" : "text.secondary" }}>{children}</Box>
           ),
           hr: () => <Box component="hr" sx={{ my: 2, border: 0, borderTop: 1, borderColor: "divider" }} />,
           strong: ({ children }) => <strong>{children}</strong>,

@@ -92,6 +92,11 @@ Each group adds a few lines to the system prompt while its tools are on.
 - Streaming replies with a Stop button. Each step of a reply (thinking, tool
   calls) shows how long it took; hover for token counts. Hide the steps in
   **Settings → Chat** to see just the answers.
+- Messages render as Markdown, yours and the model's: bold, lists, tables,
+  links (opened in a new tab) and code blocks with a Copy button. Text inside
+  ``` blocks shows exactly as typed, and images show as links instead of
+  loading. In your messages a single line break stays a line break. Turn it
+  off in **Settings → Chat** to see the raw text.
 - Context indicator under Send ("98% left"), orange then red as the window
   fills. Click it for tokens used of the model's window, generation speed and
   **Clear context**: the model forgets everything so far, but the transcript

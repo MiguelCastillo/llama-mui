@@ -16,6 +16,12 @@ const OPTIONS: { key: keyof Preferences; label: string; summary: string }[] = [
     label: "Show steps",
     summary: "Show the model's thinking and tool calls inside each reply, with how long each took. Off shows just the answer.",
   },
+  {
+    key: "renderMarkdown",
+    label: "Render Markdown",
+    summary:
+      "Show formatting in messages (bold, lists, tables, code blocks with a Copy button), yours and the model's. Off shows the raw text, ** and backticks included.",
+  },
 ];
 
 export default function ChatSection() {
