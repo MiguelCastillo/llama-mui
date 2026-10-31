@@ -83,7 +83,22 @@ import ChatSettings, { AttachmentIcon } from "./ChatSettings";
 import SessionsPanel from "./SessionsPanel";
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
-import { PLANNING_NOTE, PLANNING_TOOLS, PlanView, planFromCall, reviewStep, stepPrompt } from "./Plan";
+import {
+  PLANNING_NOTE,
+  PLANNING_TOOLS,
+  PlanView,
+  type WholeFile,
+  checkRoom,
+  disputeHolds,
+  disputeNote,
+  disputePrompt,
+  filesChanged,
+  planFromCall,
+  reviewStep,
+  stepPrompt,
+  uncheckedPrompt,
+  weighDispute,
+} from "./Plan";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
 // and whether the Tools switch is on. Storage can be unavailable (private
@@ -225,6 +240,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     planRef.current = next;
     setPlan(next);
   };
+  // A change the model suggested to a plan that's under way; see reply().
+  const [planProposal, setPlanProposal] = useState<PlanStep[] | null>(null);
+  const answerProposal = (accept: boolean) => {
+    // Matched again by text: the user may have changed the plan since.
+    const old = planRef.current ?? [];
+    if (accept && planProposal) changePlan(planProposal.map((p) => old.find((o) => o.text === p.text) ?? p));
+    setPlanProposal(null);
+  };
   // The ref is for code that runs inside the plan runner's own awaits, where
   // the state would still be the value from before the run started.
   const [planRunning, setPlanRunning] = useState(false);
@@ -269,7 +292,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What was last saved or loaded, so opening a chat doesn't save it again
   // (which would move it to the top of the list).
   const savedKey = useRef("");
-  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan]);
+  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal]);
 
   const applySession = (s: Session) => {
     savedKey.current = keyOf(s);
@@ -286,6 +309,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         status: st.status === "running" ? "pending" : st.status,
       })) ?? null,
     );
+    setPlanProposal(s.planProposal ?? null);
     if (s.model) setModel(s.model);
   };
 
@@ -318,6 +342,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       usage,
       failed: abort ? INTERRUPTED : failed,
       plan,
+      planProposal,
     };
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -332,7 +357,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   useEffect(() => {
     const timer = setTimeout(saveNow, 800);
     return () => clearTimeout(timer);
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -347,6 +372,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setAttachments([]);
     setFailed(null);
     changePlan(null);
+    setPlanProposal(null);
     setDrawerOpen(false);
     loadSession(id);
   };
@@ -659,8 +685,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           }
           if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) ran.clear();
           if (call.name === "update_plan" && !result.startsWith("Error:")) {
-            const steps = planFromCall(call.arguments, planRef.current ?? [], planRunningRef.current);
-            if (steps) changePlan(steps);
+            const old = planRef.current ?? [];
+            const steps = planFromCall(call.arguments, old, planRunningRef.current);
+            // A plan under way is the user's: outside a run, the model's change
+            // waits for them. Asked about a failed step, the model once
+            // "proposed" a fix by sending only that step, deleting the other 7.
+            const underway = old.some((st) => st.status !== "pending") && old.some((st) => st.status !== "done");
+            if (steps && underway && !planRunningRef.current) {
+              setPlanProposal(steps);
+              result =
+                "Proposed, not made: the user sees your change next to the plan and decides. Tell them what you changed and why.";
+            } else if (steps) changePlan(steps);
           }
           lastToolResults.push(history.length);
           history = [
@@ -715,14 +750,44 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (steps?.[i]) changePlan(steps.map((st, j) => (j === i ? { id: st.id, text: st.text, ...patch } : st)));
   };
 
+  // The files a step changed, as they are now, for its check. Read under a
+  // chat id of its own, so the model's read-before-edit record
+  // (server/reads.ts) only has what the model read itself.
+  const readWhole = (paths: string[]): Promise<WholeFile[]> =>
+    Promise.all(
+      paths.map(async (path) => {
+        const call = { id: "check", name: "read_file", arguments: JSON.stringify({ path, max_lines: Number.MAX_SAFE_INTEGER }) };
+        try {
+          const out = await runTool(call, { chatId: `${sessionId}:check`, attachments: attachments.map((a) => a.path) });
+          if (!("result" in out)) return { path, error: "it isn't attached to this chat" };
+          if (out.result.startsWith("Error:")) return { path, error: out.result.slice(7).trim() };
+          // After read_file's "<path> (lines 1-N of N)" line.
+          const text = out.result.slice(out.result.indexOf("\n") + 1);
+          return { path, text, cut: /… \(output cut at \d+ characters\)$/.test(text) };
+        } catch (e: any) {
+          return { path, error: e.message };
+        }
+      }),
+    );
+
   // Checks a step's turn with reviewStep. Null if it couldn't be checked
-  // (stopped, or the server failed), which leaves the step open.
-  const checkStep = async (step: string, stepMessages: ChatMessage[]) => {
+  // (stopped, or the server failed), which leaves the step open. The files
+  // are the ones the step changed in any run: a rerun that finds the work
+  // already done changes nothing, and the check then saw no file at all.
+  const checkStep = async (step: string, stepMessages: ChatMessage[], allRuns: ChatMessage[]) => {
     if (!connector) return null;
     const controller = new AbortController();
     setAbort(controller);
     try {
-      return await reviewStep({ connectorId: connector.id, model, think: thinkOn }, step, stepMessages, controller.signal);
+      const files = await readWhole(filesChanged(allRuns));
+      const room = checkRoom(models.find((m) => m.id === model)?.contextSize);
+      return await reviewStep(
+        { connectorId: connector.id, model, think: thinkOn, room },
+        step,
+        stepMessages,
+        files,
+        controller.signal,
+      );
     } catch (e: any) {
       if (!controller.signal.aborted) setError(`Couldn't check the step: ${e.message}`);
       return null;
@@ -739,26 +804,42 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     planRunningRef.current = true;
     setPlanRunning(true);
     let msgs = messages;
+    // A step the check couldn't judge; the model proposes a plan change after the run.
+    let unchecked: { i: number; why: string } | null = null;
     try {
       for (;;) {
         const steps = planRef.current;
-        const i = steps?.findIndex((st) => st.status === "pending" || st.status === "failed") ?? -1;
-        if (!steps || i < 0) break;
+        // A disputed step waits for the user, and the steps after it with it.
+        const i = steps?.findIndex((st) => st.status !== "done") ?? -1;
+        if (!steps || i < 0 || steps[i].status === "disputed") break;
         const { id, text } = steps[i];
         setStep(i, { status: "running" });
         const start = msgs.length;
         let r = await reply(stepPrompt(steps, i), msgs, { planStep: id });
         msgs = r.messages;
-        let check = r.ok ? await checkStep(text, msgs.slice(start)) : null;
-        if (check && !check.done) {
-          r = await reply(`Step ${i + 1} isn't done yet: ${check.missing}. Finish it, then reply with one line.`, msgs, {
-            planStep: id,
-          });
+        let check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep === id)) : null;
+        if (check && !check.done && !check.unchecked) {
+          const missing = check.missing ?? "";
+          const retryStart = msgs.length;
+          r = await reply(disputePrompt(i, missing), msgs, { planStep: id });
           msgs = r.messages;
-          check = r.ok ? await checkStep(text, msgs.slice(start)) : null;
+          // Said the check is wrong and changed nothing: checking again would
+          // only repeat the check, so the step waits for the user. Shown
+          // evidence makes it disputed; a bare claim leaves it failed.
+          const d = r.ok ? weighDispute(msgs.slice(retryStart)) : null;
+          if (d?.verdict === "wrong" && !d.changed) {
+            setStep(i, { status: disputeHolds(d) ? "disputed" : "failed", note: disputeNote(missing, d) });
+            break;
+          }
+          check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep === id)) : null;
         }
         if (!check) {
           setStep(i, r.error ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}` } : { status: "pending" });
+          break;
+        }
+        if (check.unchecked) {
+          setStep(i, { status: "failed", note: check.unchecked });
+          unchecked = { i, why: check.unchecked };
           break;
         }
         setStep(i, check.done ? { status: "done" } : { status: "failed", note: check.missing });
@@ -768,6 +849,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       planRunningRef.current = false;
       setPlanRunning(false);
     }
+    // Outside the run, so its update_plan becomes a proposal (see reply()).
+    if (unchecked) await reply(uncheckedPrompt(unchecked.i, unchecked.why), msgs, { planning: true });
   };
 
   // Retries the last user message, dropping the failed reply.
@@ -1035,6 +1118,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
                 onRun={runPlan}
                 onChange={changePlan}
+                proposal={planProposal}
+                onProposal={answerProposal}
                 details={(id) => {
                   const own = turns.flatMap((t, i) => (t.parts[0].planStep === id ? [bubble(t, i)] : []));
                   return own.length ? own : null;

@@ -252,6 +252,9 @@ export interface Session {
   failed: string | null;
   // The task's steps from update_plan; see Plan.tsx. Older saved chats don't have it.
   plan: PlanStep[] | null;
+  // A change to the plan the model suggested outside planning and runs,
+  // waiting for the user to accept it. Older saved chats don't have it.
+  planProposal?: PlanStep[] | null;
 }
 
 // One step of a plan. The model writes only the text; chat sets the status
@@ -260,7 +263,9 @@ export interface PlanStep {
   // Stays the same when the step is edited or rerun; its messages carry it.
   id: string;
   text: string;
-  status: "pending" | "running" | "done" | "failed";
+  // "disputed": the check said it isn't done, the model showed it is (see
+  // Plan.tsx, weighDispute), and the user decides.
+  status: "pending" | "running" | "done" | "failed" | "disputed";
   // Why a check failed or the step stopped, shown under the step.
   note?: string;
   // An earlier step was rerun after this one was done, so it may be out of date.

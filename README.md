@@ -141,17 +141,57 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
 ### Running a plan
 
 - **Run** (or **Continue**) runs the first step that's pending or not done,
-  then the next, until every step is done or one stops.
+  then the next, until every step is done or one stops. A disputed step (**?**)
+  waits for you, so there's no **Continue** until you mark it done or rerun it.
 - Each step is one turn: chat sends "Do step 2 of 4: …" with the plan so far,
   and the model works on that step only, with all its tools.
 - Then chat **checks** the step: one more call to the model, with no tools,
-  given the step, the changes made during it (for each change you approved,
-  the diff you saw, with the lines around it), and the reply. It answers
+  given the step, **every file the step wrote or edited, in this run or an
+  earlier one, whole, as it is now**, the changes made during it (for each change you approved, the diff
+  you saw; each change cut at 12,000 characters, all of them at 24,000), and
+  the reply.
+  - Whole files, because diffs alone misled the check: a hunk hid a
+    function's first line, so its parameter looked undefined, and a rerun's
+    changes were only its fixes, so a route the first attempt wrote looked
+    missing. Code that's in the file counts, whoever wrote it. Earlier runs
+    count too: a rerun that found the work already done changed nothing, and
+    the check, seeing no file, said the file was never created.
+  - The files get half the model's context (its context size from the
+    server, or 32,000 tokens if it's unknown, at about 4 characters a
+    token). Files that don't fit, or can't be read, aren't cut or swapped
+    for the diffs: a check that can't see the code guesses. Instead the step
+    gets ✗ with "Couldn't check this step: server/x.ts (~N tokens) is too big
+    for the check…", the plan stops, and the model gets a planning turn to
+    propose a plan change, such as splitting the step, which shows under the
+    plan for you to accept or not.
+  - chat reads the files with `read_file` under a chat id of its own
+    (`<chat>:check`), so they don't count as read by the model for the
+    read-before-edit rule. It answers
   `DONE` or `MISSING: …`. The check uses the chat's **Think** setting, and
   works much better with it on.
-- **Not done**: the model gets one retry with what's missing, and the step is
-  checked again. If it's still not done, the step gets ✗ with "Not done: …"
-  under it, and the plan stops.
+- **Not done**: the model gets one retry, which starts by asking whether the
+  check is right. The check is a model too, and it gets things wrong: seeing
+  only diff hunks, it once called a function parameter "undefined". A small
+  model told it failed tends to agree and "fix" what isn't broken. So the
+  retry asks it to read the files with `read_file`, quote the lines that
+  settle it in a code block, and end with `STEP NOT DONE` (the check is
+  right) or `STEP DONE` (the check is wrong) before changing anything
+  (`disputePrompt` in `src/Plan.tsx`). The answer is about the step, since
+  asked for "CHECK RIGHT" or "CHECK WRONG", the model showed the step was done
+  and then wrote "CHECK RIGHT".
+  - **Check right** (or no answer): it fixes the step, and the step is
+    checked again. Still not done, and the step gets ✗ with "Not done: …"
+    under it, and the plan stops.
+  - **Check wrong**, with evidence: it read files in that turn, quoted lines,
+    and every quoted line is in what it read (`weighDispute`; inline code
+    under 12 characters doesn't count, since any name is found somewhere).
+    The step gets **?** with both sides under it, and the plan stops for you:
+    hover the step and mark it done, or rerun it.
+  - **Check wrong**, without evidence (no read, no quotes, or quotes that
+    aren't in the files): the step gets ✗, with a note saying what was
+    missing. It's the model's word against the check's, so it doesn't count.
+  - **Check wrong**, but it changed files anyway: the step is checked again,
+    as if it had agreed.
 - **Stopped or failed**: if you press **Stop**, or the reply fails, the step
   goes back to pending (with "The reply failed: …" if it did) and the plan
   stops. **Continue** picks it up again.
@@ -167,6 +207,13 @@ note and history) only if it's the same step as before:
   reword the step it's on, or add steps at the end.
 - **Otherwise**, the step with exactly the same text. A reworded or new step
   starts pending.
+
+A plan that's under way (some steps have run, some aren't done) isn't changed
+by the model outside a run, in a planning turn or not. Its `update_plan`
+becomes a suggestion under the plan, with new steps marked + and dropped
+steps struck out, and **Use this plan** or **Keep the plan**; the model is
+told it only proposed. This came from asking the model about a failed step:
+it "proposed" a fix by sending only that step, which deleted the other 7.
 
 ### Rerunning and editing
 
