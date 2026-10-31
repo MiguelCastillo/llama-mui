@@ -38,6 +38,12 @@ marked with whether you added it or the model asked for it, and a field to
 attach more; a new chat starts with nothing attached. When the model asks for
 a path that isn't attached, the reply pauses on an Allow / Deny prompt;
 allowing attaches it for the rest of the chat, and denying tells the model no.
+When nothing exists at the path (the model guessed), the prompt says so and
+offers to choose the right file or folder in the system dialog instead:
+whatever you pick is attached, and the model is told to use it.
+When you name something without its path ("find llama mui"), the model calls
+`locate_path` instead of guessing, and the reply pauses with the same Choose
+file / Choose folder buttons.
 The server re-checks the attachments on every call, and every path the model
 sends is checked against them after resolving symlinks and `../`. Searches
 skip symlinks, so they stay inside what's attached. `settings.json` itself

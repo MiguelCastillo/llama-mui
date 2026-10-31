@@ -4,7 +4,8 @@
 // Every path the model sends goes through resolveAllowed(), which checks it
 // against the attachments after resolving symlinks and "../", so neither can
 // reach outside. A path outside isn't refused outright: it throws
-// AccessNeeded, and chat asks the user whether to attach it. Walks for
+// AccessNeeded, and chat asks the user whether to attach it, or, if nothing
+// is there, to point to the right file or folder. Walks for
 // find_files and grep skip symlinks, so they never leave what's attached.
 
 import { execFile } from "node:child_process";
@@ -14,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { SETTINGS_FILE } from "./store.ts";
-import { AccessNeeded, type AttachmentTarget, ToolError, type ToolSpec, fn } from "./toolkit.ts";
+import { AccessNeeded, type AttachmentTarget, LocateNeeded, ToolError, type ToolSpec, fn } from "./toolkit.ts";
 
 const MAX_LIST_ENTRIES = 300;
 const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
@@ -61,8 +62,11 @@ export async function resolveAllowed(roots: string[], raw: unknown): Promise<str
   try {
     real = await realpath(abs);
   } catch (e: any) {
-    if (e.code === "ENOENT" || e.code === "ENOTDIR") throw new ToolError(`${given} does not exist`);
-    throw e;
+    if (e.code !== "ENOENT" && e.code !== "ENOTDIR") throw e;
+    // Outside the attachments, a missing path is usually a guess; the user
+    // may know where the real one is.
+    if (!roots.some((r) => isInside(abs, r))) throw new AccessNeeded({ path: abs, kind: null });
+    throw new ToolError(`${given} does not exist`);
   }
   if (isSettingsFile(real)) throw new ToolError(`${given} holds this app's API keys and can't be read`);
   if (!roots.some((r) => isInside(real, r))) await needAccess(real);
@@ -292,7 +296,33 @@ const grep: ToolSpec = {
   },
 };
 
-export const DISK_TOOLS = [listDirectory, readTextFile, findFiles, grep];
+const locatePath: ToolSpec = {
+  name: "locate_path",
+  group: "disk",
+  label: "Ask where things are",
+  summary: "Ask you to pick a file or folder the model only knows by name, like \"the llama-mui project\".",
+  definition: fn(
+    "locate_path",
+    "Ask the user to pick a file or folder they mentioned without its full path, like \"my notes\" or \"the " +
+      "llama-mui project\". They choose it in a file dialog, it's attached to the chat, and you get its path. " +
+      "Use this instead of guessing paths.",
+    {
+      type: "object",
+      properties: {
+        description: { type: "string", description: "What to find, in the user's words, e.g. \"the llama-mui project\"." },
+        kind: { type: "string", enum: ["file", "folder"], description: "Whether it's a file or a folder." },
+      },
+      required: ["description", "kind"],
+    },
+  ),
+  async run(_ctx, args) {
+    const description = String(args.description ?? "").trim();
+    if (!description) throw new ToolError("description is required");
+    throw new LocateNeeded({ description, kind: args.kind === "file" ? "file" : "folder" });
+  },
+};
+
+export const DISK_TOOLS = [listDirectory, readTextFile, findFiles, grep, locatePath];
 
 // Resolves a path the user wants to attach: ~ expanded, symlinks followed.
 // Throws a message meant for the user if it can't be attached.

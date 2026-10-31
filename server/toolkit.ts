@@ -33,11 +33,29 @@ export interface AttachmentTarget {
   kind: "file" | "folder";
 }
 
+// A path the model asked for outside the chat's attachments. kind is null
+// when nothing exists there: the model guessed, and the user can point it to
+// the right file or folder instead.
+export interface AccessRequest {
+  path: string;
+  kind: AttachmentTarget["kind"] | null;
+}
+
 // Thrown when the model asks for a path outside the chat's attachments. Chat
-// asks the user, and if they allow it, attaches the path and runs the call again.
+// asks the user, who can allow it (the call runs again), pick the right file
+// or folder instead, or deny it.
 export class AccessNeeded extends Error {
-  constructor(readonly target: AttachmentTarget) {
+  constructor(readonly target: AccessRequest) {
     super(`${target.path} isn't attached to this chat`);
+  }
+}
+
+// Thrown by locate_path: the model knows what the user means ("the llama-mui
+// project") but not where it is. Chat asks the user to pick it; the call
+// never runs on the server.
+export class LocateNeeded extends Error {
+  constructor(readonly request: { description: string; kind: AttachmentTarget["kind"] }) {
+    super(`The user needs to locate ${request.description}`);
   }
 }
 

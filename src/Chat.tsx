@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import {
   Accordion,
   AccordionDetails,
@@ -37,6 +37,8 @@ import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import LayersClearOutlinedIcon from "@mui/icons-material/LayersClearOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
+import SearchOffIcon from "@mui/icons-material/SearchOff";
+import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import {
   type ChatMessage,
   type StepStats,
@@ -44,6 +46,7 @@ import {
   type ModelSettings,
   type Preferences,
   type Attachment,
+  type AccessRequest,
   type AttachmentTarget,
   type Approval,
   type ToolContext,
@@ -55,6 +58,7 @@ import {
   getPreferences,
   getToolContext,
   listModels,
+  pickAttachments,
   runTool,
   streamChat,
 } from "./api";
@@ -92,8 +96,13 @@ function shareTokens(history: ChatMessage[], indexes: number[], tokens: number):
   return next;
 }
 
-// What a tool call can wait on the user for.
-type Ask = { needsAccess: AttachmentTarget } | { needsApproval: Approval };
+// What a tool call can wait on the user for, and their answer: allow or deny,
+// or, for a path, the files or folders they picked in its place.
+type Ask =
+  | { needsAccess: AccessRequest }
+  | { needsLocation: { description: string; kind: AttachmentTarget["kind"] } }
+  | { needsApproval: Approval };
+type Answer = boolean | AttachmentTarget[];
 
 // Caps one reply's tool use, so a model stuck calling tools can't loop forever.
 const MAX_TOOL_ROUNDS = 10;
@@ -118,7 +127,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // isn't attached, or a change to approve. Cleared once they answer.
   const [pending, setPending] = useState<{
     ask: Ask;
-    decide: (allow: boolean) => void;
+    decide: (answer: Answer) => void;
   } | null>(null);
   // What to offer the model given those attachments and Settings → Tools.
   const [toolContext, setToolContext] = useState<ToolContext>({ definitions: [], systemPrompt: null });
@@ -196,11 +205,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Shows the prompt and resolves with the user's answer; stopping the reply
   // counts as deny.
   const askUser = (ask: Ask, signal: AbortSignal) =>
-    new Promise<boolean>((resolve) => {
-      const decide = (allow: boolean) => {
+    new Promise<Answer>((resolve) => {
+      const decide = (answer: Answer) => {
         signal.removeEventListener("abort", onAbort);
         setPending(null);
-        resolve(allow);
+        resolve(answer);
       };
       const onAbort = () => decide(false);
       signal.addEventListener("abort", onAbort);
@@ -286,22 +295,46 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             // then approval of the change it makes there.
             let outcome = await runTool(call, { attachments: attached });
             while (!("result" in outcome)) {
-              const allowed = await askUser(outcome, controller.signal);
+              const answer = await askUser(outcome, controller.signal);
               if (controller.signal.aborted) return;
               // Time spent waiting on the user isn't the tool's.
               started = performance.now();
+              if (Array.isArray(answer)) {
+                // The user pointed to the right place; the model continues
+                // with it, which beats it guessing paths.
+                attached = [...attached, ...answer.map((a) => a.path)];
+                answer.forEach((a) => attach({ ...a, source: "request" }));
+                const picked = answer.map((a) => `${a.path} (${a.kind})`).join(", ");
+                outcome = {
+                  result:
+                    "needsAccess" in outcome
+                      ? `Instead of ${outcome.needsAccess.path}, the user attached ${picked}. Use that path; call the tool again with it.`
+                      : `The user picked ${picked}; it's attached to this chat. Use that path.`,
+                };
+                break;
+              }
+              if ("needsLocation" in outcome) {
+                outcome = { result: `Error: the user didn't pick ${outcome.needsLocation.description}` };
+                break;
+              }
               if ("needsAccess" in outcome) {
                 const target = outcome.needsAccess;
-                if (!allowed) {
+                if (!target.kind) {
+                  outcome = {
+                    result: `Error: nothing exists at ${target.path}, and the user didn't point to where it is`,
+                  };
+                  break;
+                }
+                if (!answer) {
                   outcome = { result: `Error: the user didn't allow access to ${target.path}` };
                   break;
                 }
                 attached = [...attached, target.path];
-                attach({ ...target, source: "request" });
+                attach({ path: target.path, kind: target.kind, source: "request" });
                 outcome = await runTool(call, { attachments: attached });
               } else {
                 const approval = outcome.needsApproval;
-                if (!allowed) {
+                if (!answer) {
                   outcome = {
                     result:
                       approval.type === "change"
@@ -516,12 +549,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             ))}
             {/* Cleared after the last message: the divider goes at the end. */}
             {contextStart > 0 && contextStart === messages.length && <ContextDivider />}
-            {pending &&
-              ("needsAccess" in pending.ask ? (
-                <AccessPrompt target={pending.ask.needsAccess} onDecide={pending.decide} />
-              ) : (
-                <ApprovalPrompt approval={pending.ask.needsApproval} onDecide={pending.decide} />
-              ))}
+            {pending && <PendingPrompt ask={pending.ask} onDecide={pending.decide} />}
             {error && <Alert severity="error">{error}</Alert>}
             <div ref={bottomRef} />
           </Stack>
@@ -660,11 +688,12 @@ function ToolCallView({ call, result: resultMessage }: { call: ToolCall; result?
     // Shown raw below; the server reports the bad JSON to the model.
   }
   // find_files and grep take a pattern, web_search a query; show it along with
-  // where they looked. run_command shows its command, fetch_url its URL.
+  // where they looked. run_command shows its command, fetch_url its URL,
+  // locate_path what it's looking for.
   const term = args.pattern ?? args.query;
   const target =
-    args.command !== undefined || args.url !== undefined
-      ? String(args.command ?? args.url)
+    args.command !== undefined || args.url !== undefined || args.description !== undefined
+      ? String(args.command ?? args.url ?? args.description)
       : term !== undefined
         ? `"${term}"${args.path ? ` in ${args.path}` : ""}`
         : (args.path ?? "");
@@ -708,8 +737,39 @@ function ToolCallView({ call, result: resultMessage }: { call: ToolCall; result?
   );
 }
 
-// Shown in the conversation while a reply waits: the model asked to read a
-// path that isn't attached. Allowing attaches it for the rest of the chat.
+// The prompt for whatever a reply is waiting on.
+function PendingPrompt({ ask, onDecide }: { ask: Ask; onDecide: (answer: Answer) => void }) {
+  if ("needsApproval" in ask) return <ApprovalPrompt approval={ask.needsApproval} onDecide={onDecide} />;
+  if ("needsLocation" in ask) {
+    const { description, kind } = ask.needsLocation;
+    return (
+      <FindPrompt
+        heading={`The model needs you to find this ${kind}:`}
+        subject={description}
+        isPath={false}
+        icon={<TravelExploreIcon fontSize="small" />}
+        kinds={kind === "file" ? ["file", "folder"] : ["folder", "file"]}
+        onDecide={onDecide}
+      />
+    );
+  }
+  const { path, kind } = ask.needsAccess;
+  if (kind) return <AccessPrompt target={{ path, kind }} onDecide={onDecide} />;
+  return (
+    <FindPrompt
+      heading="The model is looking for this, but nothing is there:"
+      subject={path}
+      isPath
+      icon={<SearchOffIcon fontSize="small" />}
+      // A name with an extension is probably a file.
+      kinds={/\.[^/]+$/.test(path) ? ["file", "folder"] : ["folder", "file"]}
+      onDecide={onDecide}
+    />
+  );
+}
+
+// Shown while a reply waits: the model asked for a path that exists but
+// isn't attached. Allowing attaches it for the rest of the chat.
 function AccessPrompt({ target, onDecide }: { target: AttachmentTarget; onDecide: (allow: boolean) => void }) {
   return (
     <Alert severity="warning" icon={<AttachmentIcon kind={target.kind} />}>
@@ -730,6 +790,78 @@ function AccessPrompt({ target, onDecide }: { target: AttachmentTarget; onDecide
         <Button size="small" variant="outlined" color="inherit" onClick={() => onDecide(false)}>
           Deny
         </Button>
+      </Stack>
+    </Alert>
+  );
+}
+
+// Shown while a reply waits for the user to find something: a file or folder
+// the model knows only by name (locate_path), or a path it guessed where
+// nothing exists. What they pick in the system dialog is attached and given
+// to the model.
+function FindPrompt({
+  heading,
+  subject,
+  isPath,
+  icon,
+  kinds,
+  onDecide,
+}: {
+  heading: string;
+  subject: string;
+  // The subject is a path (monospace) rather than a description.
+  isPath: boolean;
+  icon: ReactNode;
+  // Which pick buttons to offer, the likelier first.
+  kinds: AttachmentTarget["kind"][];
+  onDecide: (answer: Answer) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Cancelling the dialog leaves the prompt up.
+  const pick = (kind: AttachmentTarget["kind"]) => {
+    setPicking(true);
+    setError(null);
+    pickAttachments(kind)
+      .then((picked) => picked.length && onDecide(picked))
+      .catch((e) => setError(e.message))
+      .finally(() => setPicking(false));
+  };
+  return (
+    <Alert severity="warning" icon={icon}>
+      <Typography variant="body2">{heading}</Typography>
+      <Typography
+        variant="body2"
+        sx={{ fontFamily: isPath ? "monospace" : undefined, fontWeight: isPath ? undefined : 500, overflowWrap: "anywhere", my: 0.5 }}
+      >
+        {subject}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" component="div">
+        Choose it and it's attached to this chat; the model then uses that path.
+      </Typography>
+      {error && (
+        <Typography variant="caption" color="error" component="div">
+          {error}
+        </Typography>
+      )}
+      <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1.5, flexWrap: "wrap", alignItems: "center" }}>
+        {kinds.map((k, i) => (
+          <Button
+            key={k}
+            size="small"
+            variant={i === 0 ? "contained" : "outlined"}
+            color="warning"
+            startIcon={<AttachmentIcon kind={k} />}
+            onClick={() => pick(k)}
+            disabled={picking}
+          >
+            Choose {k}…
+          </Button>
+        ))}
+        <Button size="small" variant="outlined" color="inherit" onClick={() => onDecide(false)} disabled={picking}>
+          Deny
+        </Button>
+        {picking && <CircularProgress size={18} />}
       </Stack>
     </Alert>
   );

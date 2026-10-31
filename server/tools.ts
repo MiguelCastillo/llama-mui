@@ -6,7 +6,9 @@ import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { load, save } from "./store.ts";
 import {
   AccessNeeded,
+  LocateNeeded,
   ApprovalNeeded,
+  type AccessRequest,
   type AttachmentTarget,
   type Approval,
   type ToolContext,
@@ -38,8 +40,10 @@ const GROUPS: Group[] = [
       (ctx.attachments.length
         ? `The user attached these files and folders to this chat:\n${ctx.attachments.map((d) => `- ${d}`).join("\n")}\n`
         : "Nothing is attached to this chat yet.\n") +
-      `If the user asks about ${ctx.attachments.length ? "other " : ""}files or folders on this computer, call the ` +
-      "disk tools with their absolute path: the user is asked to allow it. Mention which files you looked at.",
+      `If the user asks about ${ctx.attachments.length ? "other " : ""}files or folders on this computer and gives ` +
+      "their absolute path, call the disk tools with it: the user is asked to allow it. If they name one without " +
+      'its path ("my notes", "the llama-mui project"), don\'t guess paths: call locate_path and they\'ll pick it. ' +
+      "Mention which files you looked at.",
   },
   {
     id: "write",
@@ -101,7 +105,11 @@ const contextFor = async (body: any): Promise<ToolContext> => ({
 
 // Text for the model (errors included), a path the user must allow before
 // the call can run, or something the user must approve first.
-type Outcome = { result: string } | { needsAccess: AttachmentTarget } | { needsApproval: Approval };
+type Outcome =
+  | { result: string }
+  | { needsAccess: AccessRequest }
+  | { needsLocation: { description: string; kind: AttachmentTarget["kind"] } }
+  | { needsApproval: Approval };
 
 async function runTool(name: string, rawArgs: unknown, ctx: ToolContext): Promise<Outcome> {
   const text = (result: string) => ({ result });
@@ -118,6 +126,7 @@ async function runTool(name: string, rawArgs: unknown, ctx: ToolContext): Promis
     return text(await tool.run(ctx, args));
   } catch (e: any) {
     if (e instanceof AccessNeeded) return { needsAccess: e.target };
+    if (e instanceof LocateNeeded) return { needsLocation: e.request };
     if (e instanceof ApprovalNeeded) return { needsApproval: e.approval };
     if (e instanceof ToolError) return text(`Error: ${e.message}`);
     if (e.code === "EACCES" || e.code === "EPERM") return text("Error: permission denied");

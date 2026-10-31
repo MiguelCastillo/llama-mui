@@ -138,6 +138,13 @@ export interface AttachmentTarget {
   kind: "file" | "folder";
 }
 
+// A path the model asked for outside the chat's attachments. kind is null
+// when nothing exists there, so the user can point to the right one instead.
+export interface AccessRequest {
+  path: string;
+  kind: AttachmentTarget["kind"] | null;
+}
+
 // A file or folder attached to one chat. Only the disk tools in that chat can
 // read it; the server re-checks every path on each call.
 export interface Attachment extends AttachmentTarget {
@@ -199,7 +206,13 @@ export type Approval =
 
 // Text for the model, a path outside the attachments that the user must allow
 // before the call can run, or something the user must approve.
-export type ToolOutcome = { result: string } | { needsAccess: AttachmentTarget } | { needsApproval: Approval };
+// needsLocation: the model asked (locate_path) for a file or folder the user
+// named without a path; the user picks it.
+export type ToolOutcome =
+  | { result: string }
+  | { needsAccess: AccessRequest }
+  | { needsLocation: { description: string; kind: AttachmentTarget["kind"] } }
+  | { needsApproval: Approval };
 
 export interface ToolCallContext {
   attachments: string[];
