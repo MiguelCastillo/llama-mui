@@ -13,7 +13,9 @@ Then add a server under **Settings → Connectors** (the gear icon).
 
 ## Settings
 
-Settings are saved in `settings.json` (git ignored, readable only by you) and
+Settings are saved in `~/.llama-mui/settings.json`, outside the project and
+readable only by you (older versions kept `settings.json` in the project
+folder; it's moved on first start). They're
 served by a Vite plugin (`server/plugin.ts`) that runs under both
 `npm run dev` and `npm run preview`. It refuses requests from other websites
 (by their `Origin` and `Sec-Fetch-Site` headers): any page open in your browser
@@ -79,6 +81,11 @@ your local network.
 Each group adds a few lines to the system prompt while its tools are on.
 
 ## Features
+
+- **Saved chats**: each chat is saved to `~/.llama-mui/chats/` a moment after
+  it changes, so reloading the page reopens it. The **Chats** panel on the
+  left lists them newest first; click one to switch, **+** starts a new chat,
+  and the trash icon deletes one.
 
 - Model picker from the active server's `/v1/models`, showing which models are
   loaded. The server loads others on the first message.
