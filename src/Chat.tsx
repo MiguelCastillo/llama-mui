@@ -28,6 +28,7 @@ import {
   TextField,
   Tooltip,
   Typography,
+  type TypographyProps,
   useMediaQuery,
 } from "@mui/material";
 import AddCommentIcon from "@mui/icons-material/AddComment";
@@ -82,7 +83,22 @@ import ChatSettings, { AttachmentIcon } from "./ChatSettings";
 import SessionsPanel from "./SessionsPanel";
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
-import { PLANNING_NOTE, PLANNING_TOOLS, PlanView, planFromCall, reviewStep, stepPrompt } from "./Plan";
+import {
+  PLANNING_NOTE,
+  PLANNING_TOOLS,
+  PlanView,
+  type WholeFile,
+  checkRoom,
+  disputeHolds,
+  disputeNote,
+  disputePrompt,
+  filesChanged,
+  planFromCall,
+  reviewStep,
+  stepPrompt,
+  uncheckedPrompt,
+  weighDispute,
+} from "./Plan";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
 // and whether the Tools switch is on. Storage can be unavailable (private
@@ -224,10 +240,27 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     planRef.current = next;
     setPlan(next);
   };
+  // A change the model suggested to a plan that's under way; see reply().
+  const [planProposal, setPlanProposal] = useState<PlanStep[] | null>(null);
+  const answerProposal = (accept: boolean) => {
+    // Matched again by text: the user may have changed the plan since.
+    const old = planRef.current ?? [];
+    if (accept && planProposal) changePlan(planProposal.map((p) => old.find((o) => o.text === p.text) ?? p));
+    setPlanProposal(null);
+  };
   // The ref is for code that runs inside the plan runner's own awaits, where
   // the state would still be the value from before the run started.
   const [planRunning, setPlanRunning] = useState(false);
   const planRunningRef = useRef(false);
+  // When the current task started, for the counter beside the waiting dots
+  // (and on the plan card while a plan runs): from sending
+  // (or Run) until nothing is left running, so a plan's steps and checks
+  // count as one task even though each turn sets and clears `abort`.
+  const [busySince, setBusySince] = useState<number | null>(null);
+  // Pieces streamed in the current round and when the first one came, for
+  // the live tokens per second beside the counter. llama.cpp streams about
+  // one token per piece. A ref, since it changes on every piece.
+  const streamRate = useRef<StreamRate>({ pieces: 0, first: 0 });
   // Token count after the latest reply; it covers the whole conversation.
   const [usage, setUsage] = useState<Usage | null>(null);
   // Index of the first message the model still sees. Clear context moves it
@@ -259,7 +292,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What was last saved or loaded, so opening a chat doesn't save it again
   // (which would move it to the top of the list).
   const savedKey = useRef("");
-  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan]);
+  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal]);
 
   const applySession = (s: Session) => {
     savedKey.current = keyOf(s);
@@ -276,6 +309,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         status: st.status === "running" ? "pending" : st.status,
       })) ?? null,
     );
+    setPlanProposal(s.planProposal ?? null);
     if (s.model) setModel(s.model);
   };
 
@@ -308,6 +342,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       usage,
       failed: abort ? INTERRUPTED : failed,
       plan,
+      planProposal,
     };
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -322,7 +357,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   useEffect(() => {
     const timer = setTimeout(saveNow, 800);
     return () => clearTimeout(timer);
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -337,6 +372,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setAttachments([]);
     setFailed(null);
     changePlan(null);
+    setPlanProposal(null);
     setDrawerOpen(false);
     loadSession(id);
   };
@@ -398,6 +434,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // On only when the user wants tools and some are ready in this chat.
   const toolsOn = toolsWanted && toolContext.definitions.length > 0;
+  const busy = !!abort || planRunning;
+  useEffect(() => {
+    setBusySince((since) => (busy ? (since ?? Date.now()) : null));
+  }, [busy]);
+
   const toolName = (d: unknown) => (d as { function: { name: string } }).function.name;
   const canPlan = toolsOn && toolContext.definitions.some((d) => toolName(d) === "update_plan");
   const planOn = canPlan && planWanted;
@@ -469,6 +510,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
     const controller = new AbortController();
     setAbort(controller);
+    const started = performance.now();
+    // For took: pieces and streaming time over all rounds, and the server's
+    // speed for the latest round.
+    let pieces = 0;
+    let streamedMs = 0;
+    let serverTps: number | undefined;
     try {
       // Each round streams one assistant turn. If it asks for tools, run them,
       // add the results, and let the model continue from there.
@@ -489,6 +536,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         let thinkEnd = 0;
         let thinkPieces = 0;
         const show = () => setMessages([...forgotten, ...history, { ...reply }]);
+        streamRate.current = { pieces: 0, first: 0 };
+        // The empty reply goes on screen before the request is sent, so its
+        // bubble shows the waiting dots from the start, not from the first
+        // token (see `waiting` in MessageBubble).
         show();
         const { toolCalls: asked, usage: replyUsage } = await streamChat(
           {
@@ -513,6 +564,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 : undefined,
           },
           (d) => {
+            streamRate.current.first ||= performance.now();
+            streamRate.current.pieces++;
             if (d.reasoning) {
               thinkStart ||= performance.now();
               thinkPieces++;
@@ -527,6 +580,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         // Calls the model writes anyway on its last turn have nothing to run them.
         const toolCalls: ToolCall[] = lastTurn ? [] : asked;
         if (replyUsage) setUsage(replyUsage);
+        const r = streamRate.current;
+        if (r.first) {
+          pieces += r.pieces;
+          streamedMs += performance.now() - r.first;
+        }
+        serverTps = replyUsage?.tokensPerSecond ?? serverTps;
         if (thinkStart) reply.stats = { ms: (thinkEnd || performance.now()) - thinkStart, tokens: thinkPieces };
         if (replyUsage?.promptTokens && lastToolResults.length) {
           history = shareTokens(history, lastToolResults, replyUsage.promptTokens);
@@ -626,8 +685,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           }
           if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) ran.clear();
           if (call.name === "update_plan" && !result.startsWith("Error:")) {
-            const steps = planFromCall(call.arguments, planRef.current ?? [], planRunningRef.current);
-            if (steps) changePlan(steps);
+            const old = planRef.current ?? [];
+            const steps = planFromCall(call.arguments, old, planRunningRef.current);
+            // A plan under way is the user's: outside a run, the model's change
+            // waits for them. Asked about a failed step, the model once
+            // "proposed" a fix by sending only that step, deleting the other 7.
+            const underway = old.some((st) => st.status !== "pending") && old.some((st) => st.status !== "done");
+            if (steps && underway && !planRunningRef.current) {
+              setPlanProposal(steps);
+              result =
+                "Proposed, not made: the user sees your change next to the plan and decides. Tell them what you changed and why.";
+            } else if (steps) changePlan(steps);
           }
           lastToolResults.push(history.length);
           history = [
@@ -655,6 +723,23 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       // The server loads models on demand, so a reply can change their status.
       refreshModels(connectorId);
     }
+    const lastReply = history.map((m) => m.role).lastIndexOf("assistant");
+    if (lastReply >= 0) {
+      history = history.map((m, i) =>
+        i === lastReply
+          ? {
+              ...m,
+              took: {
+                ms: performance.now() - started,
+                // Under half a second of streaming is too short to rate.
+                clientTps: streamedMs >= 500 ? pieces / (streamedMs / 1000) : undefined,
+                serverTps,
+              },
+            }
+          : m,
+      );
+      setMessages([...forgotten, ...history]);
+    }
     return { ok, messages: [...forgotten, ...history], error };
   };
 
@@ -665,14 +750,45 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (steps?.[i]) changePlan(steps.map((st, j) => (j === i ? { id: st.id, text: st.text, ...patch } : st)));
   };
 
+  // The files a step changed, as they are now, for its check. Read under a
+  // chat id of its own, so the model's read-before-edit record
+  // (server/reads.ts) only has what the model read itself.
+  const readWhole = (paths: string[]): Promise<WholeFile[]> =>
+    Promise.all(
+      paths.map(async (path) => {
+        const call = { id: "check", name: "read_file", arguments: JSON.stringify({ path, max_lines: Number.MAX_SAFE_INTEGER }) };
+        try {
+          const out = await runTool(call, { chatId: `${sessionId}:check`, attachments: attachments.map((a) => a.path) });
+          if (!("result" in out)) return { path, error: "it isn't attached to this chat" };
+          if (out.result.startsWith("Error:")) return { path, error: out.result.slice(7).trim() };
+          // After read_file's "<path> (lines 1-N of N)" line.
+          const text = out.result.slice(out.result.indexOf("\n") + 1);
+          return { path, text, cut: /… \(output cut at \d+ characters\)$/.test(text) };
+        } catch (e: any) {
+          return { path, error: e.message };
+        }
+      }),
+    );
+
   // Checks a step's turn with reviewStep. Null if it couldn't be checked
-  // (stopped, or the server failed), which leaves the step open.
-  const checkStep = async (step: string, stepMessages: ChatMessage[]) => {
+  // (stopped, or the server failed), which leaves the step open. The files
+  // are the ones any step of the plan changed, in any run: a step whose work
+  // is already done (by a rerun before, or by an earlier step) changes
+  // nothing, and the check then saw no file at all.
+  const checkStep = async (step: string, stepMessages: ChatMessage[], planMessages: ChatMessage[]) => {
     if (!connector) return null;
     const controller = new AbortController();
     setAbort(controller);
     try {
-      return await reviewStep({ connectorId: connector.id, model, think: thinkOn }, step, stepMessages, controller.signal);
+      const files = await readWhole(filesChanged(planMessages));
+      const room = checkRoom(models.find((m) => m.id === model)?.contextSize);
+      return await reviewStep(
+        { connectorId: connector.id, model, think: thinkOn, room },
+        step,
+        stepMessages,
+        files,
+        controller.signal,
+      );
     } catch (e: any) {
       if (!controller.signal.aborted) setError(`Couldn't check the step: ${e.message}`);
       return null;
@@ -689,26 +805,42 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     planRunningRef.current = true;
     setPlanRunning(true);
     let msgs = messages;
+    // A step the check couldn't judge; the model proposes a plan change after the run.
+    let unchecked: { i: number; why: string } | null = null;
     try {
       for (;;) {
         const steps = planRef.current;
-        const i = steps?.findIndex((st) => st.status === "pending" || st.status === "failed") ?? -1;
-        if (!steps || i < 0) break;
+        // A disputed step waits for the user, and the steps after it with it.
+        const i = steps?.findIndex((st) => st.status !== "done") ?? -1;
+        if (!steps || i < 0 || steps[i].status === "disputed") break;
         const { id, text } = steps[i];
         setStep(i, { status: "running" });
         const start = msgs.length;
         let r = await reply(stepPrompt(steps, i), msgs, { planStep: id });
         msgs = r.messages;
-        let check = r.ok ? await checkStep(text, msgs.slice(start)) : null;
-        if (check && !check.done) {
-          r = await reply(`Step ${i + 1} isn't done yet: ${check.missing}. Finish it, then reply with one line.`, msgs, {
-            planStep: id,
-          });
+        let check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
+        if (check && !check.done && !check.unchecked) {
+          const missing = check.missing ?? "";
+          const retryStart = msgs.length;
+          r = await reply(disputePrompt(i, missing), msgs, { planStep: id });
           msgs = r.messages;
-          check = r.ok ? await checkStep(text, msgs.slice(start)) : null;
+          // Said the check is wrong and changed nothing: checking again would
+          // only repeat the check, so the step waits for the user. Shown
+          // evidence makes it disputed; a bare claim leaves it failed.
+          const d = r.ok ? weighDispute(msgs.slice(retryStart), msgs.slice(start)) : null;
+          if (d?.verdict === "wrong" && !d.changed) {
+            setStep(i, { status: disputeHolds(d) ? "disputed" : "failed", note: disputeNote(missing, d) });
+            break;
+          }
+          check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
         }
         if (!check) {
           setStep(i, r.error ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}` } : { status: "pending" });
+          break;
+        }
+        if (check.unchecked) {
+          setStep(i, { status: "failed", note: check.unchecked });
+          unchecked = { i, why: check.unchecked };
           break;
         }
         setStep(i, check.done ? { status: "done" } : { status: "failed", note: check.missing });
@@ -718,6 +850,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       planRunningRef.current = false;
       setPlanRunning(false);
     }
+    // Outside the run, so its update_plan becomes a proposal (see reply()).
+    if (unchecked) await reply(uncheckedPrompt(unchecked.i, unchecked.why), msgs, { planning: true });
   };
 
   // Retries the last user message, dropping the failed reply.
@@ -747,6 +881,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       key={t.start}
       parts={t.parts}
       streaming={!!abort && i === turns.length - 1}
+      since={busySince}
+      rate={streamRate}
       toolResults={toolResults}
       forgotten={t.start < contextStart}
       showSteps={prefs?.showSteps ?? true}
@@ -964,7 +1100,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             )}
             {turns.map(
               (t, i) =>
-                // A plan step's turns show under the step instead.
+                // A plan step's turns show under the step instead, waiting
+                // dots included; the step's spinner shows progress here.
                 !t.parts[0].planStep && (
                   <Fragment key={t.start}>
                     {t.start === contextStart && contextStart > 0 && <ContextDivider />}
@@ -978,8 +1115,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               <PlanView
                 steps={plan}
                 running={planRunning || !!abort}
+                since={planRunning ? busySince : null}
+                counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
                 onRun={runPlan}
                 onChange={changePlan}
+                proposal={planProposal}
+                onProposal={answerProposal}
                 details={(id) => {
                   const own = turns.flatMap((t, i) => (t.parts[0].planStep === id ? [bubble(t, i)] : []));
                   return own.length ? own : null;
@@ -1056,6 +1197,8 @@ function MessageBubble({
   failed,
   onResend,
   resendDisabled,
+  since,
+  rate,
 }: {
   parts: ChatMessage[];
   streaming: boolean;
@@ -1072,13 +1215,25 @@ function MessageBubble({
   onResend?: () => void;
   // Disabled state for the resend button.
   resendDisabled?: boolean;
+  // While this reply streams: when the task started, for the counter beside
+  // the waiting dots, and how fast the current round is streaming.
+  since?: number | null;
+  rate?: { current: StreamRate };
 }) {
   // This message's own choice of formatted or raw text; null follows
   // Settings → Chat. Declared before the early return below, as hooks must be.
   const [override, setOverride] = useState<boolean | null>(null);
   const showMarkdown = override ?? renderMarkdown;
+  // The finished reply's time and speed, kept on its last message.
+  const took = [...parts].reverse().find((m) => m.took)?.took;
   const isUser = parts[0].role === "user";
   const last = parts[parts.length - 1];
+  // The waiting dots: shown while the reply's newest turn has nothing yet,
+  // which is from sending until the first text, thinking or tool call, and
+  // again between rounds of tool calls (each round starts a new, empty turn).
+  // Once thinking streams, the "Thinking…" panel shows instead. A plan step's
+  // turns render under the step, so during a run its dots are inside the
+  // collapsed details and the step's own spinner is what shows.
   const waiting = showSteps
     ? streaming && !last.content && !last.reasoning && !last.toolCalls?.length
     : streaming && !last.content;
@@ -1158,9 +1313,25 @@ function MessageBubble({
                 ))}
             </Fragment>
           ))}
-          {waiting && <TypingDots />}
+          {streaming && since != null ? (
+            // The counter sits beside the waiting dots, and stays on this
+            // line once text streams in and the dots go.
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: "1.5em" }}>
+              {waiting && <TypingDots />}
+              <Elapsed since={since} rate={rate} variant="caption" color="text.secondary" />
+            </Box>
+          ) : (
+            waiting && <TypingDots />
+          )}
           {!streaming && parts.some((m) => m.content) && (
-            <Box sx={{ display: "flex", justifyContent: "flex-end", mb: -1, mr: -1 }}>
+            <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 1, mb: -1, mr: -1 }}>
+              {took && (
+                <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
+                  {formatSeconds(took.ms)}
+                  {took.clientTps ? ` · ${Math.round(took.clientTps)} tps (client)` : ""}
+                  {took.serverTps ? ` · ${Math.round(took.serverTps)} tps (server)` : ""}
+                </Typography>
+              )}
               <Tooltip title={showMarkdown ? "Show raw text" : "Show formatted"}>
                 <IconButton
                   size="small"
@@ -1508,6 +1679,34 @@ function DiffView({ diff }: { diff: string }) {
         </Box>
       ))}
     </Box>
+  );
+}
+
+interface StreamRate {
+  pieces: number;
+  // performance.now() of the round's first piece; 0 until it arrives.
+  first: number;
+}
+
+// Time since `since`, in whole seconds ("42s", "1m 05s"), updated every second,
+// and with `rate`, the current round's tokens per second once it has streamed
+// for a second (so the wait before the first token doesn't count). Other
+// props go to the Typography.
+function Elapsed({ since, rate, ...rest }: { since: number; rate?: { current: StreamRate } } & TypographyProps) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const sec = Math.max(0, Math.floor((now - since) / 1000));
+  const r = rate?.current;
+  const streamedFor = r?.first ? (performance.now() - r.first) / 1000 : 0;
+  const speed = r && streamedFor >= 1 ? ` · ${Math.round(r.pieces / streamedFor)} tps (client)` : "";
+  return (
+    <Typography component="span" variant="inherit" {...rest} sx={{ fontVariantNumeric: "tabular-nums", ...rest.sx }}>
+      {sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`}
+      {speed}
+    </Typography>
   );
 }
 
