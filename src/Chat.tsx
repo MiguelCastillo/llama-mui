@@ -144,8 +144,21 @@ type Ask =
   | { needsApproval: Approval };
 type Answer = boolean | AttachmentTarget[];
 
-// Caps one reply's tool use, so a model stuck calling tools can't loop forever.
-const MAX_TOOL_ROUNDS = 10;
+// A model stuck in a loop repeats itself: the third identical call (same tool,
+// same arguments) in one reply isn't run, and the model answers with what it
+// has. MAX_TOOL_ROUNDS backs that up for loops whose arguments keep changing;
+// small models make one call per round, so it's set well above real work.
+const MAX_REPEATS = 2;
+const MAX_TOOL_ROUNDS = 50;
+
+// Same call, even if the model spaced its JSON differently.
+function callKey(call: ToolCall): string {
+  try {
+    return `${call.name} ${JSON.stringify(JSON.parse(call.arguments))}`;
+  } catch {
+    return `${call.name} ${call.arguments}`;
+  }
+}
 
 export default function Chat({ visible, onOpenSettings }: { visible: boolean; onOpenSettings: () => void }) {
   // undefined until the first load, null when no server is configured.
@@ -386,23 +399,29 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       // Indexes (in history) of the last round's tool results, which get their
       // token counts once the next turn reports what it had to read.
       let lastToolResults: number[] = [];
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      // How often each call ran in this reply, by callKey.
+      const ran = new Map<string, number>();
+      // Set once the model has to stop using tools; it gets one more turn,
+      // without them, to answer from what it has.
+      let stopReason: string | null = null;
+      for (let round = 0; ; round++) {
+        const lastTurn: boolean = stopReason !== null;
         const reply: ChatMessage = { role: "assistant", content: "", reasoning: "" };
         let thinkStart = 0;
         let thinkEnd = 0;
         let thinkPieces = 0;
         const show = () => setMessages([...forgotten, ...history, { ...reply }]);
         show();
-        const { toolCalls, usage: replyUsage } = await streamChat(
+        const { toolCalls: asked, usage: replyUsage } = await streamChat(
           {
             connectorId,
             model,
             messages:
-              toolsOn && toolContext.systemPrompt
+              toolsOn && !lastTurn && toolContext.systemPrompt
                 ? [{ role: "system", content: toolContext.systemPrompt }, ...history]
                 : history,
             think: thinkOn,
-            tools: toolsOn ? toolContext.definitions : undefined,
+            tools: toolsOn && !lastTurn ? toolContext.definitions : undefined,
           },
           (d) => {
             if (d.reasoning) {
@@ -416,6 +435,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           },
           controller.signal,
         );
+        // Calls the model writes anyway on its last turn have nothing to run them.
+        const toolCalls: ToolCall[] = lastTurn ? [] : asked;
         if (replyUsage) setUsage(replyUsage);
         if (thinkStart) reply.stats = { ms: (thinkEnd || performance.now()) - thinkStart, tokens: thinkPieces };
         if (replyUsage?.promptTokens && lastToolResults.length) {
@@ -432,13 +453,25 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         if (toolCalls.length) reply.toolCalls = toolCalls;
         history = [...history, reply];
         setMessages([...forgotten, ...history]);
-        if (!toolCalls.length) break;
+        if (!toolCalls.length) {
+          if (stopReason) setError(stopReason);
+          break;
+        }
 
         for (const call of toolCalls) {
           if (controller.signal.aborted) return;
           let started = performance.now();
           let result: string;
+          const key = callKey(call);
+          const times = ran.get(key) ?? 0;
+          ran.set(key, times + 1);
           try {
+            if (times >= MAX_REPEATS) {
+              stopReason = `Stopped: the model kept repeating ${call.name} with the same arguments.`;
+              throw new Error(
+                `this exact call already ran ${times} times in this reply; answer with what you have`,
+              );
+            }
             // A call can need the user more than once: access to a folder,
             // then approval of the change it makes there.
             let outcome = await runTool(call, { attachments: attached });
@@ -506,7 +539,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           ];
           setMessages([...forgotten, ...history]);
         }
-        if (round === MAX_TOOL_ROUNDS - 1) setError(`Stopped after ${MAX_TOOL_ROUNDS} rounds of tool calls.`);
+        if (round === MAX_TOOL_ROUNDS - 1) stopReason ??= `Stopped after ${MAX_TOOL_ROUNDS} rounds of tool calls.`;
       }
     } catch (e) {
       if (!controller.signal.aborted) setError(String(e));
