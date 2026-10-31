@@ -57,8 +57,13 @@ replace all of it) and `edit_file` (replace exact text in a file). They work
 in what's attached, under the same rules as the disk tools, and nothing is
 written until you approve it: the reply pauses on the change as a diff, with
 Approve / Deny. The server writes only if the change is still exactly the
-diff you approved; if the file changed in between, you're asked again. Files
-can't be deleted, and `settings.json` can't be written.
+diff you approved; if the file changed in between, you're asked again. An
+existing file can only be changed once the model has read it in this chat,
+and only if it hasn't changed since, so the model can't overwrite changes it
+never saw; it's told to read the file again. The server keeps track of these
+reads in memory, so after a dev server restart the model reads files again
+before changing them. Files can't be deleted, and `settings.json` can't be
+written.
 
 The **Terminal** group (`server/terminal.ts`) has `run_command`, which runs a
 shell command the model suggests, in an attached folder (or one you allow).

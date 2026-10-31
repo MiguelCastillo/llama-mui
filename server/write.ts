@@ -2,12 +2,14 @@
 // Nothing is written until the user approves the exact change: the first call
 // throws ApprovalNeeded with a diff, and chat runs the call again once the
 // user allows it. If the file changed in between, the diff no longer matches
-// and the user is asked again.
+// and the user is asked again. An existing file can only be changed after the
+// model has read it, and only if it hasn't changed since (see reads.ts).
 
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { isInside, isSettingsFile, looksBinary, needAccess, toAbsolute } from "./disk.ts";
+import { markRead, requireRead } from "./reads.ts";
 import { type Approval, type ToolContext, ToolError, type ToolSpec, fn, requireApproval } from "./toolkit.ts";
 
 const MAX_WRITE_BYTES = 1024 * 1024;
@@ -69,6 +71,8 @@ async function commit(ctx: ToolContext, file: string, before: string | null, aft
   requireApproval(ctx, { type: "change", path: file, action, diff: hunks(file, before ?? "", after) });
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, after);
+  // The model wrote it, so it knows what's there; its next edit can follow.
+  markRead(ctx.chatId, file, after);
 }
 
 const writeTextFile: ToolSpec = {
@@ -79,6 +83,7 @@ const writeTextFile: ToolSpec = {
   definition: fn(
     "write_file",
     "Create a text file, or replace all of an existing file's content. Missing folders are created. " +
+      "To replace an existing file, read it with read_file first. " +
       "The user sees the change and approves it before it's written. To change part of a file, use edit_file.",
     {
       type: "object",
@@ -93,6 +98,7 @@ const writeTextFile: ToolSpec = {
     if (typeof args.content !== "string") throw new ToolError("content is required");
     const file = await resolveWritable(ctx.attachments, args.path);
     const before = await readText(file);
+    if (before !== null) requireRead(ctx.chatId, file, before);
     await commit(ctx, file, before, args.content, before === null ? "create" : "overwrite");
     const lines = countLines(args.content);
     return `${before === null ? "Created" : "Replaced"} ${file} (${lines} line${lines === 1 ? "" : "s"})`;
@@ -108,6 +114,7 @@ const editTextFile: ToolSpec = {
     "edit_file",
     "Replace text in an existing file. old_text must match the file exactly, including spaces and line breaks, " +
       "and appear only once unless replace_all is true; include nearby lines to make it unique. " +
+      "Read the file with read_file first. " +
       "The user sees the change and approves it before it's written.",
     {
       type: "object",
@@ -126,6 +133,7 @@ const editTextFile: ToolSpec = {
     const file = await resolveWritable(ctx.attachments, args.path);
     const before = await readText(file);
     if (before === null) throw new ToolError(`${file} does not exist; use write_file to create it`);
+    requireRead(ctx.chatId, file, before);
     const count = before.split(oldText).length - 1;
     if (count === 0) throw new ToolError(`old_text isn't in ${file}; read the file again and copy the text exactly`);
     if (count > 1 && !args.replace_all) {

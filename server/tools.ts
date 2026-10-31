@@ -97,6 +97,7 @@ function toolsSystemPrompt(ctx: ToolContext): string | null {
 
 const contextFor = async (body: any): Promise<ToolContext> => ({
   store: await load(),
+  chatId: String(body.chatId ?? ""),
   attachments: await checkAttachments(body.attachments),
   // Re-serialized here so the comparison in requireApproval doesn't depend on
   // how the client formatted its JSON.

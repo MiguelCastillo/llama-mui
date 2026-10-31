@@ -216,6 +216,8 @@ export type ToolOutcome =
   | { needsApproval: Approval };
 
 export interface ToolCallContext {
+  // The chat the call is for; the server tracks which files it has read.
+  chatId: string;
   attachments: string[];
   // What the user allowed; the server goes ahead only if the call would
   // still do exactly that.

@@ -149,6 +149,7 @@ type Answer = boolean | AttachmentTarget[];
 // has. MAX_TOOL_ROUNDS backs that up for loops whose arguments keep changing;
 // small models make one call per round, so it's set well above real work.
 const MAX_REPEATS = 2;
+const CHANGES_DISK = new Set(["write_file", "edit_file", "run_command"]);
 const MAX_TOOL_ROUNDS = 50;
 
 // Same call, even if the model spaced its JSON differently.
@@ -399,7 +400,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       // Indexes (in history) of the last round's tool results, which get their
       // token counts once the next turn reports what it had to read.
       let lastToolResults: number[] = [];
-      // How often each call ran in this reply, by callKey.
+      // How often each call ran in this reply, by callKey, since the last
+      // change to disk: after one, the same read or search can find something
+      // new, so repeating it isn't a loop.
       const ran = new Map<string, number>();
       // Set once the model has to stop using tools; it gets one more turn,
       // without them, to answer from what it has.
@@ -474,7 +477,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             }
             // A call can need the user more than once: access to a folder,
             // then approval of the change it makes there.
-            let outcome = await runTool(call, { attachments: attached });
+            let outcome = await runTool(call, { chatId: sessionId, attachments: attached });
             while (!("result" in outcome)) {
               const answer = await askUser(outcome, controller.signal);
               if (controller.signal.aborted) return;
@@ -512,7 +515,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 }
                 attached = [...attached, target.path];
                 attach({ path: target.path, kind: target.kind, source: "request" });
-                outcome = await runTool(call, { attachments: attached });
+                outcome = await runTool(call, { chatId: sessionId, attachments: attached });
               } else {
                 const approval = outcome.needsApproval;
                 if (!answer) {
@@ -525,13 +528,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   break;
                 }
                 // The server asks again if, say, the file changed since the preview.
-                outcome = await runTool(call, { attachments: attached, approved: approval });
+                outcome = await runTool(call, { chatId: sessionId, attachments: attached, approved: approval });
               }
             }
             result = outcome.result;
           } catch (e: any) {
             result = `Error: ${e.message}`;
           }
+          if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) ran.clear();
           lastToolResults.push(history.length);
           history = [
             ...history,

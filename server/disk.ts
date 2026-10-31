@@ -14,6 +14,7 @@ import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
+import { markRead } from "./reads.ts";
 import { SETTINGS_FILE } from "./store.ts";
 import { AccessNeeded, type AttachmentTarget, LocateNeeded, ToolError, type ToolSpec, fn } from "./toolkit.ts";
 
@@ -198,7 +199,7 @@ const readTextFile: ToolSpec = {
       required: ["path"],
     },
   ),
-  async run({ attachments }, args) {
+  async run({ attachments, chatId }, args) {
     const file = await resolveAllowed(attachments, args.path);
     const s = await stat(file);
     if (s.isDirectory()) throw new ToolError(`${file} is a directory; use list_directory`);
@@ -206,7 +207,9 @@ const readTextFile: ToolSpec = {
     const buf = await readFile(file);
     if (looksBinary(buf)) throw new ToolError(`${file} is a binary file (${formatSize(s.size)})`);
 
-    const lines = buf.toString("utf8").split("\n");
+    const text = buf.toString("utf8");
+    markRead(chatId, file, text);
+    const lines = text.split("\n");
     const start = Math.max(1, Math.floor(Number(args.start_line) || 1));
     const count = Math.max(1, Math.floor(Number(args.max_lines) || DEFAULT_READ_LINES));
     const end = Math.min(lines.length, start + count - 1);

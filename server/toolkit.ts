@@ -3,11 +3,12 @@
 
 import type { Store } from "./store.ts";
 
-// What a tool call runs with: the saved settings, the files and folders
-// attached to the chat it came from (already resolved and checked), and the
+// What a tool call runs with: the saved settings, the chat it came from and
+// the files and folders attached to it (already resolved and checked), and the
 // approval the user gave for this call, serialized, if any (see ApprovalNeeded).
 export interface ToolContext {
   store: Store;
+  chatId: string;
   attachments: string[];
   approved: string | null;
 }
