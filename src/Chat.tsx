@@ -735,12 +735,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             )}
           </IconButton>
         </Tooltip>
-        <Tooltip title={(narrow ? drawerOpen : sessionsOpen) ? "Hide chats" : "Show chats"}>
-          <IconButton onClick={() => (narrow ? setDrawerOpen(!drawerOpen) : setSessionsOpen(!sessionsOpen))}>
-            <ViewSidebarOutlinedIcon />
-          </IconButton>
-        </Tooltip>
-        {/* New chat lives in the Chats panel; here only while that's hidden. */}
+        {/* New chat lives in the Chats panel; here only while that's hidden.
+            It comes first so the Chats toggle and Settings never move. */}
         {!(narrow ? drawerOpen : sessionsOpen) && (
           <Tooltip title="New chat">
             <span>
@@ -750,6 +746,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             </span>
           </Tooltip>
         )}
+        <Tooltip title={(narrow ? drawerOpen : sessionsOpen) ? "Hide chats" : "Show chats"}>
+          <IconButton onClick={() => (narrow ? setDrawerOpen(!drawerOpen) : setSessionsOpen(!sessionsOpen))}>
+            <ViewSidebarOutlinedIcon />
+          </IconButton>
+        </Tooltip>
         <Tooltip title="Settings">
           <IconButton onClick={onOpenSettings}>
             <SettingsOutlinedIcon />
