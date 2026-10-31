@@ -33,6 +33,11 @@ reach and switched on or off one by one (`server/tools.ts`). With the
 That switch starts off, and your browser remembers where you leave it. Tool
 calls and their results show in the reply.
 
+**Models** lets you manage the models on the selected llama server. It shows
+the models in the server's cache with their status (loaded/unloaded), and you
+can load, unload, or delete them. It also lets you search Hugging Face for GGUF
+models and download them directly to the server.
+
 The **Plan** group (`server/plan.ts`) has `update_plan`, which the model
 uses to write down the steps of a task that changes files. Chat runs those
 steps one at a time and checks each one; see [How plans work](#how-plans-work).
@@ -219,3 +224,21 @@ step that was running when the page closed comes back as pending.
   small models like Qwen 9B rarely call tools, so switching **Tools** on with
   Think off asks whether to turn Think on, and **Settings → Tools** warns
   about models that have it off.
+
+## Models management
+
+**Settings → Models** shows the models currently on the selected llama server.
+Each model row displays:
+- The model id and its status (loaded/unloaded)
+- Context size in tokens
+- A **Think** switch to enable reasoning mode for that model
+- **Load** / **Unload** buttons to load or unload models
+- A trash icon to delete models from the server's cache (with confirmation)
+
+You can also **Search Hugging Face** for GGUF models:
+1. Enter a model name (e.g., "llama-2", "mistral", "qwen") in the search box
+2. Click **Search** to find matching GGUF models from Hugging Face
+3. Select a model from the results to download it to the server
+4. The downloaded model appears in the model list and can be loaded/unloaded
+
+The search uses Hugging Face's API to find GGUF models sorted by downloads.

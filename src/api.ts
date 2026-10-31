@@ -11,8 +11,41 @@ export interface Model {
   inputs: string[];
   // Tokens the server gives this model's context, when it says.
   contextSize?: number;
+  // From server /models: whether it can be removed from cache
+  canRemove?: boolean;
+  // Source of the model (e.g., "hf://user/repo")
+  source?: string;
+  // Sidecar files (e.g., ["mmproj"])
+  sidecars?: string[];
+  // File size in bytes
+  size?: number;
 }
 
+export interface SearchResult {
+  id: string;
+  author: string;
+  license: string | null;
+  tags: string[];
+  likes?: number;
+  downloads?: number;
+  // GGUF-specific fields
+  model?: string;
+  fileFormat?: string;
+  quantizationLevel?: string;
+  parameters?: string;
+  // For download
+  filename?: string;
+  url?: string;
+}
+
+export interface SseEvent {
+  event: string;
+  data: string;
+}
+
+// llama.cpp starts each model with --ctx-size, which can be smaller than what
+// the model supports (context_length). A loaded model reports the real value
+// as meta.n_ctx; for unloaded ones, the start-up args are the best guess.
 // llama.cpp starts each model with --ctx-size, which can be smaller than what
 // the model supports (context_length). A loaded model reports the real value
 // as meta.n_ctx; for unloaded ones, the start-up args are the best guess.
@@ -104,6 +137,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 
 export const getConnectors = () => call<ConnectorList>("GET", "/api/connectors");
+export const getActiveConnectorId = () => call<{ activeId: string | null }>("GET", "/api/connectors").then((r) => r.activeId);
 export const createConnector = (input: ConnectorInput) => call<Connector>("POST", "/api/connectors", input);
 export const updateConnector = (id: string, input: ConnectorInput) => call<Connector>("PUT", `/api/connectors/${id}`, input);
 export const deleteConnector = (id: string) => call<{ activeId: string | null }>("DELETE", `/api/connectors/${id}`);
@@ -118,7 +152,77 @@ export async function listModels(connectorId: string): Promise<Model[]> {
     status: m.status?.value ?? "unknown",
     inputs: m.architecture?.input_modalities ?? [],
     contextSize: contextSize(m),
+    canRemove: m.status?.can_remove,
+    source: m.status?.source,
+    sidecars: m.status?.sidecars,
+    size: m.size_in_bytes,
   }));
+}
+
+// Model management endpoints (per-connector, at /api/c/<id>/models)
+export function listModelsAdmin(connectorId: string): Promise<Model[]> {
+  return call<{ data: any[] }>("GET", `/api/c/${connectorId}/models`).then((r) =>
+    r.data.map((m) => ({
+      id: m.id,
+      status: m.status?.value ?? "unknown",
+      inputs: m.architecture?.input_modalities ?? [],
+      contextSize: contextSize(m),
+      canRemove: m.status?.can_remove,
+      source: m.status?.source,
+      sidecars: m.status?.sidecars,
+      size: m.size_in_bytes,
+    })),
+  );
+}
+
+export function downloadModel(connectorId: string, model: string, sidecars?: string[]): Promise<void> {
+  return call<void>("POST", `/api/c/${connectorId}/models`, { model, sidecars });
+}
+
+// SSE endpoint - returns a ReadableStream for streaming progress events
+export function getDownloadProgressStream(connectorId: string): ReadableStream {
+  const evtSource = new EventSource(`/api/c/${connectorId}/models/sse`);
+  const textEncoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      evtSource.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.event === "download_progress") {
+            controller.enqueue(textEncoder.encode(JSON.stringify({ progress: data.data.progress ?? "0%" })));
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      };
+      evtSource.onerror = () => {
+        controller.close();
+        evtSource.close();
+      };
+      // End the stream when the server closes the connection
+      evtSource.addEventListener("end", () => controller.close());
+    },
+  });
+}
+
+export function loadModel(connectorId: string, model: string): Promise<void> {
+  return call<void>("POST", `/api/c/${connectorId}/models/load`, { model });
+}
+
+export function unloadModel(connectorId: string, model: string): Promise<void> {
+  return call<void>("POST", `/api/c/${connectorId}/models/unload`, { model });
+}
+
+export function deleteModel(connectorId: string, model: string): Promise<void> {
+  return call<void>("DELETE", `/api/c/${connectorId}/models?model=${encodeURIComponent(model)}`);
+}
+
+// Search Hugging Face for GGUF models (per-connector endpoint)
+export function searchModels(query: string): Promise<SearchResult[]> {
+  return getActiveConnectorId().then((activeId) => {
+    if (!activeId) throw new Error("No active connector");
+    return call<any[]>("GET", `/api/c/${activeId}/models/search?q=${encodeURIComponent(query)}`).then((r) => r);
+  });
 }
 
 // Per-model options, keyed by model id. Models nobody changed use defaults.

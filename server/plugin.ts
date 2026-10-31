@@ -10,9 +10,11 @@ import { HttpError, type Route, sendJson } from "./http.ts";
 import { modelSettingRoutes } from "./models.ts";
 import { preferenceRoutes } from "./preferences.ts";
 import { toolRoutes } from "./tools.ts";
+import { modelAdminRoutes } from "./modelAdmin.ts";
 
 async function route(r: Route) {
   if (await connectorRoutes(r)) return;
+  if (await modelAdminRoutes(r)) return;
   if (await toolRoutes(r)) return;
   if (await attachmentRoutes(r)) return;
   if (await preferenceRoutes(r)) return;
