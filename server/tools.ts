@@ -13,6 +13,7 @@ import {
   ToolError,
   type ToolSpec,
 } from "./toolkit.ts";
+import { FETCH_TOOLS } from "./fetch.ts";
 import { TERMINAL_TOOLS } from "./terminal.ts";
 import { WEB_TOOLS } from "./web.ts";
 import { WRITE_TOOLS } from "./write.ts";
@@ -31,7 +32,7 @@ const GROUPS: Group[] = [
     id: "disk",
     label: "Disk",
     description:
-      "Read-only access to the files and folders attached to a chat (the paperclip next to the message box). " +
+      "Read-only access to the files and folders attached to a chat (Chat settings, next to the message box). " +
       "When the model asks for anything else, you're asked to allow it first. Nothing here can change, delete or run files.",
     instructions: (ctx) =>
       (ctx.attachments.length
@@ -67,14 +68,16 @@ const GROUPS: Group[] = [
     id: "web",
     label: "Web",
     description:
-      "Search the web through DuckDuckGo. The model's search queries leave this machine and go to DuckDuckGo.",
+      "Search the web through DuckDuckGo, and open web pages. Search queries go to DuckDuckGo; pages are fetched " +
+      "from this machine, so they can include ones on your network.",
     instructions: () =>
-      "You can search the web with web_search. Use it for current events, recent releases and facts you aren't " +
-      "sure of, and always when the user asks you to search; don't answer those from memory. Cite the URLs you used.",
+      "You can search the web with web_search and read a page with fetch_url. Use them for current events, recent " +
+      "releases and facts you aren't sure of, and always when the user asks you to search; don't answer those " +
+      "from memory. Search first, then open the most relevant results to read them. Cite the URLs you used.",
   },
 ];
 
-const TOOLS: ToolSpec[] = [...DISK_TOOLS, ...WRITE_TOOLS, ...TERMINAL_TOOLS, ...WEB_TOOLS];
+const TOOLS: ToolSpec[] = [...DISK_TOOLS, ...WRITE_TOOLS, ...TERMINAL_TOOLS, ...WEB_TOOLS, ...FETCH_TOOLS];
 
 const isOffered = (ctx: ToolContext, t: ToolSpec) => !ctx.store.disabledTools.includes(t.name);
 
@@ -88,12 +91,12 @@ function toolsSystemPrompt(ctx: ToolContext): string | null {
   ].join("\n\n");
 }
 
-const contextFor = async (rawAttachments: unknown, approved: unknown = null): Promise<ToolContext> => ({
+const contextFor = async (body: any): Promise<ToolContext> => ({
   store: await load(),
-  attachments: await checkAttachments(rawAttachments),
+  attachments: await checkAttachments(body.attachments),
   // Re-serialized here so the comparison in requireApproval doesn't depend on
   // how the client formatted its JSON.
-  approved: approved && typeof approved === "object" ? JSON.stringify(approved) : null,
+  approved: body.approved && typeof body.approved === "object" ? JSON.stringify(body.approved) : null,
 });
 
 // Text for the model (errors included), a path the user must allow before
@@ -147,7 +150,7 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
 
   // For chat: what to send the model given this chat's attachments.
   if (parts[1] === "context" && method === "POST") {
-    const ctx = await contextFor((await readJson(req)).attachments);
+    const ctx = await contextFor(await readJson(req));
     sendJson(res, 200, {
       definitions: TOOLS.filter((t) => isOffered(ctx, t)).map((t) => t.definition),
       systemPrompt: toolsSystemPrompt(ctx),
@@ -157,7 +160,7 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
 
   if (parts[1] === "call" && method === "POST") {
     const body = await readJson(req);
-    sendJson(res, 200, await runTool(String(body.name), body.arguments, await contextFor(body.attachments, body.approved)));
+    sendJson(res, 200, await runTool(String(body.name), body.arguments, await contextFor(body)));
     return true;
   }
 

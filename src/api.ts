@@ -200,10 +200,15 @@ export type Approval =
 // Text for the model, a path outside the attachments that the user must allow
 // before the call can run, or something the user must approve.
 export type ToolOutcome = { result: string } | { needsAccess: AttachmentTarget } | { needsApproval: Approval };
-// `approved` is what the user allowed; the server goes ahead only if the call
-// would still do exactly that.
-export const runTool = (c: ToolCall, attachments: string[], approved?: Approval) =>
-  call<ToolOutcome>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments, attachments, approved });
+
+export interface ToolCallContext {
+  attachments: string[];
+  // What the user allowed; the server goes ahead only if the call would
+  // still do exactly that.
+  approved?: Approval;
+}
+export const runTool = (c: ToolCall, context: ToolCallContext) =>
+  call<ToolOutcome>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments, ...context });
 
 export interface Usage {
   // Everything now in the model's context: prompt, tools, history and reply.

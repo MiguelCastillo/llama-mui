@@ -19,7 +19,26 @@ async function route(r: Route) {
   throw new HttpError(404, "Not found");
 }
 
+// Any page open in the browser can send requests to localhost, and a "simple"
+// cross-site POST (text/plain, no preflight) reaches the handler even though
+// the browser hides the response. Without this check, any website could run
+// tools, and so commands, by sending its own approval. Browsers mark such
+// requests with Sec-Fetch-Site and Origin; curl and other local programs send
+// neither and are let through, since they can already act as the user.
+function isCrossSite(req: Connect.IncomingMessage): boolean {
+  const site = req.headers["sec-fetch-site"];
+  if (site && site !== "same-origin" && site !== "none") return true;
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  try {
+    return new URL(origin).host !== req.headers.host;
+  } catch {
+    return true;
+  }
+}
+
 const handler: Connect.NextHandleFunction = (req, res) => {
+  if (isCrossSite(req)) return sendJson(res, 403, { error: "Cross-site requests aren't allowed" });
   // Mounted at /api, so req.url is relative to it.
   const url = new URL(req.url ?? "/", "http://x");
   const r: Route = {

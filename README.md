@@ -15,7 +15,10 @@ Then add a server under **Settings → Connectors** (the gear icon).
 
 Settings are saved in `settings.json` (git ignored, readable only by you) and
 served by a Vite plugin (`server/plugin.ts`) that runs under both
-`npm run dev` and `npm run preview`.
+`npm run dev` and `npm run preview`. It refuses requests from other websites
+(by their `Origin` and `Sec-Fetch-Site` headers): any page open in your browser
+can send requests to localhost, and without that check one could run the
+model's tools, commands included, on its own.
 
 **Connectors** are llama.cpp servers: a URL, an optional API key and a name.
 Chat uses the selected one. The plugin proxies chat requests at
@@ -30,7 +33,7 @@ Tool calls and their results show in the reply.
 The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 `read_file`, `find_files` (names, with `*` wildcards) and `grep` (regular
 expressions over file contents). They read only what's attached to the chat.
-The paperclip next to the message box opens the chat's attachments, each
+**Chat settings** (the sliders icon next to the message box) lists the chat's attachments, each
 marked with whether you added it or the model asked for it, and a field to
 attach more; a new chat starts with nothing attached. When the model asks for
 a path that isn't attached, the reply pauses on an Allow / Deny prompt;
@@ -59,8 +62,14 @@ are stopped after 2 minutes; the output and exit code go back to the model.
 The **Web** group (`server/web.ts`) has `web_search`, which sends the model's
 query to DuckDuckGo and returns titles, links and snippets. DuckDuckGo has no
 official API, so it reads the plain-HTML results page; if that page changes,
-`parseResults` is the place to fix. Each group adds a few lines to the system
-prompt while its tools are on.
+`parseResults` is the place to fix.
+
+It also has `fetch_url` (`server/fetch.ts`), which opens a page and returns its
+text, with HTML turned into plain text, 20,000 characters at a time. Pages are
+fetched from this machine, so the model can reach anything it can, including
+your local network.
+
+Each group adds a few lines to the system prompt while its tools are on.
 
 ## Features
 
