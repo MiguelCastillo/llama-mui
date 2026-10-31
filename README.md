@@ -222,6 +222,20 @@ steps struck out, and **Use this plan** or **Keep the plan**; the model is
 told it only proposed. This came from asking the model about a failed step:
 it "proposed" a fix by sending only that step, which deleted the other 7.
 
+### Step times
+
+A finished step (done, not done or disputed) shows how long it took in small
+print under it, and **Total** at the bottom of the plan card adds them up.
+
+- A step's time runs from its "Do step" message until its check finishes: the
+  reply, the check, and any retry and second check. It's wall-clock time, so
+  waiting on an approval prompt counts too.
+- Running or rerunning a step clears its time until it finishes again, and
+  editing a step's text clears it.
+- The times are saved with the plan, so they're there after a reload.
+- They read like reply times: "2.8s" under 10 seconds, "42s" under a minute,
+  then "1m 05s".
+
 ### Rerunning and editing
 
 - **Rerun** a done or not-done step to run it again on the files as they are

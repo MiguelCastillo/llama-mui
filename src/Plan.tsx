@@ -309,6 +309,7 @@ export function PlanView({
   counter,
   proposal,
   onProposal,
+  formatTime,
 }: {
   steps: PlanStep[];
   running: boolean;
@@ -322,6 +323,8 @@ export function PlanView({
   // A change the model suggested (see Chat.tsx), and the user's answer to it.
   proposal?: PlanStep[] | null;
   onProposal?: (accept: boolean) => void;
+  // Formats a step's time like chat's reply times; passed in, like `counter`.
+  formatTime: (ms: number) => string;
 }) {
   const [editing, setEditing] = useState<{ i: number; text: string } | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -401,6 +404,12 @@ export function PlanView({
                       {i + 1}. {s.text}
                     </Typography>
                   )}
+                  {/* Only a finished step has a time: running or rerunning it clears it. */}
+                  {s.ms != null && (
+                    <Typography variant="caption" color="text.secondary" component="div">
+                      {formatTime(s.ms)}
+                    </Typography>
+                  )}
                   {s.status === "failed" && s.note && (
                     <Typography variant="caption" color="error.main" component="div">
                       Not done: {s.note}
@@ -471,6 +480,11 @@ export function PlanView({
           );
         })}
       </Stack>
+      {steps.some((s) => s.ms != null) && (
+        <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 1, textAlign: "right" }}>
+          Total {formatTime(steps.reduce((sum, s) => sum + (s.ms ?? 0), 0))}
+        </Typography>
+      )}
       {proposal && onProposal && <ProposalView steps={steps} proposal={proposal} onAnswer={onProposal} />}
     </Paper>
   );

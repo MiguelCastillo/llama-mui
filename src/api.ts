@@ -374,6 +374,9 @@ export interface PlanStep {
   note?: string;
   // An earlier step was rerun after this one was done, so it may be out of date.
   stale?: boolean;
+  // How long the step took, from its "Do step" message until its check finished,
+  // the retry included. Rerunning a step replaces its time.
+  ms?: number;
 }
 
 // One row in the sessions panel.

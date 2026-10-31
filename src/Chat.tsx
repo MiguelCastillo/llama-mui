@@ -815,7 +815,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         if (!steps || i < 0 || steps[i].status === "disputed") break;
         const { id, text } = steps[i];
         setStep(i, { status: "running" });
+        // `start` is the step's first message, for slicing out its turns;
+        // `startedAt` is when it began, for its time.
         const start = msgs.length;
+        const startedAt = performance.now();
+        const took = () => performance.now() - startedAt;
         let r = await reply(stepPrompt(steps, i), msgs, { planStep: id });
         msgs = r.messages;
         let check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
@@ -829,7 +833,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           // evidence makes it disputed; a bare claim leaves it failed.
           const d = r.ok ? weighDispute(msgs.slice(retryStart), msgs.slice(start)) : null;
           if (d?.verdict === "wrong" && !d.changed) {
-            setStep(i, { status: disputeHolds(d) ? "disputed" : "failed", note: disputeNote(missing, d) });
+            setStep(i, { status: disputeHolds(d) ? "disputed" : "failed", note: disputeNote(missing, d), ms: took() });
             break;
           }
           check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
@@ -839,11 +843,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           break;
         }
         if (check.unchecked) {
-          setStep(i, { status: "failed", note: check.unchecked });
+          setStep(i, { status: "failed", note: check.unchecked, ms: took() });
           unchecked = { i, why: check.unchecked };
           break;
         }
-        setStep(i, check.done ? { status: "done" } : { status: "failed", note: check.missing });
+        setStep(i, check.done ? { status: "done", ms: took() } : { status: "failed", note: check.missing, ms: took() });
         if (!check.done) break;
       }
     } finally {
@@ -1125,6 +1129,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   const own = turns.flatMap((t, i) => (t.parts[0].planStep === id ? [bubble(t, i)] : []));
                   return own.length ? own : null;
                 }}
+                formatTime={formatSeconds}
               />
             )}
             {pending && <PendingPrompt ask={pending.ask} onDecide={pending.decide} />}
