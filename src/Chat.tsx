@@ -739,7 +739,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
       {/* Top padding keeps the first messages clear of the toolbar. */}
       <Box sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3 }}>
-        <Container maxWidth="md">
+        <Container maxWidth={false}>
           <Stack spacing={2}>
             {connector === null ? (
               <Stack spacing={2} sx={{ alignItems: "center", mt: 8 }}>
@@ -778,7 +778,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       </Box>
 
       <Paper square elevation={3} sx={{ py: 2 }}>
-        <Container maxWidth="md">
+        <Container maxWidth={false}>
           <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
             <ChatSettings
               attachments={attachments}
@@ -863,7 +863,9 @@ function MessageBubble({
         sx={{
           px: 2,
           py: 1.5,
-          maxWidth: "85%",
+          // Your messages span the chat; replies grow with their text.
+          width: isUser ? "100%" : undefined,
+          maxWidth: "100%",
           bgcolor: isUser ? "primary.main" : "background.paper",
           color: isUser ? "primary.contrastText" : "text.primary",
         }}
