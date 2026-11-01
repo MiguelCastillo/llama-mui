@@ -417,8 +417,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     loadSession(id);
   };
   const newChat = () => openSession(crypto.randomUUID());
-  const removeSession = (id: string) => {
-    if (!window.confirm("Delete this chat? This can't be undone.")) return;
+  // Deleting asks first, in a Dialog: window.confirm is answered "no" at once,
+  // without being shown, in some browsers (the Claude app's browser pane).
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const removeSession = (id: string) => setConfirmDelete(id);
+  const deleteConfirmed = () => {
+    const id = confirmDelete;
+    setConfirmDelete(null);
+    if (!id) return;
     deleteSession(id)
       .then(() => {
         setSessions((ss) => ss.filter((x) => x.id !== id));
@@ -1117,6 +1123,22 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           </IconButton>
         </Tooltip>
       </Paper>
+
+      <Dialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} maxWidth="xs">
+        <DialogTitle>Delete this chat?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            “{sessions.find((s) => s.id === confirmDelete)?.title ?? "This chat"}” and its messages will be deleted.
+            This can't be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={deleteConfirmed}>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={offerThink} onClose={() => setOfferThink(false)} maxWidth="xs">
         <DialogTitle>Turn on Think?</DialogTitle>
