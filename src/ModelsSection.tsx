@@ -26,7 +26,8 @@ import {
 } from "@mui/material";
 import SearchOutlinedIcon from "@mui/icons-material/SearchOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
-import { PlayCircleOutlined, StopCircleOutlined } from "@mui/icons-material";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import StopIcon from "@mui/icons-material/Stop";
 import {
   type Connector,
   type Model,
@@ -210,6 +211,45 @@ export default function ModelsSection() {
                     // server doesn't say until it's loaded (see contextSize).
                     secondary={m.contextSize ? `${m.contextSize.toLocaleString()}-token context` : "Context n/a"}
                   />
+                  {/* Delete, then Load / Unload, then Think. Grey like the app's other
+                      action icons (color means a state, like the "loaded" chip).
+                      A row without Delete keeps its space, so play/stop line up. */}
+                  <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0 }}>
+                    {/* The server can only delete downloaded models, and not while loaded. */}
+                    {m.canRemove && m.status !== "loaded" ? (
+                      <Tooltip title="Delete model">
+                        <IconButton
+                          size="small"
+                          onClick={() => setDeleting(m.id)}
+                          aria-label={`Delete ${m.id}`}
+                        >
+                          <DeleteOutlinedIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    ) : (
+                      <Box sx={{ width: 34 }} />
+                    )}
+                    {/* The span keeps the tooltip working while the button is disabled. */}
+                    {loading[m.id] ? (
+                      <Box sx={{ width: 34, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <CircularProgress size={16} />
+                      </Box>
+                    ) : m.status === "loaded" ? (
+                      <Tooltip title="Unload model">
+                        <IconButton size="small" onClick={() => setLoaded(m.id, false)} aria-label={`Unload ${m.id}`}>
+                          <StopIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    ) : m.status === "unloaded" ? (
+                      <Tooltip title="Load model">
+                        <IconButton size="small" onClick={() => setLoaded(m.id, true)} aria-label={`Load ${m.id}`}>
+                          <PlayArrowIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    ) : (
+                      <Box sx={{ width: 34 }} />
+                    )}
+                  </Stack>
                   {/* Short label so it stays on the model's line; the note below explains it. */}
                   <Tooltip title="Think before answering">
                     <FormControlLabel
@@ -222,49 +262,9 @@ export default function ModelsSection() {
                           slotProps={{ input: { "aria-label": `Think before answering with ${m.id}` } }}
                         />
                       }
-                      sx={{ ml: "auto", mr: 0, flexShrink: 0 }}
+                      sx={{ mr: 0, flexShrink: 0 }}
                     />
                   </Tooltip>
-                  {/* Load/Unload buttons */}
-                  <Stack direction="row" spacing={0.5} sx={{ ml: 1, flexShrink: 0 }}>
-                    {m.status === "unloaded" && (
-                      <Tooltip title="Load model">
-                        <Button
-                          size="small"
-                          variant="contained"
-                          color="primary"
-                          onClick={() => setLoaded(m.id, true)}
-                          disabled={loading[m.id]}
-                          startIcon={<PlayCircleOutlined />}
-                        >
-                          Load
-                        </Button>
-                      </Tooltip>
-                    )}
-                    {m.status === "loaded" && (
-                      <Tooltip title="Unload model">
-                        <Button
-                          size="small"
-                          variant="contained"
-                          color="error"
-                          onClick={() => setLoaded(m.id, false)}
-                          disabled={loading[m.id]}
-                          startIcon={<StopCircleOutlined />}
-                        >
-                          Unload
-                        </Button>
-                      </Tooltip>
-                    )}
-                  </Stack>
-                  {/* Delete button with MUI Dialog */}
-                  {/* The server can only delete downloaded models, and not while loaded. */}
-                  {m.canRemove && m.status !== "loaded" && (
-                    <Tooltip title="Delete model">
-                      <IconButton onClick={() => setDeleting(m.id)}>
-                        <DeleteOutlinedIcon />
-                      </IconButton>
-                    </Tooltip>
-                  )}
                 </ListItem>
               ))}
 
