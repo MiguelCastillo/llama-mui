@@ -36,6 +36,7 @@ import AddCommentIcon from "@mui/icons-material/AddComment";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
@@ -50,6 +51,7 @@ import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import { keyframes } from "@mui/material/styles";
 import {
   type ChatMessage,
@@ -74,6 +76,8 @@ import {
   getPreferences,
   getToolContext,
   listModels,
+  loadModel,
+  unloadModel,
   pickAttachments,
   deleteSession,
   getSession,
@@ -180,6 +184,10 @@ type Answer = boolean | AttachmentTarget[];
 const MAX_REPEATS = 2;
 const CHANGES_DISK = new Set(["write_file", "edit_file", "run_command"]);
 const MAX_TOOL_ROUNDS = 50;
+
+// The model menu's "Manage models" item: its value opens Settings → Models
+// instead of picking a model.
+const MANAGE_MODELS = "__manage_models__";
 
 // Same call, even if the model spaced its JSON differently.
 function callKey(call: ToolCall): string {
@@ -434,6 +442,59 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .catch((e) => setError(e.message));
   };
 
+  // A llama server in router mode loads a model on demand when a request names
+  // it: opening an old chat and sending once loaded the 27B next to the 9B, and
+  // both slowed to 5 tok/s. So nothing is sent to a model that isn't loaded;
+  // loading is an explicit action, in the model menu or on the Models page.
+  // `notLoaded` is the model the note under the chat is about.
+  const [notLoaded, setNotLoaded] = useState<string | null>(null);
+  // Asks the server, fresh, whether the model is loaded. A server that doesn't
+  // report status (no router mode) has nothing to load, and one that can't be
+  // asked is left to fail the request with its own error.
+  const modelLoaded = async (): Promise<boolean> => {
+    if (!connector || !model) return false;
+    let status: string | undefined;
+    try {
+      const ms = await listModels(connector.id);
+      setModels(ms);
+      status = ms.find((m) => m.id === model)?.status;
+    } catch {
+      return true;
+    }
+    if (!status || status === "unknown" || status === "loaded") return true;
+    setNotLoaded(model);
+    return false;
+  };
+  // The model menu's load and unload, like the Models page's (deleting is only
+  // there). `modelBusy` is the model being loaded or unloaded, for its spinner.
+  const [modelBusy, setModelBusy] = useState<string | null>(null);
+  // The server loads and unloads in the background, so this asks again each
+  // second until the status is the one asked for (a big model takes a while).
+  const setModelLoaded = async (id: string, load: boolean) => {
+    if (!connector) return;
+    setModelBusy(id);
+    const want = load ? "loaded" : "unloaded";
+    try {
+      await (load ? loadModel : unloadModel)(connector.id, id);
+      for (let i = 0; i < 120; i++) {
+        const ms = await listModels(connector.id);
+        setModels(ms);
+        if (ms.find((m) => m.id === id)?.status === want) {
+          if (load && id === notLoaded) setNotLoaded(null);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      setError(`${id} still wasn't ${want} after two minutes; check the Models page.`);
+    } catch (e: any) {
+      setError(`Couldn't ${load ? "load" : "unload"} ${id}: ${e.message}`);
+    } finally {
+      setModelBusy(null);
+    }
+  };
+  // Picking another model answers the note.
+  useEffect(() => setNotLoaded(null), [model]);
+
   const refreshModels = (connectorId: string) =>
     listModels(connectorId)
       .then((ms) => {
@@ -527,6 +588,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const send = async () => {
     const text = input.trim();
     if (!text || !model || !connector || abort || planRunning) return;
+    // Before clearing the box, so the message waits there while it loads.
+    if (!(await modelLoaded())) return;
     setInput("");
     toBottom();
     reply(text, messages, { planning: planOn });
@@ -547,6 +610,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const tag = planStep ? { planStep } : {};
     let error: string | undefined;
     if (!connector) return { ok: false, messages: before };
+    // Every request checks, not just send(): a plan's steps and Resend come
+    // here too, and the model may have been unloaded since.
+    if (!(await modelLoaded())) return { ok: false, messages: before };
     let ok = false;
     const connectorId = connector.id;
     // Fixed for this reply, even if the user changes attachments meanwhile;
@@ -834,7 +900,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // is already done (by a rerun before, or by an earlier step) changes
   // nothing, and the check then saw no file at all.
   const checkStep = async (step: string, stepMessages: ChatMessage[], planMessages: ChatMessage[]) => {
-    if (!connector) return null;
+    if (!connector || !(await modelLoaded())) return null;
     const controller = new AbortController();
     setAbort(controller);
     try {
@@ -1051,25 +1117,79 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               size="small"
               label="Model"
               value={model}
-              onChange={(e) => setModel(e.target.value)}
+              onChange={(e) =>
+                e.target.value === MANAGE_MODELS ? (location.hash = "#/settings/models") : setModel(e.target.value)
+              }
               disabled={!!abort}
               sx={{ width: narrow ? "100%" : 240 }}
               // The status chips are for the open menu; closed, just the name fits.
-              slotProps={{ select: { renderValue: (v) => String(v) } }}
+              // No padding under the list: Manage models' hover highlight then runs
+              // to the menu's edge, and its text is centered in all the space below
+              // its line (the padding read as part of it, so the text looked high).
+              slotProps={{
+                select: { renderValue: (v) => String(v), MenuProps: { slotProps: { list: { sx: { pb: 0 } } } } },
+              }}
             >
               {models.map((m) => (
                 <MenuItem key={m.id} value={m.id}>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: "center", width: "100%" }}>
-                    <span style={{ flexGrow: 1 }}>{m.id}</span>
-                    <Chip
-                      size="small"
-                      label={m.status}
-                      color={m.status === "loaded" ? "success" : "default"}
-                      variant="outlined"
-                    />
+                  {/* Laid out like a row on the Models page. */}
+                  <Stack direction="row" spacing={2} sx={{ alignItems: "center", width: "100%" }}>
+                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                        <Typography sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>{m.id}</Typography>
+                        {m.status !== "unknown" && (
+                          <Chip
+                            size="small"
+                            label={m.status}
+                            color={m.status === "loaded" ? "success" : "default"}
+                            variant="outlined"
+                          />
+                        )}
+                      </Stack>
+                      <Typography variant="body2" color="text.secondary">
+                        {m.contextSize ? `${m.contextSize.toLocaleString()}-token context` : "Context n/a"}
+                        {m.source ? ` · ${m.source}` : ""}
+                      </Typography>
+                    </Box>
+                    {/* Load / Unload, like the Models page (deleting is only there).
+                        Clicking it doesn't pick the model, and an empty space keeps
+                        the icons lined up. */}
+                    {m.status !== "unknown" && (
+                      <Box onClick={(e) => e.stopPropagation()} sx={{ flexShrink: 0 }}>
+                        {modelBusy === m.id ? (
+                          <Box sx={{ width: 34, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <CircularProgress size={16} />
+                          </Box>
+                        ) : m.status === "loaded" || m.status === "unloaded" ? (
+                          <Tooltip title={m.status === "loaded" ? "Unload model" : "Load model"}>
+                            <IconButton
+                              size="small"
+                              disabled={modelBusy !== null}
+                              onClick={() => setModelLoaded(m.id, m.status !== "loaded")}
+                              aria-label={`${m.status === "loaded" ? "Unload" : "Load"} ${m.id}`}
+                            >
+                              {m.status === "loaded" ? <StopIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
+                            </IconButton>
+                          </Tooltip>
+                        ) : (
+                          <Box sx={{ width: 34 }} />
+                        )}
+                      </Box>
+                    )}
                   </Stack>
                 </MenuItem>
               ))}
+              {/* A Select item picks a value, so this one has its own (see onChange).
+                  The icon is the Models page's, from Settings. */}
+              {/* A border, not a Divider: Select makes every child an option. */}
+              {/* The space above the line is margin, outside the hover highlight;
+                  the padding is even, so the text stays centered in it. */}
+              <MenuItem value={MANAGE_MODELS} sx={{ borderTop: 1, borderColor: "divider", mt: 1, py: 1.25 }}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", color: "text.secondary" }}>
+                  <ViewInArOutlinedIcon fontSize="small" />
+                  <span>Manage models</span>
+                </Stack>
+              </MenuItem>
             </TextField>
             <Tooltip
               title={
@@ -1253,6 +1373,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               />
             )}
             {pending && <PendingPrompt ask={pending.ask} onDecide={pending.decide} />}
+            {notLoaded && (
+              <Alert severity="info">
+                {notLoaded} isn't loaded, so nothing was sent. Load it with ▶ in the model menu (it takes a moment and
+                uses the server's memory), or pick a model that's loaded.
+              </Alert>
+            )}
             {error && <Alert severity="error">{error}</Alert>}
           </Stack>
         </Container>

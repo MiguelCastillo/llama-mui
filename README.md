@@ -269,8 +269,16 @@ step that was running when the page closed comes back as pending.
   for the raw error. A reply cut off by a reload or closed tab can still be
   resent after the chat reopens.
 
-- Model picker from the active server's `/v1/models`, showing which models are
-  loaded. The server loads others on the first message.
+- Model picker from the active server's `/v1/models`, laid out like the Models
+  page: each model's status, context and source, with ▶ / ■ to load or unload
+  it. **Manage models** at the bottom opens Settings → Models, where models
+  are also deleted.
+- Models load only when you ask. A llama server in router mode would load a
+  model on its own when a request names it, so before every request (a
+  message, a plan step, its check, Resend) llama-mui asks the server whether
+  the model is loaded, and sends nothing if it isn't: your message stays in the
+  box, with a note to load it from the model menu. Opening an old chat picks
+  its model, but doesn't load it.
 - Streaming replies with a Stop button. Each step of a reply (thinking, tool
   calls) shows how long it took; hover for token counts. Hide the steps in
   **Settings → Chat** to see just the answers.
