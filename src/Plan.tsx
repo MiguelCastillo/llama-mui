@@ -19,7 +19,10 @@ import { type ChatMessage, type PlanStep, streamChat } from "./api";
 
 // With Plan on, a new message first gets a planning turn: the model can only
 // read and call update_plan, so it writes the plan instead of starting on the
-// work. Small models skip the plan when it's only suggested.
+// work. Small models skip the plan when it's only suggested. It still gets
+// every tool, and chat refuses the rest when they're called: a different tool
+// list, like a different system prompt, made llama.cpp reprocess the whole
+// chat. PLANNING_NOTE goes with the message, as its `note`, for the same reason.
 export const PLANNING_TOOLS = new Set([
   "update_plan",
   "list_directory",

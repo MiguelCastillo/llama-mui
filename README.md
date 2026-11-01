@@ -109,12 +109,19 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
 - With it on, **every message you send** gets a planning turn first. Chat
   decides that, not the model: the model doesn't get to choose whether to
   have one.
-- In the planning turn the system prompt adds: "Right now, only plan. Read
-  what you need, then call update_plan with the steps for this request, and
-  stop. Don't change any files yet… If the request doesn't change files,
-  answer it directly instead." The model only gets `update_plan` and the
-  read tools (`list_directory`, `read_file`, `find_files`, `grep`,
-  `locate_path`), so it can't change anything in that turn.
+- Your message gets a note, sent to the model after it but not shown: "Right
+  now, only plan. Read what you need, then call update_plan with the steps
+  for this request, and stop. Don't change any files yet… If the request
+  doesn't change files, answer it directly instead." In that turn the model
+  can only use `update_plan` and the read tools (`list_directory`,
+  `read_file`, `find_files`, `grep`, `locate_path`): it's offered every tool,
+  but the others are refused when called, so it can't change anything.
+- Why it's done that way: llama.cpp reuses its cache for the part of a
+  prompt that matches the last one from the start. Putting the note in the
+  system prompt, or offering fewer tools, changed that start, and the server
+  reprocessed the whole chat on every planning turn (measured: about a minute
+  for a 40k-token chat, at ~700 tokens/s). The note is saved with your
+  message, so later requests send the same text and keep matching.
 - What happens next is the model's choice:
   - **It calls `update_plan`**: the steps show as a checklist with **Run**,
     and nothing has changed yet. A new plan replaces the one before it,

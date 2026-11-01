@@ -88,6 +88,11 @@ export interface ChatMessage {
   // `serverTps` is llama.cpp's own generation speed, for the last round. A big
   // gap means the server was slow to deliver, not the model to generate.
   took?: { ms: number; clientTps?: number; serverTps?: number };
+  // Instructions sent to the model after this message's text, but not shown:
+  // the planning note on a message that gets a planning turn. It's saved with
+  // the message, so every later request sends the same text and llama.cpp's
+  // prompt cache keeps matching (see PLANNING_NOTE).
+  note?: string;
 }
 
 export interface StepStats {
@@ -107,7 +112,7 @@ function toWire(m: ChatMessage) {
       tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments } })),
     };
   }
-  return { role: m.role, content: m.content };
+  return { role: m.role, content: m.note ? `${m.content}\n\n${m.note}` : m.content };
 }
 
 export interface Connector {

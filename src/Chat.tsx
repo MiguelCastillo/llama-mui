@@ -619,7 +619,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // only paths the user allows mid-reply are added.
     let attached = attachments.map((a) => a.path);
     const forgotten = before.slice(0, contextStart);
-    let history: ChatMessage[] = [...before.slice(contextStart), { role: "user", content: text, ...tag }];
+    // A planning turn's instructions travel with the message as its `note`, not
+    // in the system prompt: changing the system prompt (or the tools) made
+    // llama.cpp reprocess the whole chat, about a minute on a 40k-token one.
+    let history: ChatMessage[] = [
+      ...before.slice(contextStart),
+      { role: "user", content: text, ...(planning && { note: PLANNING_NOTE }), ...tag },
+    ];
     setError(null);
     setFailed(null);
 
@@ -666,21 +672,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             model,
             messages:
               toolsOn && !lastTurn && toolContext.systemPrompt
-                ? [
-                    {
-                      role: "system",
-                      content: planning ? `${toolContext.systemPrompt}\n\n${PLANNING_NOTE}` : toolContext.systemPrompt,
-                    },
-                    ...history,
-                  ]
+                ? [{ role: "system", content: toolContext.systemPrompt }, ...history]
                 : history,
             think: thinkOn,
-            tools:
-              toolsOn && !lastTurn
-                ? planning
-                  ? toolContext.definitions.filter((d) => PLANNING_TOOLS.has(toolName(d)))
-                  : toolContext.definitions
-                : undefined,
+            // The same tools in every turn, planning included, so the prompt's
+            // start stays the same for the cache; a planning turn refuses the
+            // ones that change things when they're called (see below).
+            tools: toolsOn && !lastTurn ? toolContext.definitions : undefined,
           },
           (d) => {
             streamRate.current.first ||= performance.now();
@@ -735,6 +733,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           const times = ran.get(key) ?? 0;
           ran.set(key, times + 1);
           try {
+            // A planning turn only reads and plans. Its tools are all offered
+            // (for the cache, above), so the rest are refused here, unrun.
+            if (planning && !PLANNING_TOOLS.has(call.name)) {
+              throw new Error(
+                `${call.name} isn't available while planning; read what you need, then call update_plan with the steps`,
+              );
+            }
             if (times >= MAX_REPEATS) {
               stopReason = `Stopped: the model kept repeating ${call.name} with the same arguments.`;
               throw new Error(
