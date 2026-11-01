@@ -313,11 +313,15 @@ export function PlanView({
   proposal,
   onProposal,
   formatTime,
+  onCancel,
+  onClone,
 }: {
   steps: PlanStep[];
-  running: boolean;
-  onRun: () => void;
-  onChange: (steps: PlanStep[]) => void;
+  // An older finished plan passes none of running, onRun, onChange and
+  // onCancel. Any finished plan is read-only (see `readOnly`).
+  running?: boolean;
+  onRun?: () => void;
+  onChange?: (steps: PlanStep[]) => void;
   details: (stepId: string) => ReactNode[] | null;
   // While the plan runs: when the run started, for the elapsed counter.
   since?: number | null;
@@ -328,7 +332,15 @@ export function PlanView({
   onProposal?: (accept: boolean) => void;
   // Formats a step's time like chat's reply times; passed in, like `counter`.
   formatTime: (ms: number) => string;
+  // Asks to cancel the plan: chat confirms, stops a run, and removes it.
+  onCancel?: () => void;
+  // Starts a new plan with a finished plan's steps; absent when it can't
+  // (see Chat.tsx). A finished plan never runs again, so this is how to redo it.
+  onClone?: () => void;
 }) {
+  // Once every step is done, nothing in the plan runs again: no rerun, edit
+  // or cancel. Redoing work is a new plan, from a new message.
+  const readOnly = !onChange || steps.every((s) => s.status === "done");
   const [editing, setEditing] = useState<{ i: number; text: string } | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
@@ -345,7 +357,7 @@ export function PlanView({
 
   // Rerunning a step leaves the ones after it done, but built on the old version.
   const rerun = (i: number) =>
-    onChange(
+    onChange?.(
       steps.map((s, j) =>
         j === i
           ? { id: s.id, text: s.text, status: "pending" }
@@ -357,7 +369,7 @@ export function PlanView({
   const save = () => {
     if (!editing) return;
     const text = editing.text.trim();
-    if (text) onChange(steps.map((s, j) => (j === editing.i ? { id: s.id, text, status: "pending" } : s)));
+    if (text) onChange?.(steps.map((s, j) => (j === editing.i ? { id: s.id, text, status: "pending" } : s)));
     setEditing(null);
   };
 
@@ -368,7 +380,18 @@ export function PlanView({
           Plan · {done} of {steps.length} done
         </Typography>
         {since != null && counter && <Box sx={{ mr: 1 }}>{counter(since)}</Box>}
-        {unfinished && (
+        {/* Also while it runs: chat stops it first, then removes the plan. */}
+        {onClone && readOnly && (
+          <Button size="small" onClick={onClone}>
+            Clone
+          </Button>
+        )}
+        {onCancel && !readOnly && (
+          <Button size="small" onClick={onCancel} sx={{ mr: unfinished ? 1 : 0 }}>
+            Cancel plan
+          </Button>
+        )}
+        {unfinished && onRun && (
           <Button size="small" variant="contained" startIcon={<PlayArrowIcon />} onClick={onRun} disabled={running}>
             {started ? "Continue" : "Run"}
           </Button>
@@ -434,14 +457,14 @@ export function PlanView({
                     </Typography>
                   )}
                 </Box>
-                {!running && (
+                {!running && !readOnly && (
                   // Shown on hover so the list stays quiet.
                   <Box className="step-actions" sx={{ visibility: "hidden", display: "flex", flexShrink: 0 }}>
                     {s.status === "disputed" && (
                       <Tooltip title="The check is wrong: mark it done">
                         <IconButton
                           size="small"
-                          onClick={() => onChange(steps.map((st, j) => (j === i ? { id: st.id, text: st.text, status: "done" } : st)))}
+                          onClick={() => onChange?.(steps.map((st, j) => (j === i ? { id: st.id, text: st.text, status: "done" } : st)))}
                         >
                           <DoneIcon fontSize="small" />
                         </IconButton>
@@ -460,7 +483,7 @@ export function PlanView({
                       </IconButton>
                     </Tooltip>
                     <Tooltip title="Remove step">
-                      <IconButton size="small" onClick={() => onChange(steps.filter((_, j) => j !== i))}>
+                      <IconButton size="small" onClick={() => onChange?.(steps.filter((_, j) => j !== i))}>
                         <DeleteOutlinedIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>

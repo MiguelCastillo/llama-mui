@@ -64,6 +64,7 @@ import {
   type AttachmentTarget,
   type Approval,
   type ToolContext,
+  type PastPlan,
   type PlanStep,
   type Session,
   type SessionSummary,
@@ -251,6 +252,20 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     planRef.current = next;
     setPlan(next);
   };
+  // Where each plan shows: after the turn whose update_plan call wrote it, so
+  // it stays in place in the history (see Session). A finished plan stays
+  // there when a new one is written; the new one shows after its own turn.
+  const [planAnchor, setPlanAnchor] = useState<string | null>(null);
+  const [pastPlans, setPastPlans] = useState<PastPlan[]>([]);
+  // A finished plan never runs again; Clone starts a new one with its steps,
+  // all pending, at the end of the chat. Not while another plan is unfinished,
+  // which the clone would replace (see canClone).
+  const clonePlan = (steps: PlanStep[]) => {
+    if (plan) setPastPlans((p) => [...p, { steps: plan, anchor: planAnchor }]);
+    setPlanAnchor(`at:${messages.length}`);
+    changePlan(steps.map((st) => ({ id: crypto.randomUUID(), text: st.text, status: "pending" })));
+    toBottom();
+  };
   // A change the model suggested to a plan that's under way; see reply().
   const [planProposal, setPlanProposal] = useState<PlanStep[] | null>(null);
   const answerProposal = (accept: boolean) => {
@@ -340,10 +355,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What was last saved or loaded, so opening a chat doesn't save it again
   // (which would move it to the top of the list).
   const savedKey = useRef("");
-  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal]);
+  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planAnchor, s.pastPlans]);
 
   const applySession = (s: Session) => {
-    savedKey.current = keyOf(s);
+    // Saved before plans had a place: pinned after the chat's last message as
+    // it opens, where they showed, so later messages go below them. Counted
+    // as saved, so opening the chat doesn't save it (see savedKey).
+    const end = `at:${s.messages.length}`;
+    const planAnchor = s.plan ? (s.planAnchor ?? end) : null;
+    const pastPlans = (s.pastPlans ?? []).map((p) => ({ ...p, anchor: p.anchor ?? end }));
+    savedKey.current = keyOf({ ...s, planAnchor, pastPlans });
     setMessages(s.messages);
     setContextStart(s.contextStart);
     setAttachments(s.attachments);
@@ -358,6 +379,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       })) ?? null,
     );
     setPlanProposal(s.planProposal ?? null);
+    setPlanAnchor(planAnchor);
+    setPastPlans(pastPlans);
     if (s.model) setModel(s.model);
   };
 
@@ -391,6 +414,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       failed: abort ? INTERRUPTED : failed,
       plan,
       planProposal,
+      planAnchor,
+      pastPlans,
     };
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -405,7 +430,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   useEffect(() => {
     const timer = setTimeout(saveNow, 800);
     return () => clearTimeout(timer);
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planAnchor, pastPlans]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -422,10 +447,24 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setFailed(null);
     changePlan(null);
     setPlanProposal(null);
+    setPlanAnchor(null);
+    setPastPlans([]);
     setDrawerOpen(false);
     loadSession(id);
   };
   const newChat = () => openSession(crypto.randomUUID());
+  // Cancelling a plan asks first, then stops a run (the step's request, or its
+  // check) and removes the plan. The steps' messages stay in the chat, and
+  // what they changed stays changed. The runner, still unwinding from the
+  // stop, finds no plan and leaves it alone (setStep needs a step to change).
+  const [confirmCancelPlan, setConfirmCancelPlan] = useState(false);
+  const cancelPlanConfirmed = () => {
+    setConfirmCancelPlan(false);
+    abort?.abort();
+    changePlan(null);
+    setPlanProposal(null);
+    setPlanAnchor(null);
+  };
   // Deleting asks first, in a Dialog: window.confirm is answered "no" at once,
   // without being shown, in some browsers (the Claude app's browser pane).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -815,7 +854,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           }
           if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) ran.clear();
           if (call.name === "update_plan" && !result.startsWith("Error:")) {
-            const old = planRef.current ?? [];
+            const current = planRef.current ?? [];
+            // A finished plan isn't changed: it stays as it ran, and this call
+            // starts a new one (keeping its steps would mark them done).
+            const finished = current.length > 0 && current.every((st) => st.status === "done");
+            const old = finished ? [] : current;
             const steps = planFromCall(call.arguments, old, planRunningRef.current);
             // A plan under way is the user's: outside a run, the model's change
             // waits for them. Asked about a failed step, the model once
@@ -825,7 +868,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               setPlanProposal(steps);
               result =
                 "Proposed, not made: the user sees your change next to the plan and decides. Tell them what you changed and why.";
-            } else if (steps) changePlan(steps);
+            } else if (steps) {
+              if (finished) setPastPlans((p) => [...p, { steps: current, anchor: planAnchor }]);
+              // A change during a run keeps the card where it is.
+              if (!planRunningRef.current) setPlanAnchor(call.id);
+              changePlan(steps);
+            }
             if (steps && planning) planned = true;
           }
           lastToolResults.push(history.length);
@@ -1031,6 +1079,70 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       resendDisabled={i === lastFailedTurnIndex ? !!abort : undefined}
     />
   );
+  // Each update_plan call's turn, to show the plan it wrote after that turn.
+  const callTurn = new Map(turns.flatMap((t) => t.parts.flatMap((m) => (m.toolCalls ?? []).map((c) => [c.id, t.start] as const))));
+  // Where a plan shows. A call's plan: after that call's turn. "at:N": before
+  // the first turn shown from message N on, or after the last turn if none;
+  // made after a clear (N at or past contextStart), it's below the divider.
+  // Neither (its turn is gone, as when Resend replaced it): at the end.
+  const shown = turns.filter((t) => !t.parts[0].planStep);
+  const slot = (anchor: string | null) => {
+    if (!anchor?.startsWith("at:")) {
+      const after = anchor ? callTurn.get(anchor) : undefined;
+      return after === undefined ? { lost: true } : { after };
+    }
+    const n = Number(anchor.slice(3));
+    if (n > messages.length) return { lost: true };
+    return { before: shown.find((t) => t.start >= n)?.start ?? "end", cleared: contextStart > 0 && n >= contextStart };
+  };
+  const cardsBefore = (start: number | "end", cleared: boolean) =>
+    planCards.filter((c) => {
+      const s = slot(c.anchor);
+      return s.before === start && !!s.cleared === cleared;
+    }).map((c) => c.card);
+  const stepTurns = (id: string) => {
+    const own = turns.flatMap((t, i) => (t.parts[0].planStep === id ? [bubble(t, i)] : []));
+    return own.length ? own : null;
+  };
+  const canClone = (!plan || plan.every((st) => st.status === "done")) && !abort && !planRunning;
+  const planCards = [
+    ...pastPlans.map((p, i) => ({
+      anchor: p.anchor,
+      card: (
+        <PlanView
+          key={`past-${i}`}
+          steps={p.steps}
+          details={stepTurns}
+          formatTime={formatSeconds}
+          onClone={canClone ? () => clonePlan(p.steps) : undefined}
+        />
+      ),
+    })),
+    ...(plan
+      ? [
+          {
+            anchor: planAnchor,
+            card: (
+              <PlanView
+                key="plan"
+                steps={plan}
+                running={planRunning || !!abort}
+                since={planRunning ? busySince : null}
+                counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
+                onRun={runPlan}
+                onChange={changePlan}
+                proposal={planProposal}
+                onProposal={answerProposal}
+                details={stepTurns}
+                formatTime={formatSeconds}
+                onCancel={() => setConfirmCancelPlan(true)}
+                onClone={canClone ? () => clonePlan(plan) : undefined}
+              />
+            ),
+          },
+        ]
+      : []),
+  ];
   // A plan step's failure shows on the step, which offers Continue.
   const lastFailedTurnIndex = lastUserTurn >= 0 && !turns[lastUserTurn].parts[0].planStep ? lastUserTurn : -1;
   const hasContext = messages.length > contextStart;
@@ -1050,6 +1162,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (contextStart > 0) {
       // Remove forgotten messages from the array
       setMessages(messages.slice(contextStart));
+      // A cloned plan's place counts messages, so it moves with them. A plan
+      // whose turn is removed goes to the top ("at:0"), where that turn was.
+      const removed = new Set(messages.slice(0, contextStart).flatMap((m) => (m.toolCalls ?? []).map((c) => c.id)));
+      const shift = (a: string | null) => {
+        if (!a) return a;
+        if (!a.startsWith("at:")) return removed.has(a) ? "at:0" : a;
+        return `at:${Math.max(0, Number(a.slice(3)) - contextStart)}`;
+      };
+      setPlanAnchor(shift(planAnchor));
+      setPastPlans(pastPlans.map((p) => ({ ...p, anchor: shift(p.anchor) })));
       setContextStart(0);
       setUsage(null);
       // Also update savedKey so we don't save again
@@ -1272,6 +1394,22 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         </Tooltip>
       </Paper>
 
+      <Dialog open={confirmCancelPlan} onClose={() => setConfirmCancelPlan(false)} maxWidth="xs">
+        <DialogTitle>Cancel this plan?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {planRunning ? "This stops the step that's running and removes" : "This removes"} the plan and its
+            checklist. The steps' messages stay in the chat, and anything they already changed stays changed.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmCancelPlan(false)}>Keep it</Button>
+          <Button color="error" variant="contained" onClick={cancelPlanConfirmed}>
+            Cancel plan
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} maxWidth="xs">
         <DialogTitle>Delete this chat?</DialogTitle>
         <DialogContent>
@@ -1359,30 +1497,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 // dots included; the step's spinner shows progress here.
                 !t.parts[0].planStep && (
                   <Fragment key={t.start}>
+                    {cardsBefore(t.start, false)}
                     {t.start === contextStart && contextStart > 0 && <ContextDivider />}
+                    {cardsBefore(t.start, true)}
                     {bubble(t, i)}
+                    {planCards.filter((c) => slot(c.anchor).after === t.start).map((c) => c.card)}
                   </Fragment>
                 ),
             )}
+            {cardsBefore("end", false)}
             {/* Cleared after the last message: the divider goes at the end. */}
             {contextStart > 0 && contextStart === messages.length && <ContextDivider />}
-            {plan && (
-              <PlanView
-                steps={plan}
-                running={planRunning || !!abort}
-                since={planRunning ? busySince : null}
-                counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
-                onRun={runPlan}
-                onChange={changePlan}
-                proposal={planProposal}
-                onProposal={answerProposal}
-                details={(id) => {
-                  const own = turns.flatMap((t, i) => (t.parts[0].planStep === id ? [bubble(t, i)] : []));
-                  return own.length ? own : null;
-                }}
-                formatTime={formatSeconds}
-              />
-            )}
+            {cardsBefore("end", true)}
+            {planCards.filter((c) => slot(c.anchor).lost).map((c) => c.card)}
             {pending && <PendingPrompt ask={pending.ask} onDecide={pending.decide} />}
             {notLoaded && (
               <Alert severity="info">

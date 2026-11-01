@@ -124,8 +124,9 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
   message, so later requests send the same text and keep matching.
 - What happens next is the model's choice:
   - **It calls `update_plan`**: the steps show as a checklist with **Run**,
-    and nothing has changed yet. A new plan replaces the one before it,
-    except that a step with exactly the same text keeps its status. The
+    and nothing has changed yet. A new plan replaces an unfinished one
+    before it, except that a step with exactly the same text keeps its
+    status; a finished one stays (see [Where plans show](#where-plans-show)). The
     turn ends as soon as the plan lands, with no reply after it: told to go
     on, a small model kept rewording its plan instead (16 `update_plan`
     calls in one turn, each slightly different, so the repeat guard never
@@ -233,6 +234,36 @@ becomes a suggestion under the plan, with new steps marked + and dropped
 steps struck out, and **Use this plan** or **Keep the plan**; the model is
 told it only proposed. This came from asking the model about a failed step:
 it "proposed" a fix by sending only that step, which deleted the other 7.
+
+### Where plans show
+
+A plan card shows in the chat right after the turn that wrote it, and stays
+there as you scroll; later messages go below it. A step's messages show under
+the step, not in the chat.
+
+- Once every step is done, the plan is finished and read-only: no step
+  buttons (rerun, edit, remove) and no **Cancel plan**. Nothing in it runs
+  again. To redo it, **Clone** starts a new plan with the same steps, all
+  pending, at the end of the chat; the original stays as it ran. Clone shows
+  only while no other plan is unfinished, since the clone would replace it,
+  and not while anything runs. Or send a message and the model writes a new
+  plan.
+- When the model writes a new plan, a finished one stays where it is, and
+  the new one shows after its own turn. Its steps all start pending, even
+  ones with the same text as a done step.
+- A plan under way keeps its place when it changes: a suggestion you accept,
+  or a change the model makes during a run. A plan that hasn't started yet,
+  rewritten by the model, moves to the turn that rewrote it.
+- A plan in a chat saved before plans had a place is pinned after the last
+  message when the chat opens, so new messages go below it. A plan whose
+  turn is compacted away moves to the top, where that turn was.
+
+### Cancelling a plan
+
+**Cancel plan** on the card asks first, then removes the plan. If it's
+running, it stops the step first. The steps' messages stay in the chat, and
+what they changed stays changed; finished plans above it stay too. A
+finished plan can't be cancelled.
 
 ### Step times
 
