@@ -206,7 +206,9 @@ export default function ModelsSection() {
                         />
                       </Stack>
                     }
-                    secondary={m.contextSize ? `${m.contextSize.toLocaleString()}-token context` : undefined}
+                    // n/a: unloaded and started without --ctx-size, so the
+                    // server doesn't say until it's loaded (see contextSize).
+                    secondary={m.contextSize ? `${m.contextSize.toLocaleString()}-token context` : "Context n/a"}
                   />
                   {/* Short label so it stays on the model's line; the note below explains it. */}
                   <Tooltip title="Think before answering">
@@ -255,7 +257,8 @@ export default function ModelsSection() {
                     )}
                   </Stack>
                   {/* Delete button with MUI Dialog */}
-                  {m.status !== "loaded" && (
+                  {/* The server can only delete downloaded models, and not while loaded. */}
+                  {m.canRemove && m.status !== "loaded" && (
                     <Tooltip title="Delete model">
                       <IconButton onClick={() => setDeleting(m.id)}>
                         <DeleteOutlinedIcon />

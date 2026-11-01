@@ -305,10 +305,20 @@ step that was running when the page closed comes back as pending.
 **Settings → Models** shows the models currently on the selected llama server.
 Each model row displays:
 - The model id and its status (loaded/unloaded)
-- Context size in tokens
+- The context it runs with, in tokens: what the server reports for a loaded
+  model, or the `--ctx-size` it starts with. It's "n/a" when the server doesn't
+  say: an unloaded model with no `ctx-size` in the server's presets starts with
+  llama.cpp's default (4096), not the context the model was trained for.
 - A **Think** switch to enable reasoning mode for that model
 - **Load** / **Unload** buttons to load or unload models
-- A trash icon to delete models from the server's cache (with confirmation)
+- A trash icon to delete a model the server downloaded (with confirmation).
+  Models defined in the server's preset file can't be deleted, and a loaded one
+  has to be unloaded first.
+
+A model's context and other settings come from the server's preset file
+(`--models-preset`); the load API takes only the model's name. For a context
+on every model, set it in the file's `[*]` section, for example
+`ctx-size = 131072`.
 
 You can also **Search Hugging Face** for GGUF models:
 1. Enter a model name (e.g., "llama-2", "mistral", "qwen") in the search box

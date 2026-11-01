@@ -11,11 +11,12 @@ export interface Model {
   inputs: string[];
   // Tokens the server gives this model's context, when it says.
   contextSize?: number;
-  // From server /models: whether it can be removed from cache
+  // Whether the server can delete it: true for downloaded models ("cache"),
+  // false for ones defined in the server's preset file ("preset").
   canRemove?: boolean;
-  // Source of the model (e.g., "hf://user/repo")
+  // "cache" or "preset", as above.
   source?: string;
-  // Sidecar files (e.g., ["mmproj"])
+  // Extra files downloaded with it, e.g. ["mmproj"].
   sidecars?: string[];
   // File size in bytes
   size?: number;
@@ -43,17 +44,16 @@ export interface SseEvent {
   data: string;
 }
 
-// llama.cpp starts each model with --ctx-size, which can be smaller than what
-// the model supports (context_length). A loaded model reports the real value
-// as meta.n_ctx; for unloaded ones, the start-up args are the best guess.
-// llama.cpp starts each model with --ctx-size, which can be smaller than what
-// the model supports (context_length). A loaded model reports the real value
-// as meta.n_ctx; for unloaded ones, the start-up args are the best guess.
+// The context the server runs a model with: meta.n_ctx once it's loaded,
+// else the --ctx-size it will start with. Not context_length: that's what the
+// model was trained for, and a model with no --ctx-size starts with 4096, not
+// that (a 262,144 shown for Qwen3.6 ran with 4096 and refused a 16k prompt).
+// Undefined when the server doesn't say, so nothing guesses from it.
 function contextSize(m: any): number | undefined {
   const args: string[] = m.status?.args ?? [];
   const i = args.indexOf("--ctx-size");
   const fromArgs = i >= 0 ? Number(args[i + 1]) : NaN;
-  return m.meta?.n_ctx ?? (fromArgs > 0 ? fromArgs : undefined) ?? m.context_length;
+  return m.meta?.n_ctx ?? (fromArgs > 0 ? fromArgs : undefined);
 }
 
 export interface ToolCall {
@@ -159,9 +159,9 @@ export async function listModels(connectorId: string): Promise<Model[]> {
     status: m.status?.value ?? "unknown",
     inputs: m.architecture?.input_modalities ?? [],
     contextSize: contextSize(m),
-    canRemove: m.status?.can_remove,
-    source: m.status?.source,
-    sidecars: m.status?.sidecars,
+    canRemove: m.can_remove,
+    source: m.source,
+    sidecars: m.sidecars,
     size: m.size_in_bytes,
   }));
 }
@@ -174,9 +174,9 @@ export function listModelsAdmin(connectorId: string): Promise<Model[]> {
       status: m.status?.value ?? "unknown",
       inputs: m.architecture?.input_modalities ?? [],
       contextSize: contextSize(m),
-      canRemove: m.status?.can_remove,
-      source: m.status?.source,
-      sidecars: m.status?.sidecars,
+      canRemove: m.can_remove,
+      source: m.source,
+      sidecars: m.sidecars,
       size: m.size_in_bytes,
     })),
   );
