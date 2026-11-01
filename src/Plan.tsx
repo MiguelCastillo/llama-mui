@@ -30,6 +30,9 @@ export const PLANNING_TOOLS = new Set([
   "find_files",
   "grep",
   "locate_path",
+  // A question gets a planning turn too, and may need the web to answer.
+  "web_search",
+  "fetch_url",
 ]);
 // A note: an instruction for one turn, sent after the message's text (see
 // README, "What the model is told"). A question comes first: led by "only

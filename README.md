@@ -150,9 +150,11 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
   Don't change any files yet…" The question case comes first: led by "only
   plan", the model began its answers with "This is a question, not a file
   change request", replying to a note you never see. In that turn the model
-  can only use `update_plan` and the read tools (`list_directory`,
-  `read_file`, `find_files`, `grep`, `locate_path`): it's offered every tool,
-  but the others are refused when called, so it can't change anything.
+  can only use `update_plan`, the read tools (`list_directory`,
+  `read_file`, `find_files`, `grep`, `locate_path`) and the web tools
+  (`web_search`, `fetch_url`), so a question can still be answered from the
+  web: it's offered every tool, but the others are refused when called, so it
+  can't change anything.
 - Why it's done that way: llama.cpp reuses its cache for the part of a
   prompt that matches the last one from the start. Putting the note in the
   system prompt, or offering fewer tools, changed that start, and the server
@@ -176,9 +178,6 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
   and the "Do step" messages chat sends while running a plan. With **Plan**
   off, the system prompt still suggests a plan, but nothing makes the model
   write one, and small models usually don't.
-- Known gap: the planning turn leaves out `web_search` and `fetch_url`, so
-  with **Plan** on, a question that needs the web can't search. They should
-  be allowed, since they don't change anything.
 
 ### How many steps
 
