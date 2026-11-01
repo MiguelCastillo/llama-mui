@@ -215,7 +215,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
   // Per-model options from Settings → Models, plus the server's defaults for
   // models nobody changed.
   const [modelSettings, setModelSettings] = useState<{
@@ -643,15 +642,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       setPending({ ask, decide });
     });
 
-  // Sends a reply after the user types it.
-  const send = async () => {
-    const text = input.trim();
-    if (!text || !model || !connector || abort || planRunning) return;
-    // Before clearing the box, so the message waits there while it loads.
-    if (!(await modelLoaded())) return;
-    setInput("");
+  // Sends what the user typed. Returns whether it went, so the message box
+  // clears only then: it waits there while the model is checked.
+  const send = async (text: string) => {
+    if (!model || !connector || abort || planRunning) return false;
+    if (!(await modelLoaded())) return false;
     toBottom();
     reply(text, messages, { planning: planOn });
+    return true;
   };
 
   // Streams a reply, building history from `before` instead of `messages`.
@@ -1569,48 +1567,86 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 setAttachments((as) => [...as.filter((x) => x.path === p), ...as.filter((x) => x.path !== p)])
               }
             />
-            <TextField
-              fullWidth
-              multiline
-              maxRows={8}
+            <Composer
               placeholder={narrow ? "Message" : "Message (Enter to send, Shift+Enter for a new line)"}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
+              onSend={send}
+              onStop={abort ? () => abort.abort() : undefined}
+              disabled={!model}
+              below={
+                showIndicator && (
+                  <ContextIndicator
+                    usage={usage}
+                    contextSize={models.find((m) => m.id === model)?.contextSize}
+                    onClear={clearContext}
+                    onCompact={compactSession}
+                    canCompact={contextStart > 0}
+                    disabled={!!abort}
+                  />
+                )
+              }
             />
-            {/* Send lines up with the input's top edge; the context
-                indicator sits just below it. */}
-            <Stack spacing={1.25} sx={{ flexShrink: 0, alignItems: "flex-end" }}>
-              {abort ? (
-                <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={() => abort.abort()}>
-                  Stop
-                </Button>
-              ) : (
-                <Button variant="contained" endIcon={<SendIcon />} onClick={send} disabled={!input.trim() || !model}>
-                  Send
-                </Button>
-              )}
-              {showIndicator && (
-                <ContextIndicator
-                  usage={usage}
-                  contextSize={models.find((m) => m.id === model)?.contextSize}
-                  onClear={clearContext}
-                  onCompact={compactSession}
-                  canCompact={contextStart > 0}
-                  disabled={!!abort}
-                />
-              )}
-            </Stack>
           </Stack>
         </Container>
       </Paper>
       </Box>
     </Box>
+  );
+}
+
+// The message box and Send (Stop while a reply runs). It keeps what's typed
+// itself: kept in Chat, every keystroke redrew the whole chat, about 100 ms
+// each in a 300-message one.
+function Composer({
+  placeholder,
+  onSend,
+  onStop,
+  disabled,
+  below,
+}: {
+  placeholder: string;
+  // Resolves to whether the message went; the box clears only then.
+  onSend: (text: string) => Promise<boolean>;
+  onStop?: () => void;
+  disabled: boolean;
+  // Under Send: the context indicator.
+  below: ReactNode;
+}) {
+  const [text, setText] = useState("");
+  const send = async () => {
+    const t = text.trim();
+    if (t && (await onSend(t))) setText("");
+  };
+  return (
+    <>
+      <TextField
+        fullWidth
+        multiline
+        maxRows={8}
+        placeholder={placeholder}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            send();
+          }
+        }}
+      />
+      {/* Send lines up with the input's top edge; the context
+          indicator sits just below it. */}
+      <Stack spacing={1.25} sx={{ flexShrink: 0, alignItems: "flex-end" }}>
+        {onStop ? (
+          <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={onStop}>
+            Stop
+          </Button>
+        ) : (
+          <Button variant="contained" endIcon={<SendIcon />} onClick={send} disabled={!text.trim() || disabled}>
+            Send
+          </Button>
+        )}
+        {below}
+      </Stack>
+    </>
   );
 }
 
