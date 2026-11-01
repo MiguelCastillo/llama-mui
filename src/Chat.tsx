@@ -42,6 +42,7 @@ import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import LayersClearOutlinedIcon from "@mui/icons-material/LayersClearOutlined";
+import CompressOutlinedIcon from "@mui/icons-material/CompressOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import SearchOffIcon from "@mui/icons-material/SearchOff";
@@ -963,6 +964,22 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setUsage(null);
   };
 
+  // Asks in a Dialog first, like deleting a chat: window.confirm is answered
+  // "no" at once, without being shown, in some browsers.
+  const [confirmCompact, setConfirmCompact] = useState(false);
+  const compactSession = () => setConfirmCompact(true);
+  const compactConfirmed = () => {
+    setConfirmCompact(false);
+    if (contextStart > 0) {
+      // Remove forgotten messages from the array
+      setMessages(messages.slice(contextStart));
+      setContextStart(0);
+      setUsage(null);
+      // Also update savedKey so we don't save again
+      savedKey.current = "";
+    }
+  };
+
   return (
     <Box sx={{ display: "flex", height: "100dvh" }}>
       <SessionsPanel
@@ -1140,6 +1157,22 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         </DialogActions>
       </Dialog>
 
+      <Dialog open={confirmCompact} onClose={() => setConfirmCompact(false)} maxWidth="xs">
+        <DialogTitle>Compact this session?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This permanently deletes the messages from before you last cleared the context. The model already doesn't see
+            them. This can't be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmCompact(false)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={compactConfirmed}>
+            Compact
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog open={offerThink} onClose={() => setOfferThink(false)} maxWidth="xs">
         <DialogTitle>Turn on Think?</DialogTitle>
         <DialogContent>
@@ -1261,6 +1294,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   usage={usage}
                   contextSize={models.find((m) => m.id === model)?.contextSize}
                   onClear={clearContext}
+                  onCompact={compactSession}
+                  canCompact={contextStart > 0}
                   disabled={!!abort}
                 />
               )}
@@ -1843,11 +1878,16 @@ function ContextIndicator({
   usage,
   contextSize,
   onClear,
+  onCompact,
+  canCompact,
   disabled,
 }: {
   usage: Usage | null;
   contextSize?: number;
   onClear: () => void;
+  onCompact: () => void;
+  // Only once something has been cleared: that's what compacting removes.
+  canCompact: boolean;
   disabled: boolean;
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
@@ -1906,7 +1946,11 @@ function ContextIndicator({
           <Typography variant="caption" color="text.secondary">
             Clearing keeps the messages on screen, but the model stops seeing them.
           </Typography>
-          <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+          <Typography variant="caption" color="text.secondary">
+            Compacting permanently deletes the messages you cleared, which the model no longer sees.
+          </Typography>
+          {/* One line per label: the popover is too narrow for both with icons otherwise. */}
+          <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-end", "& .MuiButton-root": { whiteSpace: "nowrap" } }}>
             <Button
               size="small"
               variant="outlined"
@@ -1918,6 +1962,18 @@ function ContextIndicator({
               }}
             >
               Clear context
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<CompressOutlinedIcon />}
+              disabled={disabled || !canCompact}
+              onClick={() => {
+                onCompact();
+                setAnchor(null);
+              }}
+            >
+              Compact session
             </Button>
           </Box>
         </Stack>
