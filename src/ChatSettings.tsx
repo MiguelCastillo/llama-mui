@@ -206,7 +206,7 @@ function AttachmentsSection({
                 title={SOURCE_LABEL[a.source]}
                 sx={{ flexShrink: 0 }}
               />
-              <Tooltip title="Remove from this chat">
+              <Tooltip title="Remove from this session">
                 <IconButton size="small" onClick={() => onRemove(a.path)} aria-label={`Remove ${a.path}`}>
                   <CloseIcon fontSize="small" />
                 </IconButton>

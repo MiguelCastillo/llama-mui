@@ -85,11 +85,11 @@ export default function SessionsPanel({
     >
       <Box sx={{ display: "flex", alignItems: "center", pl: 2, pr: 1, pt: 1, pb: 0.5 }}>
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
-          Chats
+          Sessions
         </Typography>
-        <Tooltip title="New chat">
+        <Tooltip title="New session">
           <span>
-            <IconButton onClick={onNew} disabled={busy} aria-label="New chat">
+            <IconButton onClick={onNew} disabled={busy} aria-label="New session">
               <AddCommentIcon />
             </IconButton>
           </span>
@@ -111,7 +111,7 @@ export default function SessionsPanel({
                 "&:hover .MuiListItemSecondaryAction-root": { visibility: "visible" },
               }}
               secondaryAction={
-                <Tooltip title="Delete chat">
+                <Tooltip title="Delete session">
                   <span>
                     <IconButton
                       edge="end"

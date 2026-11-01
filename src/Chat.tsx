@@ -423,7 +423,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (!loaded || messages.length === 0) return;
     const session: Session = {
       id: sessionId,
-      title: (messages.find((m) => m.role === "user")?.content ?? "New chat").slice(0, 80),
+      title: (messages.find((m) => m.role === "user")?.content ?? "New session").slice(0, 80),
       model,
       messages,
       contextStart,
@@ -965,7 +965,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         const call = { id: "check", name: "read_file", arguments: JSON.stringify({ path, max_lines: Number.MAX_SAFE_INTEGER }) };
         try {
           const out = await runTool(call, { chatId: `${sessionId}:check`, attachments: attachedPaths(attachments) });
-          if (!("result" in out)) return { path, error: "it isn't attached to this chat" };
+          if (!("result" in out)) return { path, error: "it isn't attached to this session" };
           if (out.result.startsWith("Error:")) return { path, error: out.result.slice(7).trim() };
           // After read_file's "<path> (lines 1-N of N)" line.
           const text = out.result.slice(out.result.indexOf("\n") + 1);
@@ -1394,10 +1394,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             )}
           </IconButton>
         </Tooltip>
-        {/* New chat lives in the Chats panel; here only while that's hidden.
-            It comes first so the Chats toggle and Settings never move. */}
+        {/* New chat lives in the Sessions panel; here only while that's hidden.
+            It comes first so the Sessions toggle and Settings never move. */}
         {!(narrow ? drawerOpen : sessionsOpen) && (
-          <Tooltip title="New chat">
+          <Tooltip title="New session">
             <span>
               <IconButton onClick={newChat} disabled={!!abort}>
                 <AddCommentIcon />
@@ -1405,7 +1405,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             </span>
           </Tooltip>
         )}
-        <Tooltip title={(narrow ? drawerOpen : sessionsOpen) ? "Hide chats" : "Show chats"}>
+        <Tooltip title={(narrow ? drawerOpen : sessionsOpen) ? "Hide sessions" : "Show sessions"}>
           <IconButton onClick={() => (narrow ? setDrawerOpen(!drawerOpen) : setSessionsOpen(!sessionsOpen))}>
             <ViewSidebarOutlinedIcon />
           </IconButton>
@@ -1434,10 +1434,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       </Dialog>
 
       <Dialog open={!!confirmDelete} onClose={() => setConfirmDelete(null)} maxWidth="xs">
-        <DialogTitle>Delete this chat?</DialogTitle>
+        <DialogTitle>Delete this session?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            “{sessions.find((s) => s.id === confirmDelete)?.title ?? "This chat"}” and its messages will be deleted.
+            “{sessions.find((s) => s.id === confirmDelete)?.title ?? "This session"}” and its messages will be deleted.
             This can't be undone.
           </DialogContentText>
         </DialogContent>
@@ -1968,13 +1968,13 @@ function AccessPrompt({ target, onDecide }: { target: AttachmentTarget; onDecide
   return (
     <Alert severity="warning" icon={<AttachmentIcon kind={target.kind} />}>
       <Typography variant="body2">
-        The model wants access to this {target.kind}, which isn't attached to this chat:
+        The model wants access to this {target.kind}, which isn't attached to this session:
       </Typography>
       <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere", my: 0.5 }}>
         {target.path}
       </Typography>
       <Typography variant="caption" color="text.secondary" component="div">
-        Allowing attaches it to this chat{target.kind === "folder" ? ", subfolders included" : ""}. Changes to it
+        Allowing attaches it to this session{target.kind === "folder" ? ", subfolders included" : ""}. Changes to it
         still need your approval.
       </Typography>
       <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
@@ -2062,7 +2062,7 @@ function FindPrompt({
         {subject}
       </Typography>
       <Typography variant="caption" color="text.secondary" component="div">
-        Choose it and it's attached to this chat; the model then uses that path.
+        Choose it and it's attached to this session; the model then uses that path.
       </Typography>
       {error && (
         <Typography variant="caption" color="error" component="div">
@@ -2358,7 +2358,7 @@ function ContextMeter({ usage, contextSize }: { usage: Usage; contextSize?: numb
       <Stack direction="row" sx={{ justifyContent: "space-between", mb: 0.5, gap: 2 }}>
         <Typography variant="caption" color={color === "primary" ? "text.secondary" : `${color}.main`}>
           {share >= CONTEXT_FULL_AT
-            ? "Context almost full: the model will start forgetting the start of this chat. Start a new chat."
+            ? "Context almost full: the model will start forgetting the start of this session. Start a new session."
             : share >= CONTEXT_WARN_AT
               ? "Context getting full."
               : "Context"}

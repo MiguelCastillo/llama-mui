@@ -333,9 +333,9 @@ step that was running when the page closed comes back as pending.
 
 ## Features
 
-- **Saved chats**: each chat is saved to `~/.llama-mui/chats/` a moment after
-  it changes, so reloading the page reopens it. The **Chats** panel on the
-  left lists them newest first; click one to switch, **+** starts a new chat,
+- **Saved sessions**: each chat is saved to `~/.llama-mui/chats/` a moment after
+  it changes, so reloading the page reopens it. The **Sessions** panel on the
+  left lists them newest first; click one to switch, **+** starts a new session,
   and the trash icon deletes one.
 - **Resend**: when a reply fails, your message gets a red outline and a line
   saying what went wrong (the reply was cut off, the llama server couldn't be
