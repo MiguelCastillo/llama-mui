@@ -1297,7 +1297,8 @@ function MessageBubble({
   // The waiting dots: shown while the reply's newest turn has nothing yet,
   // which is from sending until the first text, thinking or tool call, and
   // again between rounds of tool calls (each round starts a new, empty turn).
-  // Once thinking streams, the "Thinking…" panel shows instead. A plan step's
+  // Once thinking streams, the thinking panel shows instead, with the same
+  // dots in its header until the thinking ends. A plan step's
   // turns render under the step, so during a run its dots are inside the
   // collapsed details and the step's own spinner is what shows.
   const waiting = showSteps
@@ -1350,9 +1351,14 @@ function MessageBubble({
               {showSteps && m.reasoning && (
                 <Accordion disableGutters elevation={0} sx={{ bgcolor: "action.hover", "&:before": { display: "none" } }}>
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography variant="body2" color="text.secondary">
-                      {streaming && m === last && !m.content && !m.toolCalls ? "Thinking…" : "Thoughts"}
-                    </Typography>
+                    {/* While it's thinking, the same dots as waiting for a reply. */}
+                    {streaming && m === last && !m.content && !m.toolCalls ? (
+                      <TypingDots label="Thinking" />
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        Thoughts
+                      </Typography>
+                    )}
                     <StepTime
                       stats={m.stats}
                       detail={(s) => `Thought for ${formatSeconds(s.ms)}${s.tokens ? `, ≈${s.tokens.toLocaleString()} tokens` : ""}`}
@@ -1565,11 +1571,11 @@ const typingDot = keyframes({
   "40%": { transform: "scale(1)", opacity: 1 },
 });
 
-function TypingDots() {
+function TypingDots({ label = "Waiting for a reply" }: { label?: string }) {
   return (
     <Box
       role="status"
-      aria-label="Waiting for a reply"
+      aria-label={label}
       // A line of text tall, so the bubble doesn't jump when words arrive.
       sx={{ display: "flex", alignItems: "center", gap: 0.5, height: "1.5em" }}
     >
