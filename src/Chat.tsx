@@ -529,6 +529,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       // Set once the model has to stop using tools; it gets one more turn,
       // without them, to answer from what it has.
       let stopReason: string | null = null;
+      // A planning turn's job is done once a plan lands. Asked to go on, the
+      // model rewrote it instead: 16 update_plan calls in one turn, each
+      // reworded, so the repeat guard never fired.
+      let planned = false;
       for (let round = 0; ; round++) {
         const lastTurn: boolean = stopReason !== null;
         const reply: ChatMessage = { role: "assistant", content: "", reasoning: "", ...tag };
@@ -696,6 +700,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               result =
                 "Proposed, not made: the user sees your change next to the plan and decides. Tell them what you changed and why.";
             } else if (steps) changePlan(steps);
+            if (steps && planning) planned = true;
           }
           lastToolResults.push(history.length);
           history = [
@@ -710,6 +715,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             },
           ];
           setMessages([...forgotten, ...history]);
+        }
+        if (planned) {
+          ok = true;
+          break;
         }
         if (round === MAX_TOOL_ROUNDS - 1) stopReason ??= `Stopped after ${MAX_TOOL_ROUNDS} rounds of tool calls.`;
       }

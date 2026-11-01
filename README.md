@@ -118,7 +118,12 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
 - What happens next is the model's choice:
   - **It calls `update_plan`**: the steps show as a checklist with **Run**,
     and nothing has changed yet. A new plan replaces the one before it,
-    except that a step with exactly the same text keeps its status.
+    except that a step with exactly the same text keeps its status. The
+    turn ends as soon as the plan lands, with no reply after it: told to go
+    on, a small model kept rewording its plan instead (16 `update_plan`
+    calls in one turn, each slightly different, so the repeat guard never
+    fired). A call the plan tool refuses (say, over 12 steps) doesn't end
+    the turn, so the model can try again.
   - **It answers instead**, which is what it should do for a question: you
     get the answer and no plan. A small model may still plan something
     simple, or answer something it should have planned.
