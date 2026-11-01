@@ -251,7 +251,7 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
 - **Stopped or failed**: if you press **Stop**, or the reply fails, the step
   goes back to pending (with "The reply failed: …" if it did) and the plan
   stops. **Continue** picks it up again.
-- While a plan runs, you can't send messages or switch chats.
+- While a plan runs, you can't send messages or switch sessions.
 
 ### Who marks a step done
 
@@ -333,7 +333,7 @@ step that was running when the page closed comes back as pending.
 
 ## Features
 
-- **Saved sessions**: each chat is saved to `~/.llama-mui/chats/` a moment after
+- **Saved sessions**: each session is saved to `~/.llama-mui/chats/` a moment after
   it changes, so reloading the page reopens it. The **Sessions** panel on the
   left lists them newest first; click one to switch, **+** starts a new session,
   and the trash icon deletes one.
