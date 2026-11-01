@@ -274,6 +274,10 @@ step that was running when the page closed comes back as pending.
 - Streaming replies with a Stop button. Each step of a reply (thinking, tool
   calls) shows how long it took; hover for token counts. Hide the steps in
   **Settings → Chat** to see just the answers.
+- The chat follows new output while you're at the bottom. Scroll up to read
+  back, even while a reply streams, and it stays put; a down arrow at the
+  bottom jumps to the latest and follows again, as does scrolling back down or
+  sending a message.
 - While a reply runs, a counter next to the waiting dots shows how long it's
   taken, with the speed it's streaming at; during a plan run it's on the plan
   card. A finished reply keeps the total in small print, for example

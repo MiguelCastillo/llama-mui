@@ -17,6 +17,7 @@ import {
   DialogContentText,
   DialogTitle,
   Divider,
+  Fab,
   FormControlLabel,
   IconButton,
   LinearProgress,
@@ -47,6 +48,7 @@ import SearchOffIcon from "@mui/icons-material/SearchOff";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import { keyframes } from "@mui/material/styles";
 import {
   type ChatMessage,
@@ -274,7 +276,44 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     saveFlag(TOOLBAR_KEY, open);
   };
   const [abort, setAbort] = useState<AbortController | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Whether the chat follows new output: while you're at the bottom. Scrolling
+  // up stops it, so you can read back while a reply streams (it used to pull
+  // you down on every token); scrolling back down, the arrow, or sending
+  // starts it again. The ref is for the scroll effect, which runs per token.
+  const [following, setFollowingState] = useState(true);
+  const followingRef = useRef(true);
+  const setFollowing = (on: boolean) => {
+    followingRef.current = on;
+    setFollowingState(on);
+  };
+  const lastScrollTop = useRef(0);
+  const fromBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight;
+  // Only a scroll up stops following. Output landing and the trackpad's bounce
+  // at the end change the distance from the bottom too, and judging by that
+  // alone flipped following off and on while you scrolled down.
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const up = el.scrollTop < lastScrollTop.current - 1;
+    lastScrollTop.current = el.scrollTop;
+    if (up && fromBottom(el) > 80) {
+      if (followingRef.current) setFollowing(false);
+    } else if (fromBottom(el) < 80 && !followingRef.current) setFollowing(true);
+  };
+  // Moves only the chat box (scrollIntoView moved the page too), and only when
+  // it isn't at the bottom yet: reasoning tokens update the messages dozens of
+  // times a second with nothing new on screen, and each scroll was a jitter.
+  const stickToBottom = () => {
+    const el = scrollRef.current;
+    if (!el || fromBottom(el) <= 1) return;
+    el.scrollTop = el.scrollHeight;
+    lastScrollTop.current = el.scrollTop;
+  };
+  const toBottom = () => {
+    setFollowing(true);
+    stickToBottom();
+  };
 
   // The saved chat this is, and the list for the chats panel. Nothing is
   // saved until the open session has loaded, so an empty screen can't
@@ -363,6 +402,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const openSession = (id: string, saveFirst = true) => {
     if (abort || planRunningRef.current) return;
     if (saveFirst) saveNow();
+    setFollowing(true);
     setSessionId(id);
     saveSessionId(id);
     savedKey.current = "";
@@ -455,8 +495,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .finally(() => setOfferThink(false));
   const toolCount = toolContext.definitions.length;
 
+  // Not smooth: an animation per token never caught up, and fought the user.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (followingRef.current) stickToBottom();
   }, [messages, pending]);
 
   const attach = (a: Attachment) => setAttachments((as) => (as.some((x) => x.path === a.path) ? as : [...as, a]));
@@ -480,6 +521,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const text = input.trim();
     if (!text || !model || !connector || abort || planRunning) return;
     setInput("");
+    toBottom();
     reply(text, messages, { planning: planOn });
   };
 
@@ -1094,7 +1136,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       </Dialog>
 
       {/* Top padding keeps the first messages clear of the toolbar. */}
-      <Box sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3 }}>
+      <Box ref={scrollRef} onScroll={onScroll} sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3 }}>
         <Container maxWidth={false}>
           <Stack spacing={2}>
             {connector === null ? (
@@ -1143,9 +1185,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             )}
             {pending && <PendingPrompt ask={pending.ask} onDecide={pending.decide} />}
             {error && <Alert severity="error">{error}</Alert>}
-            <div ref={bottomRef} />
           </Stack>
         </Container>
+        {/* Sticky with no height: it floats over the bottom of the chat
+            without adding space under the last message. */}
+        {!following && messages.length > 0 && (
+          <Box sx={{ position: "sticky", bottom: 16, height: 0, display: "flex", justifyContent: "center" }}>
+            <Tooltip title="Jump to the latest and keep following">
+              <Fab size="small" color="primary" onClick={toBottom} sx={{ mt: -5 }} aria-label="Jump to the latest">
+                <KeyboardArrowDownIcon />
+              </Fab>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
 
       <Paper square elevation={3} sx={{ py: 2 }}>
