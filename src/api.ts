@@ -88,11 +88,15 @@ export interface ChatMessage {
   // `serverTps` is llama.cpp's own generation speed, for the last round. A big
   // gap means the server was slow to deliver, not the model to generate.
   took?: { ms: number; clientTps?: number; serverTps?: number };
-  // Instructions sent to the model after this message's text, but not shown:
+  // Instructions sent to the model after this message's text, shown only on request:
   // the planning note on a message that gets a planning turn. It's saved with
   // the message, so every later request sends the same text and llama.cpp's
   // prompt cache keeps matching (see PLANNING_NOTE).
   note?: string;
+  // On a user message: a chat update ("Chat update: …", see chatUpdate in
+  // server/tools.ts), sent before `note` when it changed since the last one.
+  // Saved for the same reason as `note`; shown only on request.
+  update?: string;
 }
 
 export interface StepStats {
@@ -112,7 +116,7 @@ function toWire(m: ChatMessage) {
       tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments } })),
     };
   }
-  return { role: m.role, content: m.note ? `${m.content}\n\n${m.note}` : m.content };
+  return { role: m.role, content: [m.content, m.update, m.note].filter(Boolean).join("\n\n") };
 }
 
 export interface Connector {
@@ -304,17 +308,24 @@ export interface ToolGroup {
 export const getTools = () => call<{ groups: ToolGroup[] }>("GET", "/api/tools");
 export const setToolEnabled = (name: string, enabled: boolean) => call("PUT", `/api/tools/${name}`, { enabled });
 
+// The definitions and system prompt are the same in every chat; see
+// toolsSystemPrompt in server/tools.ts.
 export interface ToolContext {
-  // Definitions of the tools that are on and ready in this chat, for the model.
+  // Definitions of every tool, for the model, including ones that are off.
   definitions: unknown[];
-  // Guidance for those tools, to send as the system message; null if none.
+  // Guidance for the tools, to send as the system message.
   systemPrompt: string | null;
+  // The tools that are on.
+  offered: string[];
+  // What's attached and what's off, for a ChatMessage's `update`.
+  update: string;
 }
 
 // What to offer the model in a chat with these attachments. Tool definitions
 // come from the server so they match what it can run.
-export const getToolContext = (attachments: string[]) =>
-  call<ToolContext>("POST", "/api/tools/context", { attachments });
+// `promptDir`: the working directory the session's system prompt names.
+export const getToolContext = (attachments: string[], promptDir: string | null) =>
+  call<ToolContext>("POST", "/api/tools/context", { attachments, promptDir });
 // Something a tool wants to do that the user approves first: a change to a
 // file, or a shell command.
 export type Approval =
@@ -370,6 +381,10 @@ export interface Session {
   planAnchor?: string | null;
   // Finished plans, each left where it was written when a new one came.
   pastPlans?: PastPlan[];
+  // The working directory the system prompt names, fixed at the session's
+  // first message so the system prompt never changes (see Chat.tsx). Missing
+  // until then, and in older chats.
+  promptDir?: string | null;
 }
 
 export interface PastPlan {

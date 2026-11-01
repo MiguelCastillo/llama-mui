@@ -88,7 +88,7 @@ const writeTextFile: ToolSpec = {
     {
       type: "object",
       properties: {
-        path: { type: "string", description: "Absolute path of the file." },
+        path: { type: "string", description: "Path of the file, absolute or relative to the working directory." },
         content: { type: "string", description: "The complete new content of the file." },
       },
       required: ["path", "content"],
@@ -119,7 +119,7 @@ const editTextFile: ToolSpec = {
     {
       type: "object",
       properties: {
-        path: { type: "string", description: "Absolute path of the file." },
+        path: { type: "string", description: "Path of the file, absolute or relative to the working directory." },
         old_text: { type: "string", description: "The exact text to replace." },
         new_text: { type: "string", description: "The text to put in its place." },
         replace_all: { type: "boolean", description: "Replace every occurrence. Default false." },

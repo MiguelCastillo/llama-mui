@@ -50,6 +50,7 @@ import SearchOffIcon from "@mui/icons-material/SearchOff";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
+import StickyNote2OutlinedIcon from "@mui/icons-material/StickyNote2Outlined";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import { keyframes } from "@mui/material/styles";
@@ -233,6 +234,18 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
   // Files and folders this chat's disk tools may read; New chat clears them.
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // The working directory: the first attached folder (Chat settings moves
+  // another one first). Sent first, where the server looks for it.
+  const workingDir = attachments.find((a) => a.kind === "folder")?.path ?? null;
+  const attachedPaths = (as: Attachment[]) => {
+    const dir = as.find((a) => a.kind === "folder")?.path;
+    return [...(dir ? [dir] : []), ...as.map((a) => a.path).filter((p) => p !== dir)];
+  };
+  // The working directory the system prompt names. Fixed by the session's
+  // first message: after that a change goes in a chat update, so the system
+  // prompt stays the same. Until then (undefined) it follows workingDir.
+  const [fixedPromptDir, setFixedPromptDir] = useState<string | null | undefined>(undefined);
+  const promptDir = fixedPromptDir === undefined ? workingDir : fixedPromptDir;
   // What a reply is waiting on the user for: a path the model asked for that
   // isn't attached, or a change to approve. Cleared once they answer.
   const [pending, setPending] = useState<{
@@ -240,7 +253,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     decide: (answer: Answer) => void;
   } | null>(null);
   // What to offer the model given those attachments and Settings → Tools.
-  const [toolContext, setToolContext] = useState<ToolContext>({ definitions: [], systemPrompt: null });
+  const [toolContext, setToolContext] = useState<ToolContext>({
+    definitions: [],
+    systemPrompt: null,
+    offered: [],
+    update: "",
+  });
   const [error, setError] = useState<string | null>(null);
   // Failure of the last reply only; see retry().
   const [failed, setFailed] = useState<string | null>(null);
@@ -355,7 +373,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What was last saved or loaded, so opening a chat doesn't save it again
   // (which would move it to the top of the list).
   const savedKey = useRef("");
-  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planAnchor, s.pastPlans]);
+  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planAnchor, s.pastPlans, s.promptDir]);
 
   const applySession = (s: Session) => {
     // Saved before plans had a place: pinned after the chat's last message as
@@ -368,6 +386,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setMessages(s.messages);
     setContextStart(s.contextStart);
     setAttachments(s.attachments);
+    setFixedPromptDir(s.promptDir);
     setUsage(s.usage);
     setFailed(s.failed ?? null);
     // A step that was running when the page went away didn't finish.
@@ -416,6 +435,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       planProposal,
       planAnchor,
       pastPlans,
+      promptDir: fixedPromptDir,
     };
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -430,7 +450,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   useEffect(() => {
     const timer = setTimeout(saveNow, 800);
     return () => clearTimeout(timer);
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planAnchor, pastPlans]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planAnchor, pastPlans, fixedPromptDir]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -444,6 +464,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setUsage(null);
     setContextStart(0);
     setAttachments([]);
+    setFixedPromptDir(undefined);
     setFailed(null);
     changePlan(null);
     setPlanProposal(null);
@@ -574,20 +595,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Settings → Tools or the attachments may have changed what's available.
   useEffect(() => {
     if (!visible) return;
-    getToolContext(attachments.map((a) => a.path))
+    getToolContext(attachedPaths(attachments), promptDir)
       .then(setToolContext)
       .catch((e) => setError(e.message));
-  }, [visible, attachments]);
+  }, [visible, attachments, promptDir]);
 
   // On only when the user wants tools and some are ready in this chat.
-  const toolsOn = toolsWanted && toolContext.definitions.length > 0;
+  const toolsOn = toolsWanted && toolContext.offered.length > 0;
   const busy = !!abort || planRunning;
   useEffect(() => {
     setBusySince((since) => (busy ? (since ?? Date.now()) : null));
   }, [busy]);
 
-  const toolName = (d: unknown) => (d as { function: { name: string } }).function.name;
-  const canPlan = toolsOn && toolContext.definitions.some((d) => toolName(d) === "update_plan");
+  const canPlan = toolsOn && toolContext.offered.includes("update_plan");
   const planOn = canPlan && planWanted;
   const thinkOn = !!(modelSettings?.models[model] ?? modelSettings?.defaults)?.think;
   // Switching Tools on with Think off asks whether to turn Think on: without
@@ -600,7 +620,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .then((saved) => setModelSettings((s) => s && { ...s, models: { ...s.models, [model]: saved } }))
       .catch((e) => setError(e.message))
       .finally(() => setOfferThink(false));
-  const toolCount = toolContext.definitions.length;
+  const toolCount = toolContext.offered.length;
 
   // Not smooth: an animation per token never caught up, and fought the user.
   useEffect(() => {
@@ -656,14 +676,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const connectorId = connector.id;
     // Fixed for this reply, even if the user changes attachments meanwhile;
     // only paths the user allows mid-reply are added.
-    let attached = attachments.map((a) => a.path);
+    let attached = attachedPaths(attachments);
+    if (fixedPromptDir === undefined) setFixedPromptDir(workingDir);
     const forgotten = before.slice(0, contextStart);
     // A planning turn's instructions travel with the message as its `note`, not
     // in the system prompt: changing the system prompt (or the tools) made
     // llama.cpp reprocess the whole chat, about a minute on a 40k-token one.
+    // Attachments and tools that are off go the same way, as `update`, and
+    // only when they changed since the last one the model saw.
+    const seen = [...before.slice(contextStart)].reverse().find((m) => m.update)?.update;
+    const update = toolsOn && toolContext.update !== seen ? { update: toolContext.update } : {};
     let history: ChatMessage[] = [
       ...before.slice(contextStart),
-      { role: "user", content: text, ...(planning && { note: PLANNING_NOTE }), ...tag },
+      { role: "user", content: text, ...update, ...(planning && { note: PLANNING_NOTE }), ...tag },
     ];
     setError(null);
     setFailed(null);
@@ -941,7 +966,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       paths.map(async (path) => {
         const call = { id: "check", name: "read_file", arguments: JSON.stringify({ path, max_lines: Number.MAX_SAFE_INTEGER }) };
         try {
-          const out = await runTool(call, { chatId: `${sessionId}:check`, attachments: attachments.map((a) => a.path) });
+          const out = await runTool(call, { chatId: `${sessionId}:check`, attachments: attachedPaths(attachments) });
           if (!("result" in out)) return { path, error: "it isn't attached to this chat" };
           if (out.result.startsWith("Error:")) return { path, error: out.result.slice(7).trim() };
           // After read_file's "<path> (lines 1-N of N)" line.
@@ -1540,6 +1565,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               attachments={attachments}
               onAttach={attach}
               onDetach={(p) => setAttachments((as) => as.filter((x) => x.path !== p))}
+              onMakeWorkingDir={(p) =>
+                setAttachments((as) => [...as.filter((x) => x.path === p), ...as.filter((x) => x.path !== p)])
+              }
             />
             <TextField
               fullWidth
@@ -1624,10 +1652,14 @@ function MessageBubble({
   // This message's own choice of formatted or raw text; null follows
   // Settings → Chat. Declared before the early return below, as hooks must be.
   const [override, setOverride] = useState<boolean | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
   const showMarkdown = override ?? renderMarkdown;
   // The finished reply's time and speed, kept on its last message.
   const took = [...parts].reverse().find((m) => m.took)?.took;
   const isUser = parts[0].role === "user";
+  // What was sent after this message without being shown: its chat update
+  // and note (see README, "What the model is told"). Opened on request.
+  const hidden = isUser ? [parts[0].update, parts[0].note].filter(Boolean).join("\n\n") : "";
   const last = parts[parts.length - 1];
   // The waiting dots: shown while the reply's newest turn has nothing yet,
   // which is from sending until the first text, thinking or tool call, and
@@ -1730,8 +1762,29 @@ function MessageBubble({
           ) : (
             waiting && <TypingDots />
           )}
+          {hidden && showHidden && (
+            <Typography
+              variant="body2"
+              component="div"
+              sx={{ whiteSpace: "pre-wrap", opacity: 0.8, borderTop: 1, borderColor: "currentColor", pt: 1 }}
+            >
+              {hidden}
+            </Typography>
+          )}
           {!streaming && parts.some((m) => m.content) && (
             <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 1, mb: -1, mr: -1 }}>
+              {hidden && (
+                <Tooltip title={showHidden ? "Hide what was sent with this message" : "Show what was sent with this message, unseen"}>
+                  <IconButton
+                    size="small"
+                    onClick={() => setShowHidden(!showHidden)}
+                    aria-pressed={showHidden}
+                    sx={{ color: "inherit" }}
+                  >
+                    <StickyNote2OutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
               {took && (
                 <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
                   {formatSeconds(took.ms)}

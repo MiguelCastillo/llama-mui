@@ -39,13 +39,19 @@ export const isInside = (child: string, root: string) =>
 export const isSettingsFile = (p: string) => p.startsWith(SETTINGS_FILE);
 
 // The path the model sent, made absolute: ~ expanded, "../" resolved.
+// The chat's working directory: its first attachment, if that's a folder.
+// Chat sends it first (see attachedPaths in Chat.tsx). Relative paths and
+// run_command use it, and the system prompt names it (see tools.ts).
+export async function workingDirOf(roots: string[]): Promise<string | null> {
+  return roots.length && (await stat(roots[0]).catch(() => null))?.isDirectory() ? roots[0] : null;
+}
+
 export async function toAbsolute(roots: string[], raw: unknown): Promise<{ given: string; abs: string }> {
   const given = expandHome(String(raw ?? "").trim());
   if (!given) throw new ToolError("path is required");
-  // With a single attached folder, relative paths are unambiguous; small
-  // models often send them.
   if (path.isAbsolute(given)) return { given, abs: path.resolve(given) };
-  if (roots.length === 1 && (await stat(roots[0])).isDirectory()) return { given, abs: path.resolve(roots[0], given) };
+  const dir = await workingDirOf(roots);
+  if (dir) return { given, abs: path.resolve(dir, given) };
   throw new ToolError(roots.length ? `Use an absolute path inside one of: ${roots.join(", ")}` : "Use an absolute path");
 }
 
@@ -156,7 +162,7 @@ const listDirectory: ToolSpec = {
   definition: fn(
     "list_directory",
     "List the files and folders in a directory. Call it with no path to see what's attached to this chat.",
-    { type: "object", properties: { path: { type: "string", description: "Absolute path of the directory." } } },
+    { type: "object", properties: { path: { type: "string", description: "Path of the directory, absolute or relative to the working directory." } } },
   ),
   async run({ attachments: roots }, args) {
     if (!args.path) {
@@ -192,7 +198,7 @@ const readTextFile: ToolSpec = {
     {
       type: "object",
       properties: {
-        path: { type: "string", description: "Absolute path of the file." },
+        path: { type: "string", description: "Path of the file, absolute or relative to the working directory." },
         start_line: { type: "integer", description: "First line to return, starting at 1." },
         max_lines: { type: "integer", description: `How many lines to return (default ${DEFAULT_READ_LINES}).` },
       },

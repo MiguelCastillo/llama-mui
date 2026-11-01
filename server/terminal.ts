@@ -107,7 +107,7 @@ const runCommand: ToolSpec = {
         command: { type: "string", description: "The command, as you'd type it in a terminal." },
         cwd: {
           type: "string",
-          description: "Absolute path of the folder to run in. Defaults to the first folder attached to the chat.",
+          description: "Folder to run in, absolute or relative to the working directory. Defaults to the working directory.",
         },
       },
       required: ["command"],

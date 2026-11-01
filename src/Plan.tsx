@@ -31,10 +31,14 @@ export const PLANNING_TOOLS = new Set([
   "grep",
   "locate_path",
 ]);
+// A note: an instruction for one turn, sent after the message's text (see
+// README, "What the model is told"). A question comes first: led by "only
+// plan", the model opened its answers to questions with "This is a question,
+// not a file change request", replying to a note the user never sees.
 export const PLANNING_NOTE =
-  "Right now, only plan. Read what you need, then call update_plan with the steps for this request, and " +
-  "stop. Don't change any files yet: the user reviews the plan and runs it. If the request doesn't change " +
-  "files, answer it directly instead.";
+  "If this message is a question or otherwise doesn't change files, just answer it, and don't mention plans. " +
+  "If it asks for changes to files, only plan for now: read what you need, then call update_plan with the " +
+  "steps, and stop. Don't change any files yet: the user reviews the plan and runs it.";
 
 // The plan from an update_plan call's arguments, merged with the plan so far.
 // Only chat's check ticks a step off, so a step keeps its id, status and note

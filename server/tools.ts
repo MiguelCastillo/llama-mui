@@ -1,7 +1,7 @@
 // Registry of the tools the model can call in chat, grouped for Settings →
 // Tools. Tools are on unless the user turned them off.
 
-import { DISK_TOOLS, checkAttachments } from "./disk.ts";
+import { DISK_TOOLS, checkAttachments, workingDirOf } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { load, save } from "./store.ts";
 import {
@@ -25,9 +25,9 @@ interface Group {
   id: string;
   label: string;
   description: string;
-  // What the model should know to use this group's tools well. Added to the
-  // system prompt while any of them are offered.
-  instructions: (ctx: ToolContext) => string;
+  // What the model should know to use this group's tools well. Part of the
+  // system prompt, which never changes (see toolsSystemPrompt).
+  instructions: string;
 }
 
 const GROUPS: Group[] = [
@@ -37,7 +37,7 @@ const GROUPS: Group[] = [
     description:
       "Before changing files, the model writes the steps as a checklist. Chat runs one step per turn and " +
       "checks each one, so a step that isn't really done shows up instead of a reply that says it is.",
-    instructions: () => planInstructions,
+    instructions: planInstructions,
   },
   {
     id: "disk",
@@ -45,11 +45,10 @@ const GROUPS: Group[] = [
     description:
       "Read-only access to the files and folders attached to a chat (Chat settings, next to the message box). " +
       "When the model asks for anything else, you're asked to allow it first. Nothing here can change, delete or run files.",
-    instructions: (ctx) =>
-      (ctx.attachments.length
-        ? `The user attached these files and folders to this chat:\n${ctx.attachments.map((d) => `- ${d}`).join("\n")}\n`
-        : "Nothing is attached to this chat yet.\n") +
-      `If the user asks about ${ctx.attachments.length ? "other " : ""}files or folders on this computer and gives ` +
+    instructions:
+      "Relative paths are relative to the working directory, named at the end of this prompt. Other files and " +
+      'folders the user attached are in "Chat update" notes on their messages; the latest one is current. ' +
+      "If the user asks about other files or folders on this computer and gives " +
       "their absolute path, call the disk tools with it: the user is asked to allow it. If they name one without " +
       'its path ("my notes", "the llama-mui project"), don\'t guess paths: call locate_path and they\'ll pick it. ' +
       "Mention which files you looked at.",
@@ -60,7 +59,7 @@ const GROUPS: Group[] = [
     description:
       "Create and change files in what's attached to a chat. Each change shows as a diff, and nothing is " +
       "written until you approve it. Files can't be deleted or run.",
-    instructions: () =>
+    instructions:
       "You can create and change files with write_file and edit_file. The user sees each change and approves " +
       "it before it's written; if they don't, ask what they'd like instead. Read a file before editing it, and " +
       "use edit_file for changes to part of a file.",
@@ -71,7 +70,7 @@ const GROUPS: Group[] = [
     description:
       "Run shell commands the model suggests, in a folder attached to a chat. You see each command and approve " +
       "it before it runs. Commands run as you, with your network access and credentials (git, gh and so on).",
-    instructions: () =>
+    instructions:
       "You can run shell commands with run_command, for example git, gh or npm; it runs on the user's computer, " +
       "which has network access and their credentials even though you don't. The user approves each command " +
       "before it runs. Run one command at a time, explain what it's for, and never run anything destructive " +
@@ -83,7 +82,7 @@ const GROUPS: Group[] = [
     description:
       "Search the web through DuckDuckGo, and open web pages. Search queries go to DuckDuckGo; pages are fetched " +
       "from this machine, so they can include ones on your network.",
-    instructions: () =>
+    instructions:
       "You can search the web with web_search and read a page with fetch_url. Use them for current events, recent " +
       "releases and facts you aren't sure of, and always when the user asks you to search; don't answer those " +
       "from memory. Search first, then open the most relevant results to read them. Cite the URLs you used.",
@@ -94,14 +93,38 @@ const TOOLS: ToolSpec[] = [...PLAN_TOOLS, ...DISK_TOOLS, ...WRITE_TOOLS, ...TERM
 
 const isOffered = (ctx: ToolContext, t: ToolSpec) => !ctx.store.disabledTools.includes(t.name);
 
-// The system prompt for the tools offered in this chat, or null if none are.
-function toolsSystemPrompt(ctx: ToolContext): string | null {
-  const groups = GROUPS.filter((g) => TOOLS.some((t) => t.group === g.id && isOffered(ctx, t)));
-  if (groups.length === 0) return null;
+// The system prompt: what holds for the whole session. It never changes in a
+// session, since it's the start of every request and a change made llama.cpp
+// reprocess the whole chat (about a minute for 40k tokens). The tool list, also
+// at the start, lists every tool for the same reason; one that's off is refused
+// when it's called (runTool). See README, "What the model is told".
+//
+// Everything but the last line is the same in every session, so a new one
+// reuses another's cached start (the tool list comes first, then this). Only
+// the working directory differs, so it must stay last: anything per-session
+// earlier would make each new session reprocess the rest.
+function toolsSystemPrompt(promptDir: string | null): string {
   return [
     "You have tools. Use one when it helps answer the question; otherwise answer directly.",
-    ...groups.map((g) => g.instructions(ctx)),
+    ...GROUPS.map((g) => g.instructions),
+    promptDir ? `Working directory: ${promptDir}` : "There's no working directory: use absolute paths.",
   ].join("\n\n");
+}
+
+// A chat update: what changed in the session since its system prompt, which
+// chat sends after the user's next message when it differs from the last one
+// (see `update` on ChatMessage). The working directory, if it's not the one
+// the system prompt names; the other attachments; and tools that are off.
+async function chatUpdate(ctx: ToolContext, promptDir: string | null): Promise<string> {
+  const dir = await workingDirOf(ctx.attachments);
+  const others = ctx.attachments.filter((a) => a !== dir);
+  const off = TOOLS.filter((t) => !isOffered(ctx, t)).map((t) => t.name);
+  return [
+    "Chat update:",
+    ...(dir !== promptDir ? [dir ? `The working directory is now ${dir}.` : "There's no working directory now."] : []),
+    others.length ? `Also attached:\n${others.map((d) => `- ${d}`).join("\n")}` : "Nothing else is attached.",
+    ...(off.length ? [`Turned off in Settings, so calls to them fail: ${off.join(", ")}.`] : []),
+  ].join("\n");
 }
 
 const contextFor = async (body: any): Promise<ToolContext> => ({
@@ -169,10 +192,16 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
 
   // For chat: what to send the model given this chat's attachments.
   if (parts[1] === "context" && method === "POST") {
-    const ctx = await contextFor(await readJson(req));
+    const body = await readJson(req);
+    const ctx = await contextFor(body);
+    // The working directory the session's system prompt names: fixed at its
+    // first message (see promptDir in Chat.tsx), so it can differ from now's.
+    const promptDir = typeof body.promptDir === "string" ? body.promptDir : null;
     sendJson(res, 200, {
-      definitions: TOOLS.filter((t) => isOffered(ctx, t)).map((t) => t.definition),
-      systemPrompt: toolsSystemPrompt(ctx),
+      definitions: TOOLS.map((t) => t.definition),
+      systemPrompt: toolsSystemPrompt(promptDir),
+      offered: TOOLS.filter((t) => isOffered(ctx, t)).map((t) => t.name),
+      update: await chatUpdate(ctx, promptDir),
     });
     return true;
   }

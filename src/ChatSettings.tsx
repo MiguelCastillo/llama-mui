@@ -27,6 +27,7 @@ import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
 import InsertDriveFileOutlinedIcon from "@mui/icons-material/InsertDriveFileOutlined";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import TuneIcon from "@mui/icons-material/Tune";
+import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
 import { type Attachment, checkAttachment, pickAttachments } from "./api";
 
 const SOURCE_LABEL: Record<Attachment["source"], string> = {
@@ -46,10 +47,12 @@ export default function ChatSettings({
   attachments,
   onAttach,
   onDetach,
+  onMakeWorkingDir,
 }: {
   attachments: Attachment[];
   onAttach: (a: Attachment) => void;
   onDetach: (path: string) => void;
+  onMakeWorkingDir: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [section, setSection] = useState<SectionId>("attachments");
@@ -105,7 +108,12 @@ export default function ChatSettings({
           )}
           <Box sx={{ flexGrow: 1, minWidth: 0 }}>
             {section === "attachments" && (
-              <AttachmentsSection attachments={attachments} onAdd={onAttach} onRemove={onDetach} />
+              <AttachmentsSection
+                attachments={attachments}
+                onAdd={onAttach}
+                onRemove={onDetach}
+                onMakeWorkingDir={onMakeWorkingDir}
+              />
             )}
           </Box>
         </DialogContent>
@@ -116,16 +124,20 @@ export default function ChatSettings({
 
 // This chat's files and folders, each marked with how it got there. More can
 // be picked in the system dialog, or typed as a path, which the server checks
-// first (it must exist; ~ works).
+// first (it must exist; ~ works). The first folder is the working directory
+// (see workingDirOf in server/disk.ts); making another one it moves it first.
 function AttachmentsSection({
   attachments,
   onAdd,
   onRemove,
+  onMakeWorkingDir,
 }: {
   attachments: Attachment[];
   onAdd: (a: Attachment) => void;
   onRemove: (path: string) => void;
+  onMakeWorkingDir: (path: string) => void;
 }) {
+  const workingDir = attachments.find((a) => a.kind === "folder")?.path;
   const [path, setPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   // True while the system dialog is open.
@@ -152,7 +164,8 @@ function AttachmentsSection({
         <Typography variant="h6">Attachments</Typography>
         <Typography variant="body2" color="text.secondary">
           The model can read these, folders with their subfolders, and asks you before changing them or reading
-          anything else.
+          anything else. The working directory is where relative paths and commands start; the first folder you
+          attach is it, unless you pick another.
         </Typography>
       </Box>
       {attachments.length === 0 ? (
@@ -174,6 +187,17 @@ function AttachmentsSection({
                   {a.path}
                 </Typography>
               </Box>
+              {a.path === workingDir ? (
+                <Chip size="small" color="primary" label="Working directory" sx={{ flexShrink: 0 }} />
+              ) : (
+                a.kind === "folder" && (
+                  <Tooltip title="Make this the working directory">
+                    <IconButton size="small" onClick={() => onMakeWorkingDir(a.path)} aria-label={`Make ${a.path} the working directory`}>
+                      <HomeOutlinedIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )
+              )}
               <Chip
                 size="small"
                 variant="outlined"

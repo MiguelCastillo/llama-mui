@@ -29,7 +29,7 @@ browser.
 
 **Tools** are things the model can do while answering, grouped by what they
 reach and switched on or off one by one (`server/tools.ts`). With the
-**Tools** switch on in chat, the model gets every tool that's on and ready.
+**Tools** switch on in chat, the model can use every tool that's on.
 That switch starts off, and your browser remembers where you leave it. Tool
 calls and their results show in the reply.
 
@@ -47,7 +47,10 @@ The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 expressions over file contents). They read only what's attached to the chat.
 **Chat settings** (the sliders icon next to the message box) lists the chat's attachments, each
 marked with whether you added it or the model asked for it, and a field to
-attach more; a new chat starts with nothing attached. When the model asks for
+attach more; a new chat starts with nothing attached. The first folder you
+attach is the chat's **working directory**, marked there: relative paths and
+`run_command` start in it, and the system prompt names it. The home icon on
+another folder makes that one the working directory. When the model asks for
 a path that isn't attached, the reply pauses on an Allow / Deny prompt;
 allowing attaches it for the rest of the chat, and denying tells the model no.
 When nothing exists at the path (the model guessed), the prompt says so and
@@ -92,7 +95,38 @@ text, with HTML turned into plain text, 20,000 characters at a time. Pages are
 fetched from this machine, so the model can reach anything it can, including
 your local network.
 
-Each group adds a few lines to the system prompt while its tools are on.
+### What the model is told
+
+Besides your messages and its own replies, the model is told things in three
+layers. Each has one rule, and new things go in whichever fits. The rules come
+from llama.cpp's prompt cache: a request whose start matches what the server
+already processed only processes the rest, so a change near the start makes it
+reprocess everything after it (measured: about a minute for a 40k-token chat).
+
+| Layer | What it holds | When it's sent | How long it holds |
+|---|---|---|---|
+| **System prompt** | What holds for the whole session: how to use each tool group, the plan rules, the working directory | First in every request, and never changed in a session | The whole session |
+| **Chat update** | Facts about the session that changed since: other attachments, a new working directory, tools turned off | After your next message, only when the facts changed | Until the next chat update replaces it |
+| **Note** | An instruction for one turn: the planning note (see [How plans work](#how-plans-work)) | After the message it's for | That turn only |
+
+- **The system prompt** (`toolsSystemPrompt` in `server/tools.ts`) is the
+  same in every session except its last line, the working directory, so a new
+  session reuses another's cached start; that line has to stay last. The tool
+  list, which comes before it, lists every tool, even ones that are off, and a
+  call to one that's off fails with "turned off in Settings". The working
+  directory is fixed by the session's first message: if you pick another one
+  later, a chat update says so.
+- **Chat updates** (`chatUpdate` in `server/tools.ts`) and **notes**
+  (`PLANNING_NOTE` in `src/Plan.tsx`) both go after your message's text and
+  aren't shown, and both are saved with the message, so later requests send
+  the same text and keep matching the cache. They differ in meaning: a chat
+  update is a fact the next one replaces ("Also attached: a, b", later "Also
+  attached: a, b, c"), while a note applies only to its own turn.
+- Attaching a folder mid-chat used to rewrite the system prompt and reprocess
+  the whole chat. As a chat update it costs only the new message: measured,
+  144 tokens processed.
+- To see what was sent with one of your messages, click the note icon under
+  it.
 
 ## How plans work
 
@@ -109,10 +143,13 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
 - With it on, **every message you send** gets a planning turn first. Chat
   decides that, not the model: the model doesn't get to choose whether to
   have one.
-- Your message gets a note, sent to the model after it but not shown: "Right
-  now, only plan. Read what you need, then call update_plan with the steps
-  for this request, and stop. Don't change any files yet… If the request
-  doesn't change files, answer it directly instead." In that turn the model
+- Your message gets a note, sent to the model after it but not shown: "If
+  this message is a question or otherwise doesn't change files, just answer
+  it, and don't mention plans. If it asks for changes to files, only plan for
+  now: read what you need, then call update_plan with the steps, and stop.
+  Don't change any files yet…" The question case comes first: led by "only
+  plan", the model began its answers with "This is a question, not a file
+  change request", replying to a note you never see. In that turn the model
   can only use `update_plan` and the read tools (`list_directory`,
   `read_file`, `find_files`, `grep`, `locate_path`): it's offered every tool,
   but the others are refused when called, so it can't change anything.
