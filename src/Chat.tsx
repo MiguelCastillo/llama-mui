@@ -1191,7 +1191,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       </Dialog>
 
       {/* Top padding keeps the first messages clear of the toolbar. */}
-      <Box ref={scrollRef} onScroll={onScroll} sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3 }}>
+      <Box ref={scrollRef} onScroll={onScroll} sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3, position: "relative" }}>
         <Container maxWidth={false}>
           <Stack spacing={2}>
             {connector === null ? (
@@ -1203,8 +1203,22 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               </Stack>
             ) : (
               messages.length === 0 && (
-                <Typography color="text.secondary" sx={{ textAlign: "center", mt: 8 }}>
-                  Pick a model and say something. Unloaded models load on the first message, which takes a moment.
+                // Three quarters of the way down the chat area, near the message box:
+                // placed against the scrolling box (position: relative), so it stays
+                // in proportion at any window size.
+                <Typography
+                  variant="h3"
+                  sx={{
+                    position: "absolute",
+                    top: "75%",
+                    left: 0,
+                    right: 0,
+                    transform: "translateY(-50%)",
+                    textAlign: "center",
+                    fontWeight: 500,
+                  }}
+                >
+                  How can I help you?
                 </Typography>
               )
             )}
