@@ -318,6 +318,12 @@ step that was running when the page closed comes back as pending.
   small models like Qwen 9B rarely call tools, so switching **Tools** on with
   Think off asks whether to turn Think on, and **Settings → Tools** warns
   about models that have it off.
+  With it on, chat decides per request: a reply's first request thinks (where
+  the model decides what to do), later rounds after tool results don't, and
+  planning turns don't. A plan step's check still thinks. Qwen3.6 spent
+  minutes per planning turn thinking, nearly all of it between file reads,
+  and switching thinking per request doesn't cost anything in the server's
+  prompt cache.
 
 ## Models management
 

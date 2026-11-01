@@ -674,7 +674,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               toolsOn && !lastTurn && toolContext.systemPrompt
                 ? [{ role: "system", content: toolContext.systemPrompt }, ...history]
                 : history,
-            think: thinkOn,
+            // With Think on, only a reply's first request thinks, where the model
+            // decides what to do; after tool results it mostly carries that out.
+            // Planning turns don't think: they read and list steps. Qwen3.6 spent
+            // minutes per planning turn thinking, nearly all of it between file
+            // reads (594 characters before its first read, then 20k, 17k, 36k).
+            // Turning it off per request costs nothing in the prompt cache.
+            think: thinkOn && !planning && round === 0,
             // The same tools in every turn, planning included, so the prompt's
             // start stays the same for the cache; a planning turn refuses the
             // ones that change things when they're called (see below).
