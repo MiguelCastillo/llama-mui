@@ -123,7 +123,8 @@ export async function modelAdminRoutes({ req, res, parts, method, search }: Rout
     if (!query || query.trim() === "") {
       throw new HttpError(400, "Missing search query parameter 'q'");
     }
-    const hfUrl = `https://huggingface.co/api/models?search=${encodeURIComponent(query)}&filter=gguf&sort=downloads`;
+    // The 20 most downloaded: without a limit, Hugging Face returns up to 1,000.
+    const hfUrl = `https://huggingface.co/api/models?search=${encodeURIComponent(query)}&filter=gguf&sort=downloads&limit=20`;
     try {
       const hfRes = await fetch(hfUrl);
       if (!hfRes.ok) {

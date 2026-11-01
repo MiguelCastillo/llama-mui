@@ -308,16 +308,19 @@ step that was running when the page closed comes back as pending.
 
 **Settings → Models** shows the models currently on the selected llama server.
 Each model row displays:
-- The model id and its status (loaded/unloaded)
+- The model id and its status (loaded, loading, unloaded), and where it comes
+  from: "preset" (the server's preset file) or "cache" (downloaded)
 - The context it runs with, in tokens: what the server reports for a loaded
   model, or the `--ctx-size` it starts with. It's "n/a" when the server doesn't
   say: an unloaded model with no `ctx-size` in the server's presets starts with
   llama.cpp's default (4096), not the context the model was trained for.
-- A **Think** switch to enable reasoning mode for that model
-- **Load** / **Unload** buttons to load or unload models
 - A trash icon to delete a model the server downloaded (with confirmation).
   Models defined in the server's preset file can't be deleted, and a loaded one
   has to be unloaded first.
+- ▶ / ■ to load or unload it. The server does it in the background, so the
+  page asks again each second until the status changes.
+- A **Think** switch to enable reasoning mode for that model, explained right
+  under the list
 
 A model's context and other settings come from the server's preset file
 (`--models-preset`); the load API takes only the model's name. For a context
@@ -325,9 +328,12 @@ on every model, set it in the file's `[*]` section, for example
 `ctx-size = 131072`.
 
 You can also **Search Hugging Face** for GGUF models:
-1. Enter a model name (e.g., "llama-2", "mistral", "qwen") in the search box
-2. Click **Search** to find matching GGUF models from Hugging Face
-3. Select a model from the results to download it to the server
+1. Enter a model name (e.g., "llama-2", "mistral", "qwen") and press Enter or
+   **Search**
+2. The 20 most downloaded matching GGUF models show, each with its owner,
+   downloads and likes
+3. The download icon at the end of a result downloads it to the server
 4. The downloaded model appears in the model list and can be loaded/unloaded
 
-The search uses Hugging Face's API to find GGUF models sorted by downloads.
+The search goes through our server to Hugging Face's API. Its results don't
+include an author, so the owner comes from the model id ("owner/repo").

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   Alert,
-  Autocomplete,
   Box,
   Button,
   Chip,
@@ -26,6 +25,7 @@ import {
 } from "@mui/material";
 import SearchOutlinedIcon from "@mui/icons-material/SearchOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import DownloadIcon from "@mui/icons-material/Download";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import {
@@ -60,6 +60,8 @@ export default function ModelsSection() {
   const [deleting, setDeleting] = useState<string | null>(null);
   // Search results
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  // The search result whose download is being started, for its spinner.
+  const [downloading, setDownloading] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -147,6 +149,7 @@ export default function ModelsSection() {
   };
 
   const startDownload = async (result: SearchResult) => {
+    setDownloading(result.id);
     try {
       const connectors = await getConnectors();
       if (!connectors.activeId) throw new Error("No active connector");
@@ -162,6 +165,8 @@ export default function ModelsSection() {
       }
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setDownloading(null);
     }
   };
 
@@ -209,7 +214,11 @@ export default function ModelsSection() {
                     }
                     // n/a: unloaded and started without --ctx-size, so the
                     // server doesn't say until it's loaded (see contextSize).
-                    secondary={m.contextSize ? `${m.contextSize.toLocaleString()}-token context` : "Context n/a"}
+                    secondary={
+                      (m.contextSize ? `${m.contextSize.toLocaleString()}-token context` : "Context n/a") +
+                      // "preset": defined in the server's preset file; "cache": downloaded.
+                      (m.source ? ` · ${m.source}` : "")
+                    }
                   />
                   {/* Delete, then Load / Unload, then Think. Grey like the app's other
                       action icons (color means a state, like the "loaded" chip).
@@ -295,6 +304,15 @@ export default function ModelsSection() {
             </List>
           </Paper>
 
+          {/* Explains the Think switch on each model's row, so it sits right under them. */}
+          <Typography variant="body2" color="text.secondary">
+            <b>Think</b> (before answering) lets a reasoning model (like Qwen) work through the problem first; its
+            thoughts show in a collapsible panel above the reply. It helps with hard questions but is slower, and small
+            models can spend minutes on simple ones. Models whose chat template has no thinking mode ignore it. With it
+            off, small models usually skip the tools and answer from what they already know, so chat offers to turn it
+            on when you switch Tools on.
+          </Typography>
+
           {/* Search section */}
           <Paper variant="outlined">
             <Box sx={{ p: 2 }}>
@@ -305,6 +323,7 @@ export default function ModelsSection() {
                   placeholder="e.g. llama-2, mistral, qwen"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && searchQuery.trim() && !searching && handleSearch(searchQuery)}
                   sx={{ flex: 1, minWidth: 200 }}
                 />
                 <Button
@@ -322,43 +341,45 @@ export default function ModelsSection() {
               )}
               {searching && <CircularProgress sx={{ mt: 1 }} />}
               {searchResults && searchResults.length > 0 && (
-                <Autocomplete
-                  disablePortal
-                  options={searchResults}
-                  getOptionLabel={(option) => `${option.id}\n${option.author}`}
-                  isOptionEqualToValue={(option, value) => option.id === value.id}
-                  onChange={(_, value) => {
-                    if (value) {
-                      startDownload(value);
-                    }
-                  }}
-                  renderInput={(params) => (
-                    <TextField {...params} label="Select a model to download" />
-                  )}
-                  renderOption={(props, option) => (
-                    <Box component="li" {...props}>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <Typography variant="body2" sx={{ fontWeight: "bold" }}>
-                          {option.id}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          by {option.author}
-                        </Typography>
-                      </Box>
-                      {option.likes !== undefined && (
-                        <Typography variant="caption" color="text.secondary" sx={{ ml: 2 }}>
-                          {option.likes.toLocaleString()} likes
-                        </Typography>
-                      )}
-                      {option.downloads !== undefined && (
-                        <Typography variant="caption" color="text.secondary" sx={{ ml: 2 }}>
-                          {option.downloads.toLocaleString()} downloads
-                        </Typography>
-                      )}
-                    </Box>
-                  )}
-                  sx={{ mt: 1 }}
-                />
+                <List disablePadding sx={{ mt: 1 }}>
+                  {searchResults.map((r, i) => (
+                    <ListItem
+                      key={r.id}
+                      divider={i < searchResults.length - 1}
+                      disableGutters
+                      secondaryAction={
+                        <Tooltip title="Download to the server">
+                          <span>
+                            <IconButton
+                              size="small"
+                              edge="end"
+                              disabled={downloading !== null}
+                              onClick={() => startDownload(r)}
+                              aria-label={`Download ${r.id}`}
+                            >
+                              {downloading === r.id ? <CircularProgress size={16} /> : <DownloadIcon fontSize="small" />}
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      }
+                    >
+                      <ListItemText
+                        sx={{ minWidth: 0, pr: 4 }}
+                        primary={
+                          <Typography sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>{r.id}</Typography>
+                        }
+                        // Hugging Face's search leaves out author; the id starts with it ("owner/repo").
+                        secondary={[
+                          `by ${r.author || r.id.split("/")[0]}`,
+                          r.downloads != null && `${r.downloads.toLocaleString()} downloads`,
+                          r.likes != null && `${r.likes.toLocaleString()} likes`,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
               )}
               {!searching && searchError === null && searchResults?.length === 0 && (
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -369,14 +390,6 @@ export default function ModelsSection() {
           </Paper>
         </Stack>
       )}
-
-      <Typography variant="body2" color="text.secondary">
-        <b>Think</b> (before answering) lets a reasoning model (like Qwen) work through the problem first; its thoughts
-        show in a collapsible panel above the reply. It helps with hard questions but is slower, and small models can
-        spend minutes on simple ones. Models whose chat template has no thinking mode ignore it. With it off, small
-        models usually skip the tools and answer from what they already know, so chat offers to turn it on when you
-        switch Tools on.
-      </Typography>
     </Stack>
   );
 }
