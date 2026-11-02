@@ -46,6 +46,7 @@ import LayersClearOutlinedIcon from "@mui/icons-material/LayersClearOutlined";
 import CompressOutlinedIcon from "@mui/icons-material/CompressOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import SearchOffIcon from "@mui/icons-material/SearchOff";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
@@ -1858,11 +1859,24 @@ function ApprovalPrompt({ approval, onDecide }: { approval: Approval; onDecide: 
       {isCommand ? (
         <>
           <Typography variant="body2">The model wants to run this command:</Typography>
-          <Box
-            component="pre"
-            sx={{ m: 0, my: 1, p: 1, borderRadius: 1, bgcolor: "background.default", fontFamily: "monospace", fontSize: "0.85rem", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
-          >
-            $ {approval.command}
+          <Box sx={{ position: "relative", my: 1 }}>
+            <Box
+              component="pre"
+              sx={{ m: 0, p: 1, pr: 5, borderRadius: 1, bgcolor: "background.default", fontFamily: "monospace", fontSize: "0.85rem", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+            >
+              $ {approval.command}
+            </Box>
+            {/* The command alone, without the "$ ", to run it yourself. */}
+            <Tooltip title="Copy command">
+              <IconButton
+                size="small"
+                aria-label="Copy command"
+                onClick={() => navigator.clipboard.writeText(approval.command).catch(() => {})}
+                sx={{ position: "absolute", top: 4, right: 4 }}
+              >
+                <ContentCopyIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
           </Box>
           <Typography variant="caption" color="text.secondary" component="div">
             In {approval.cwd}. It runs as you, with your network access and credentials.
