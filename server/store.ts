@@ -12,13 +12,19 @@ export interface Connector {
   name: string;
   url: string; // Server root, without /v1.
   apiKey: string;
-  // Which API chat speaks to it: Anthropic's Messages (/v1/messages) or
-  // OpenAI's Chat Completions (/v1/chat/completions). llama.cpp serves both;
-  // many servers only the second. Missing, from before there was a choice,
-  // means "anthropic".
+  // What's on the other end, which decides the client, the key's header and
+  // what else there is: "llama", a llama.cpp server, with its model manager
+  // (server/modelAdmin.ts); "anthropic", Anthropic's API. Missing, from
+  // before there was a choice, means "llama".
+  kind?: Kind;
+  // For a llama server, which API chat speaks to it: Anthropic's Messages
+  // (/v1/messages) or OpenAI's Chat Completions (/v1/chat/completions).
+  // llama.cpp serves both. Missing means "anthropic"; Anthropic's API is
+  // always "anthropic".
   api?: Api;
 }
 
+export type Kind = "llama" | "anthropic";
 export type Api = "anthropic" | "openai";
 
 export interface Preferences {

@@ -35,6 +35,7 @@ import {
   type SearchResult,
   getConnectors,
   getModelSettings,
+  listModels,
   listModelsAdmin,
   searchModels,
   downloadModel,
@@ -74,7 +75,8 @@ export default function ModelsSection() {
       .then((l) => {
         const active = l.connectors.find((c) => c.id === l.activeId) ?? null;
         setConnector(active);
-        if (active) return listModelsAdmin(active.id).then(setModels);
+        // Anthropic's API has no model manager; AnthropicModels lists its own.
+        if (active && active.kind === "llama") return listModelsAdmin(active.id).then(setModels);
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -169,6 +171,10 @@ export default function ModelsSection() {
       setDownloading(null);
     }
   };
+
+  if (connector?.kind === "anthropic") {
+    return <AnthropicModels connector={connector} think={(id) => !!settingsFor(id)?.think} setThink={setThink} />;
+  }
 
   return (
     <Stack spacing={2}>
@@ -389,6 +395,78 @@ export default function ModelsSection() {
             </Box>
           </Paper>
         </Stack>
+      )}
+    </Stack>
+  );
+}
+
+// Anthropic's API: the Claude models the key can use, to pick from in chat.
+// There's nothing to download, load or delete; Think is the one option.
+function AnthropicModels({
+  connector,
+  think,
+  setThink,
+}: {
+  connector: Connector;
+  think: (id: string) => boolean;
+  setThink: (id: string, think: boolean) => void;
+}) {
+  const [models, setModels] = useState<Model[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    listModels(connector.id)
+      .then(setModels)
+      .catch((e) => setError(e.message));
+  }, [connector.id]);
+
+  return (
+    <Stack spacing={2}>
+      <Box>
+        <Typography variant="h5">Models</Typography>
+        <Typography color="text.secondary">
+          The Claude models {connector.name} offers your key. Pick one in chat; Anthropic runs them, so there's nothing
+          to download or load.
+        </Typography>
+      </Box>
+      {error && <Alert severity="error">{error}</Alert>}
+      {!models ? (
+        !error && <CircularProgress sx={{ alignSelf: "center" }} />
+      ) : (
+        <Paper variant="outlined">
+          <List disablePadding>
+            {models.map((m, i) => (
+              <ListItem key={m.id} divider={i < models.length - 1} sx={{ gap: 2 }}>
+                <ListItemText
+                  primary={m.name ?? m.id}
+                  secondary={
+                    <>
+                      <Typography component="span" variant="body2" sx={{ fontFamily: "monospace" }}>
+                        {m.id}
+                      </Typography>
+                      {m.contextSize ? ` · ${m.contextSize.toLocaleString()}-token context` : ""}
+                    </>
+                  }
+                />
+                {/* On: Claude thinks as it sees fit and shows a summary. */}
+                <Tooltip title="Think before answering">
+                  <FormControlLabel
+                    label="Think"
+                    labelPlacement="start"
+                    control={
+                      <Switch
+                        checked={think(m.id)}
+                        onChange={(e) => setThink(m.id, e.target.checked)}
+                        slotProps={{ input: { "aria-label": `Think before answering with ${m.id}` } }}
+                      />
+                    }
+                    sx={{ mr: 0, flexShrink: 0 }}
+                  />
+                </Tooltip>
+              </ListItem>
+            ))}
+          </List>
+        </Paper>
       )}
     </Stack>
   );

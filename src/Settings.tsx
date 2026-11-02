@@ -38,6 +38,7 @@ import ChatOutlinedIcon from "@mui/icons-material/ChatOutlined";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import {
   type Api,
+  type Kind,
   type Connector,
   type ConnectorList,
   type TestResult,
@@ -137,7 +138,7 @@ function ConnectorsSection() {
         <Box sx={{ flexGrow: 1 }}>
           <Typography variant="h5">Connectors</Typography>
           <Typography color="text.secondary">
-            llama.cpp servers this app can talk to. Chat uses the selected one.
+            llama.cpp servers and Anthropic's API, which this app can talk to. Chat uses the selected one.
           </Typography>
         </Box>
         <Button
@@ -290,6 +291,9 @@ function ConnectorDialog({
   const [name, setName] = useState(connector?.name ?? "");
   const [url, setUrl] = useState(connector?.url ?? "");
   const [apiKey, setApiKey] = useState("");
+  // Chosen when it's added; what's on the other end doesn't change.
+  const [kind, setKind] = useState<Kind>(connector?.kind ?? "llama");
+  const llama = kind === "llama";
   const [api, setApi] = useState<Api>(connector?.api ?? "anthropic");
   // The saved key is never sent to the browser, so for a server that has one
   // the field starts as "keep it" rather than as an empty input.
@@ -307,10 +311,12 @@ function ConnectorDialog({
   // What the server should do with the key: use the typed one, drop the
   // saved one, or (neither set) keep the saved one.
   const keyInput = { apiKey: keyMode === "replace" ? apiKey : undefined, clearKey: keyMode === "remove" };
+  // A llama server needs its address; Anthropic's API, a key.
+  const ready = llama ? !!url.trim() : keyMode === "keep" || !!apiKey.trim();
 
   const runTest = () => {
     setTest("checking");
-    testConnector({ id: connector?.id, url, ...keyInput })
+    testConnector({ id: connector?.id, url, kind, ...keyInput })
       .catch((e): TestResult => ({ ok: false, error: e.message }))
       .then(setTest);
   };
@@ -319,7 +325,7 @@ function ConnectorDialog({
     setSaving(true);
     setError(null);
     try {
-      const input = { name, url, api, ...keyInput };
+      const input = { name, url, kind, api, ...keyInput };
       await (connector ? updateConnector(connector.id, input) : createConnector(input));
       onSaved();
     } catch (e: any) {
@@ -334,40 +340,62 @@ function ConnectorDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ pt: 1 }}>
           <TextField
-            label="Server URL"
-            placeholder="http://192.168.1.20:8080"
-            helperText="The llama.cpp server root. A trailing /v1 is fine."
-            value={url}
-            onChange={(e) => {
-              setUrl(e.target.value);
-              setTest(null);
-            }}
-            autoFocus={!connector}
-            required
-          />
-          <TextField
-            label="Name"
-            placeholder="Defaults to the server's host"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <TextField
             select
-            label="Chat API"
-            value={api}
+            label="Provider"
+            value={kind}
+            disabled={!!connector}
             onChange={(e) => {
-              setApi(e.target.value as Api);
+              setKind(e.target.value as Kind);
               setTest(null);
             }}
             helperText={
-              api === "anthropic"
-                ? "Anthropic Messages (/v1/messages)."
-                : "OpenAI Chat Completions (/v1/chat/completions). Also shows llama.cpp's own generation speed."
+              llama
+                ? "A llama.cpp server: its models, which you can download, load and unload here."
+                : "Anthropic's API: the Claude models your key can use."
             }
           >
-            <MenuItem value="anthropic">Anthropic Messages</MenuItem>
-            <MenuItem value="openai">OpenAI Chat Completions</MenuItem>
+            <MenuItem value="llama">llama.cpp server</MenuItem>
+            <MenuItem value="anthropic">Anthropic API</MenuItem>
           </TextField>
+          {llama && (
+            <TextField
+              label="Server URL"
+              placeholder="http://192.168.1.20:8080"
+              helperText="The llama.cpp server root. A trailing /v1 is fine."
+              value={url}
+              onChange={(e) => {
+                setUrl(e.target.value);
+                setTest(null);
+              }}
+              autoFocus={!connector}
+              required
+            />
+          )}
+          <TextField
+            label="Name"
+            placeholder={llama ? "Defaults to the server's host" : "Anthropic"}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          {llama && (
+            <TextField
+              select
+              label="Chat API"
+              value={api}
+              onChange={(e) => {
+                setApi(e.target.value as Api);
+                setTest(null);
+              }}
+              helperText={
+                api === "anthropic"
+                  ? "Anthropic Messages (/v1/messages)."
+                  : "OpenAI Chat Completions (/v1/chat/completions). Also shows llama.cpp's own generation speed."
+              }
+            >
+              <MenuItem value="anthropic">Anthropic Messages</MenuItem>
+              <MenuItem value="openai">OpenAI Chat Completions</MenuItem>
+            </TextField>
+          )}
           {keyMode === "replace" ? (
             <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
               <TextField
@@ -376,8 +404,13 @@ function ConnectorDialog({
                 type="password"
                 autoComplete="off"
                 autoFocus={!!connector?.hasKey}
-                helperText="Stored only on this machine, never sent to the browser."
-                placeholder={connector?.hasKey ? undefined : "Optional"}
+                required={!llama}
+                helperText={
+                  llama
+                    ? "Stored only on this machine, never sent to the browser."
+                    : "From console.anthropic.com. Stored only on this machine, never sent to the browser."
+                }
+                placeholder={connector?.hasKey || !llama ? undefined : "Optional"}
                 value={apiKey}
                 onChange={(e) => {
                   setApiKey(e.target.value);
@@ -408,9 +441,12 @@ function ConnectorDialog({
                   <Button size="small" onClick={() => changeKeyMode("replace")}>
                     Replace
                   </Button>
-                  <Button size="small" color="error" onClick={() => changeKeyMode("remove")}>
-                    Remove
-                  </Button>
+                  {/* Anthropic's API needs one. */}
+                  {llama && (
+                    <Button size="small" color="error" onClick={() => changeKeyMode("remove")}>
+                      Remove
+                    </Button>
+                  )}
                 </>
               ) : (
                 <Button size="small" onClick={() => changeKeyMode("keep")}>
@@ -428,11 +464,11 @@ function ConnectorDialog({
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={runTest} disabled={!url.trim() || test === "checking"} sx={{ mr: "auto" }}>
+        <Button onClick={runTest} disabled={!ready || test === "checking"} sx={{ mr: "auto" }}>
           {test === "checking" ? "Testing…" : "Test connection"}
         </Button>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={save} disabled={!url.trim() || saving}>
+        <Button variant="contained" onClick={save} disabled={!ready || saving}>
           Save
         </Button>
       </DialogActions>

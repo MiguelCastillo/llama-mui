@@ -11,6 +11,8 @@ export type ModelStatus = "loaded" | "loading" | "unloaded" | string;
 
 export interface Model {
   id: string;
+  // A name to show, when the server gives one (Anthropic's API does).
+  name?: string;
   status: ModelStatus;
   inputs: string[];
   // Tokens the server gives this model's context, when it says.
@@ -57,7 +59,8 @@ function contextSize(m: any): number | undefined {
   const args: string[] = m.status?.args ?? [];
   const i = args.indexOf("--ctx-size");
   const fromArgs = i >= 0 ? Number(args[i + 1]) : NaN;
-  return m.meta?.n_ctx ?? (fromArgs > 0 ? fromArgs : undefined);
+  // max_input_tokens is Anthropic's.
+  return m.meta?.n_ctx ?? m.max_input_tokens ?? (fromArgs > 0 ? fromArgs : undefined);
 }
 
 export interface ToolCall {
@@ -72,9 +75,10 @@ export interface ChatMessage {
   content: string;
   // Thinking tokens that Qwen-style models stream separately from the answer.
   reasoning?: string;
-  // The thinking block's signature, sent back with `reasoning`: Anthropic's
-  // API only takes back thinking it signed, unchanged.
-  signature?: string;
+  // On a reply with signed thinking (Claude's): its content exactly as the
+  // Messages API returned it, which is sent back instead of rebuilding the
+  // turn. Claude only takes back thinking unchanged, block by block.
+  blocks?: Anthropic.ContentBlockParam[];
   // Set on assistant messages that asked to run tools.
   toolCalls?: ToolCall[];
   // Set on tool messages: which call this is the result of.
@@ -117,9 +121,8 @@ export interface StepStats {
 // `system`. An assistant turn is its thinking, text and tool calls, in the
 // order the model wrote them; its tool results go in the user turn after it.
 // The API wants turns to alternate, so a user message after tool results
-// joins their turn. Thinking is sent back only with its signature: Anthropic's
-// API rejects thinking it didn't sign, and older messages saved before
-// signatures were kept have none.
+// joins their turn. A reply that kept its blocks is sent back as they were;
+// others without their thinking, which only Claude's signed blocks carry.
 export function toMessages(history: ChatMessage[]): { system?: string; messages: Anthropic.MessageParam[] } {
   let system: string | undefined;
   const messages: Anthropic.MessageParam[] = [];
@@ -137,9 +140,10 @@ export function toMessages(history: ChatMessage[]): { system?: string; messages:
       add("user", text ? [{ type: "text", text }] : []);
     } else if (m.role === "tool") {
       add("user", [{ type: "tool_result", tool_use_id: m.toolCallId ?? "", content: m.content }]);
+    } else if (m.blocks?.length) {
+      add("assistant", [...m.blocks]);
     } else {
       const blocks: Anthropic.ContentBlockParam[] = [];
-      if (m.reasoning && m.signature) blocks.push({ type: "thinking", thinking: m.reasoning, signature: m.signature });
       if (m.content) blocks.push({ type: "text", text: m.content });
       for (const c of m.toolCalls ?? []) blocks.push({ type: "tool_use", id: c.id, name: c.name, input: parseInput(c.arguments) });
       add("assistant", blocks);
@@ -166,7 +170,9 @@ function toTool(t: any): Anthropic.Tool {
   return { name: f.name, description: f.description, input_schema: f.parameters ?? f.input_schema };
 }
 
-// Which API chat speaks to a connector (see Connector in server/store.ts).
+// What a connector is, and which API chat speaks to it (see Connector in
+// server/store.ts).
+export type Kind = "llama" | "anthropic";
 export type Api = "anthropic" | "openai";
 
 export interface Connector {
@@ -174,6 +180,7 @@ export interface Connector {
   name: string;
   url: string;
   hasKey: boolean;
+  kind: Kind;
   api: Api;
 }
 
@@ -188,6 +195,8 @@ export interface ConnectorInput {
   // Blank keeps the saved key when editing.
   apiKey?: string;
   clearKey?: boolean;
+  // Set when it's added; it doesn't change.
+  kind?: Kind;
   api?: Api;
 }
 
@@ -210,13 +219,15 @@ export const createConnector = (input: ConnectorInput) => call<Connector>("POST"
 export const updateConnector = (id: string, input: ConnectorInput) => call<Connector>("PUT", `/api/connectors/${id}`, input);
 export const deleteConnector = (id: string) => call<{ activeId: string | null }>("DELETE", `/api/connectors/${id}`);
 export const setActiveConnector = (id: string) => call<{ activeId: string }>("PUT", "/api/active", { id });
-export const testConnector = (input: { id?: string; url?: string; apiKey?: string; clearKey?: boolean }) =>
+export const testConnector = (input: { id?: string; url?: string; apiKey?: string; clearKey?: boolean; kind?: Kind }) =>
   call<TestResult>("POST", "/api/connectors/test", input);
 
 export async function listModels(connectorId: string): Promise<Model[]> {
-  const body = await call<{ data: any[] }>("GET", `/api/c/${connectorId}/v1/models`);
+  // Anthropic's API pages by 20 unless asked; llama.cpp ignores the limit.
+  const body = await call<{ data: any[] }>("GET", `/api/c/${connectorId}/v1/models?limit=1000`);
   return body.data.map((m) => ({
     id: m.id,
+    name: m.display_name,
     status: m.status?.value ?? "unknown",
     inputs: m.architecture?.input_modalities ?? [],
     contextSize: contextSize(m),
@@ -531,7 +542,8 @@ export interface ChatRequest {
   // Qwen models can otherwise drag out for minutes on trivial prompts.
   think: boolean;
   tools?: unknown[];
-  // The connector's API; "anthropic" when left out.
+  // The connector's kind and API; "llama" and "anthropic" when left out.
+  kind?: Kind;
   api?: Api;
 }
 
@@ -539,9 +551,9 @@ export interface ChatReply {
   // Whole, with arguments as the JSON text the model wrote.
   toolCalls: ToolCall[];
   usage?: Usage;
-  // The thinking's signature, for the message to keep (see ChatMessage).
-  // Only the Messages API has one.
-  signature?: string;
+  // The reply's content as returned, when it has signed thinking, for the
+  // message to keep (see ChatMessage). Only Claude signs its thinking.
+  blocks?: Anthropic.ContentBlockParam[];
 }
 
 // Streams one reply, calling onDelta for each piece of text or thinking, in
@@ -554,10 +566,27 @@ export function streamChat(req: ChatRequest, onDelta: (d: StreamDelta) => void, 
 // file; llama.cpp stops sooner when the context fills.
 const MAX_TOKENS = 32768;
 
+// What a request carries beyond the chat, by what's on the other end.
+function messagesOptions(kind: Kind | undefined, think: boolean) {
+  if (kind === "anthropic") {
+    return {
+      // Asked for, Claude shows a summary of its thinking; not asked for, it
+      // may still think a little (Opus 5.5 can't be stopped), unseen.
+      ...(think ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
+      // Caches the conversation so far: each tool round resends it all, and
+      // cached tokens cost a tenth.
+      cache_control: { type: "ephemeral" },
+    };
+  }
+  // llama.cpp ignores `thinking: {type: "disabled"}`; its chat template
+  // takes this instead. Not in the SDK's types, but it sends the field.
+  return { chat_template_kwargs: { enable_thinking: think } };
+}
+
 // The SDK's key is a placeholder: the dev server's proxy replaces it with the
 // connector's, which is why it's safe in a browser.
 async function streamMessages(
-  { connectorId, model, messages, think, tools }: ChatRequest,
+  { connectorId, kind, model, messages, think, tools }: ChatRequest,
   onDelta: (d: StreamDelta) => void,
   signal: AbortSignal,
 ): Promise<ChatReply> {
@@ -565,8 +594,9 @@ async function streamMessages(
     baseURL: `${location.origin}/api/c/${connectorId}`,
     apiKey: "set-by-the-server",
     dangerouslyAllowBrowser: true,
-    // A retried reply would stream its text twice.
-    maxRetries: 0,
+    // The SDK retries only failed requests (Anthropic's 429s and 529s), never
+    // a stream under way. llama.cpp has nothing worth retrying.
+    ...(kind === "anthropic" ? {} : { maxRetries: 0 }),
   });
   const { system, messages: wire } = toMessages(messages);
   const params = {
@@ -575,13 +605,11 @@ async function streamMessages(
     messages: wire,
     ...(system ? { system } : {}),
     ...(tools?.length ? { tools: tools.map(toTool) } : {}),
-    // llama.cpp ignores `thinking: {type: "disabled"}`; its chat template
-    // takes this instead. Not in the SDK's types, but it sends the field.
-    chat_template_kwargs: { enable_thinking: think },
+    ...messagesOptions(kind, think),
   };
 
   const calls = new Map<number, ToolCall>();
-  let signature = "";
+  let final: Anthropic.Message | undefined;
   let input = 0;
   let cached = 0;
   let output = 0;
@@ -599,13 +627,13 @@ async function streamMessages(
         const d = event.delta;
         if (d.type === "text_delta") onDelta({ content: d.text });
         else if (d.type === "thinking_delta") onDelta({ reasoning: d.thinking });
-        else if (d.type === "signature_delta") signature += d.signature;
         else if (d.type === "input_json_delta") {
           const c = calls.get(event.index);
           if (c) c.arguments += d.partial_json;
         }
       }
     }
+    final = await stream.finalMessage();
   } catch (e) {
     // fetch's own TypeError, which failureLine reads as "couldn't reach".
     if (e instanceof Anthropic.APIConnectionError && e.cause instanceof TypeError) throw e.cause;
@@ -616,10 +644,19 @@ async function streamMessages(
     }
     throw e;
   }
+  // Claude's safety checks can stop a reply partway; without this it would
+  // just end, maybe empty.
+  if (final.stop_reason === "refusal") {
+    const category = (final as any).stop_details?.category;
+    throw new Error(`The model declined to answer${category ? ` (${category})` : ""}.`);
+  }
+  // llama.cpp signs nothing (an empty signature), so only Claude's replies
+  // need their blocks kept.
+  const signed = final.content.some((b) => b.type === "redacted_thinking" || (b.type === "thinking" && b.signature));
   return {
     toolCalls: [...calls.values()].map((c, i) => ({ ...c, id: c.id || `call_${i}`, arguments: c.arguments || "{}" })),
     usage: input || cached || output ? { contextTokens: input + cached + output, promptTokens: input } : undefined,
-    ...(signature ? { signature } : {}),
+    ...(signed ? { blocks: final.content as Anthropic.ContentBlockParam[] } : {}),
   };
 }
 

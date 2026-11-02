@@ -22,6 +22,8 @@ async function proxy(
   search?: string,
 ) {
   const c = find(await load(), id);
+  // llama.cpp's own API: Anthropic's has no model manager to call.
+  if (c.kind === "anthropic") throw new HttpError(400, "Only llama servers manage their models");
   let url = `${c.url}${path}`;
   if (search) url += search;
 

@@ -22,25 +22,44 @@ served by a Vite plugin (`server/plugin.ts`) that runs under both
 can send requests to localhost, and without that check one could run the
 model's tools, commands included, on its own.
 
-**Connectors** are llama.cpp servers: a URL, an optional API key, a name, and
-the **Chat API** chat speaks to it. llama.cpp serves two:
+**Connectors** are the model servers chat talks to. Each has a **provider**,
+chosen when it's added, which decides its client, how its key is sent, and
+what else it offers:
 
-- **Anthropic Messages** (`/v1/messages`), the default, through Anthropic's
-  SDK (`@anthropic-ai/sdk`). It keeps each reply's thinking signature and sends
-  thinking back only with one; llama.cpp's is empty, so earlier thinking isn't
-  resent (Qwen's chat template drops it anyway).
-- **OpenAI Chat Completions** (`/v1/chat/completions`), through OpenAI's SDK
-  (`openai`). It also shows llama.cpp's own generation speed (from its
-  `timings`), which the Messages API doesn't report.
+- **llama.cpp server**: a URL, an optional API key, a name, and the **Chat
+  API** chat speaks to it. It also has llama.cpp's own API beyond chat: the
+  **Models** page manages its models (`server/modelAdmin.ts`). llama.cpp
+  serves two chat APIs:
+  - **Anthropic Messages** (`/v1/messages`), the default, through Anthropic's
+    SDK (`@anthropic-ai/sdk`).
+  - **OpenAI Chat Completions** (`/v1/chat/completions`), through OpenAI's
+    SDK (`openai`). It also shows llama.cpp's own generation speed (from its
+    `timings`), which the Messages API doesn't report.
 
-The key is the llama server's own (`--api-key`), sent as a bearer token with
-either API. Either way thinking is turned off with `chat_template_kwargs`: llama.cpp
-ignores the Messages API's `thinking: {type: "disabled"}`. And notes and chat
-updates go as text in the user's message: llama.cpp ignores `system` messages
-in the middle of the conversation. `streamChat` in `src/api.ts` picks the API
-by the connector; `toMessages` and `toWire` turn the chat into each one's
+  The key is the llama server's own (`--api-key`), sent as a bearer token with
+  either API. Either way thinking is turned off with `chat_template_kwargs`:
+  llama.cpp ignores the Messages API's `thinking: {type: "disabled"}`. And
+  notes and chat updates go as text in the user's message: llama.cpp ignores
+  `system` messages in the middle of the conversation.
+- **Anthropic API** (`https://api.anthropic.com`): a key (required) and a
+  name. Its models are the Claude models the key can use, listed on the
+  **Models** page and picked in chat; there's nothing to download or load. The
+  key goes as `x-api-key`. With **Think** on, Claude thinks adaptively and
+  shows a summary; off, it isn't asked to (Opus 5.5 may still think briefly,
+  unseen). Each request asks for prompt caching, since a tool loop resends the
+  whole conversation every round. A reply Claude declines (`refusal`) ends with
+  a message saying so. It costs money per token, and the chat goes to Anthropic.
+
+A reply with signed thinking (only Claude signs it) keeps its content blocks
+exactly as returned and is sent back as they were: Claude takes back its
+thinking only unchanged. Other replies are rebuilt from their text and tool
+calls, without thinking (llama.cpp's signatures are empty, and Qwen's chat
+template drops earlier thinking anyway).
+
+`streamChat` in `src/api.ts` picks the API by the connector, and the options
+by its provider; `toMessages` and `toWire` turn the chat into each API's
 shape, so everything that calls `streamChat` (`src/agent/agent.ts`,
-`src/agent/plan.ts`, `src/agent/sessionNaming.ts`) works the same with either.
+`src/agent/plan.ts`, `src/agent/sessionNaming.ts`) works the same with any.
 
 Chat uses the selected connector. The plugin proxies chat requests at
 `/api/c/<id>/v1/...` to that server with its key, so keys never reach the

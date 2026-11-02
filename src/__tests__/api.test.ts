@@ -71,25 +71,17 @@ describe("toMessages", () => {
     ]);
   });
 
-  it("adds a thinking block when reasoning and signature are present", () => {
-    const history: ChatMessage[] = [
-      {
-        role: "assistant",
-        content: "Answer",
-        reasoning: "Let me think...",
-        signature: "sig123",
-      },
+  it("sends a reply's kept blocks back as they were", () => {
+    const kept = [
+      { type: "thinking" as const, thinking: "Let me think...", signature: "sig1" },
+      { type: "text" as const, text: "Answer" },
+      { type: "thinking" as const, thinking: "And more.", signature: "sig2" },
     ];
-    const result = toMessages(history);
-    const blocks = result.messages[0].content as any[];
-    expect(blocks[0].type).toBe("thinking");
-    expect(blocks[0].thinking).toBe("Let me think...");
-    expect(blocks[0].signature).toBe("sig123");
-    expect(blocks[1].type).toBe("text");
-    expect(blocks[1].text).toBe("Answer");
+    const history: ChatMessage[] = [{ role: "assistant", content: "Answer", reasoning: "Let me think...And more.", blocks: kept }];
+    expect(toMessages(history).messages).toEqual([{ role: "assistant", content: kept }]);
   });
 
-  it("omits the thinking block when signature is missing", () => {
+  it("leaves thinking out when no blocks were kept", () => {
     const history: ChatMessage[] = [
       { role: "assistant", content: "Answer", reasoning: "Let me think..." },
     ];
@@ -142,21 +134,12 @@ describe("toMessages", () => {
     expect(blocks[0].input).toEqual({});
   });
 
-  it("orders blocks as thinking, text, tool_use", () => {
+  it("puts the text before the tool calls", () => {
     const history: ChatMessage[] = [
-      {
-        role: "assistant",
-        content: "Done",
-        reasoning: "Thinking",
-        signature: "sig",
-        toolCalls: [tc("read_file", { path: "a.txt" })],
-      },
+      { role: "assistant", content: "Done", reasoning: "Thinking", toolCalls: [tc("read_file", { path: "a.txt" })] },
     ];
-    const result = toMessages(history);
-    const blocks = result.messages[0].content as any[];
-    expect(blocks[0].type).toBe("thinking");
-    expect(blocks[1].type).toBe("text");
-    expect(blocks[2].type).toBe("tool_use");
+    const blocks = toMessages(history).messages[0].content as any[];
+    expect(blocks.map((b) => b.type)).toEqual(["text", "tool_use"]);
   });
 
   // ── tool messages ──────────────────────────────────────────────────────────
@@ -223,7 +206,6 @@ describe("toMessages", () => {
         role: "assistant",
         content: "",
         reasoning: "I'll read the file.",
-        signature: "sig1",
         toolCalls: [tc("read_file", { path: "a.txt" })],
       },
       { role: "tool", content: "file contents here", toolCallId: "call_x" },
@@ -262,10 +244,8 @@ describe("toMessages", () => {
     expect(result.messages).toEqual([]);
   });
 
-  it("skips assistant message when reasoning without signature, and content and toolCalls are absent", () => {
-    const history: ChatMessage[] = [
-      { role: "assistant", content: "", reasoning: "thinking", signature: undefined },
-    ];
+  it("skips an assistant message that has only reasoning and no kept blocks", () => {
+    const history: ChatMessage[] = [{ role: "assistant", content: "", reasoning: "thinking" }];
     const result = toMessages(history);
     expect(result.messages).toEqual([]);
   });
@@ -374,20 +354,22 @@ function serve(events: object[], status = 200) {
 const tool = { type: "function", function: { name: "read_file", description: "Read a file", parameters: { type: "object" } } };
 const request = { connectorId: "c1", model: "qwen", think: true, tools: [tool], messages: [{ role: "user" as const, content: "Read README.md" }] };
 
-async function collect(api: "anthropic" | "openai") {
+async function collect(api: "anthropic" | "openai", kind: "llama" | "anthropic" = "llama", think = true) {
   const deltas: StreamDelta[] = [];
-  const reply = await streamChat({ ...request, api }, (d) => deltas.push(d), new AbortController().signal);
+  const reply = await streamChat({ ...request, api, kind, think }, (d) => deltas.push(d), new AbortController().signal);
   return { reply, text: deltas.map((d) => d.content ?? "").join(""), reasoning: deltas.map((d) => d.reasoning ?? "").join("") };
 }
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("streamChat with the Messages API", () => {
-  const events = [
+  // A reply that thinks, says something and calls a tool. llama.cpp's
+  // signature is empty; Claude's isn't.
+  const reply = (signature: string, stop = "tool_use") => [
     { type: "message_start", message: { id: "m1", type: "message", role: "assistant", content: [], model: "qwen", stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, cache_read_input_tokens: 90, output_tokens: 0 } } },
     { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } },
     { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Need the file." } },
-    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature } },
     { type: "content_block_stop", index: 0 },
     { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
     { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Reading it." } },
@@ -396,32 +378,71 @@ describe("streamChat with the Messages API", () => {
     { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"path":' } },
     { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '"README.md"}' } },
     { type: "content_block_stop", index: 2 },
-    { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 5 } },
+    { type: "message_delta", delta: { stop_reason: stop, stop_sequence: null, ...(stop === "refusal" && { stop_details: { type: "refusal", category: "cyber" } }) }, usage: { output_tokens: 5 } },
     { type: "message_stop" },
   ];
 
-  it("returns the text, thinking, signature, tool call and usage it streamed", async () => {
-    serve(events);
-    const { reply, text, reasoning } = await collect("anthropic");
+  it("returns the text, thinking, tool call and usage it streamed", async () => {
+    serve(reply(""));
+    const { reply: r, text, reasoning } = await collect("anthropic");
     expect(text).toBe("Reading it.");
     expect(reasoning).toBe("Need the file.");
-    expect(reply.signature).toBe("sig");
-    expect(reply.toolCalls).toEqual([{ id: "t1", name: "read_file", arguments: '{"path":"README.md"}' }]);
-    expect(reply.usage).toEqual({ contextTokens: 105, promptTokens: 10 });
+    expect(r.toolCalls).toEqual([{ id: "t1", name: "read_file", arguments: '{"path":"README.md"}' }]);
+    expect(r.usage).toEqual({ contextTokens: 105, promptTokens: 10 });
   });
 
-  it("posts to the connector's /v1/messages with the tools converted and thinking set", async () => {
-    const requests = serve(events);
+  it("keeps no blocks for a llama.cpp reply, whose thinking is unsigned", async () => {
+    serve(reply(""));
+    expect((await collect("anthropic")).reply.blocks).toBeUndefined();
+  });
+
+  it("keeps a signed reply's blocks as the API returned them", async () => {
+    serve(reply("sig"));
+    expect((await collect("anthropic", "anthropic")).reply.blocks).toEqual([
+      { type: "thinking", thinking: "Need the file.", signature: "sig" },
+      { type: "text", text: "Reading it." },
+      { type: "tool_use", id: "t1", name: "read_file", input: { path: "README.md" } },
+    ]);
+  });
+
+  it("posts a llama server's request with the tools converted and chat_template_kwargs", async () => {
+    const requests = serve(reply(""));
     await collect("anthropic");
     expect(requests[0].url).toBe("http://test/api/c/c1/v1/messages");
     expect(requests[0].body.tools).toEqual([{ name: "read_file", description: "Read a file", input_schema: { type: "object" } }]);
     expect(requests[0].body.chat_template_kwargs).toEqual({ enable_thinking: true });
     expect(requests[0].body.max_tokens).toBeGreaterThan(0);
+    expect(requests[0].body.thinking).toBeUndefined();
+    expect(requests[0].body.cache_control).toBeUndefined();
+  });
+
+  it("posts Anthropic's request with adaptive thinking and caching, not chat_template_kwargs", async () => {
+    const requests = serve(reply("sig"));
+    await collect("anthropic", "anthropic");
+    expect(requests[0].body.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(requests[0].body.cache_control).toEqual({ type: "ephemeral" });
+    expect(requests[0].body.chat_template_kwargs).toBeUndefined();
+  });
+
+  it("asks Anthropic for no thinking with Think off", async () => {
+    const requests = serve(reply("sig", "end_turn"));
+    await collect("anthropic", "anthropic", false);
+    expect(requests[0].body.thinking).toBeUndefined();
+  });
+
+  it("says so when the model declines", async () => {
+    serve(reply("sig", "refusal"));
+    await expect(collect("anthropic", "anthropic")).rejects.toThrow("The model declined to answer (cyber).");
   });
 
   it("reports llama.cpp's error message with the status", async () => {
     serve([{ error: { code: 400, message: "model 'qwen' not found", type: "invalid_request_error" } }], 400);
     await expect(collect("anthropic")).rejects.toThrow("POST /v1/messages: 400 model 'qwen' not found");
+  });
+
+  it("reports Anthropic's error message with the status", async () => {
+    serve([{ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }], 401);
+    await expect(collect("anthropic", "anthropic")).rejects.toThrow("POST /v1/messages: 401 invalid x-api-key");
   });
 });
 
@@ -439,7 +460,7 @@ describe("streamChat with the Chat Completions API", () => {
     const { reply, text, reasoning } = await collect("openai");
     expect(text).toBe("Reading it.");
     expect(reasoning).toBe("Need the file.");
-    expect(reply.signature).toBeUndefined();
+    expect(reply.blocks).toBeUndefined();
     expect(reply.toolCalls).toEqual([{ id: "t1", name: "read_file", arguments: '{"path":"README.md"}' }]);
     expect(reply.usage).toEqual({ contextTokens: 105, tokensPerSecond: 42, promptTokens: 10 });
   });
