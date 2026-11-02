@@ -2,7 +2,7 @@
 // say they're done when they aren't, so chat runs a plan one step per turn and
 // checks each step with reviewStep before ticking it off.
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Box, Button, CircularProgress, IconButton, Paper, Stack, TextField, Tooltip, Typography } from "@mui/material";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
@@ -15,7 +15,7 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
 import DoneIcon from "@mui/icons-material/Done";
-import { type ChatMessage, type PlanStep, streamChat } from "./api";
+import { type ChatMessage, type PlanStep, type ToolCall, streamChat } from "./api";
 
 // With Plan on, a new message first gets a planning turn: the model can only
 // read and call update_plan, so it writes the plan instead of starting on the
@@ -125,44 +125,32 @@ export function filesChanged(messages: ChatMessage[]): string[] {
 // `cut`: read_file stopped short, so it's too big however much room there is.
 export type WholeFile = { path: string; text: string; cut?: boolean } | { path: string; error: string };
 
-// The check judges the step's files whole, as they are now, not just the
-// diffs. Diff hunks hide the lines around a change (a parameter looked
-// undefined because its signature wasn't in the hunk), and a rerun's changes
-// are only its fixes, so what an earlier attempt wrote looked missing.
-// Room for the files: half the model's context, at about 4 characters a
-// token; the rest is for the diffs, the prompt and the answer. The step's own
-// files go first; files other steps changed fill what's left, and the check
-// is told which didn't fit (with all of them, Chat.tsx and three others
-// overflowed a step that had only changed the README). If the step's own
-// files don't fit, the step stops instead of their being cut or swapped for
-// the diffs: a check that can't see the code guesses, and its guess looks
-// like a verdict.
-const tokens = (chars: number) => Math.ceil(chars / 4);
-export const checkRoom = (contextSize?: number) => Math.floor((contextSize ?? 32000) / 2) * 4;
+// The check judges the code as it is now, not just the diffs. Diff hunks hide
+// the lines around a change (a parameter looked undefined because its
+// signature wasn't in the hunk), and a rerun's changes are only its fixes, so
+// what an earlier attempt wrote looked missing.
+// It reads with tools, like the model it checks: read_file, grep and the
+// rest of the read-only disk tools. Files that fit go in its first message,
+// the step's own first, then files other steps changed; the rest are listed
+// for it to read. Before, files that didn't fit stopped the step: every step
+// of a refactor touching Chat.tsx (~25k tokens) couldn't be checked, even
+// when it only changed the imports. Nothing language-specific: the check
+// decides what to read, the way a stronger model would.
+// Room for files in the first message: a quarter of the model's context, at
+// about 4 characters a token; the rest is for its reads and its answer.
+export const checkRoom = (contextSize?: number) => Math.floor((contextSize ?? 32000) / 4) * 4;
 const chars = (f: WholeFile) => ("text" in f ? f.text.length : 0);
+export const CHECK_TOOLS = new Set(["read_file", "grep", "find_files", "list_directory"]);
+// Reads a check makes before it must answer; it answers without tools then.
+const MAX_CHECK_ROUNDS = 8;
 
-// What the check is shown: the step's own files, then the others that fit.
-// `unchecked` if the step's own files can't be shown, with `split` when
-// splitting the step would help (they're too big, not unreadable).
+// The files the check gets whole (own first, then others, while they fit),
+// and the ones it's told to read itself.
 function pack(own: WholeFile[], others: WholeFile[], room: number) {
-  const unread = own.find((f) => "error" in f);
-  if (unread && "error" in unread) {
-    return { unchecked: `Couldn't check this step: couldn't read ${unread.path} (${unread.error}).`, split: false };
-  }
-  const size = own.reduce((n, f) => n + chars(f), 0);
-  if (size > room || own.some((f) => "cut" in f && f.cut)) {
-    const list = own.map((f) => `${f.path} (~${tokens(chars(f))} tokens)`).join(", ");
-    return {
-      unchecked:
-        `Couldn't check this step: ${list} ${own.length > 1 ? "are" : "is"} too big for the check, which has ` +
-        `room for ~${tokens(room)} tokens of files (half of the model's context).`,
-      split: true,
-    };
-  }
-  const shown = [...own];
+  const shown: WholeFile[] = [];
   const left: string[] = [];
-  let used = size;
-  for (const f of others) {
+  let used = 0;
+  for (const f of [...own, ...others]) {
     if ("text" in f && !f.cut && used + chars(f) <= room) {
       shown.push(f);
       used += chars(f);
@@ -172,52 +160,73 @@ function pack(own: WholeFile[], others: WholeFile[], room: number) {
 }
 
 const REVIEW_PROMPT =
-  "You check whether one step of a coding task was really done. You get the step, the files it " +
-  "changed as they are now, the changes made during it, and the reply that claims it's done. Judge " +
-  "only this step, from the files: code that's in them counts, even if an earlier attempt wrote it, " +
-  "and a claim the files don't back up doesn't. Answer with exactly one line: DONE, or MISSING: " +
-  "followed by what's still missing. A step that only needed reading or checking is DONE if the reply " +
-  "reports what it found.";
+  "You check whether one step of a coding task was really done. You get the step, the changes made " +
+  "during it, the reply that claims it's done, and the files it changed: some as they are now, the rest " +
+  "for you to read. Read what you need with the tools (read_file takes start_line and max_lines) before " +
+  "you judge. Judge only this step, from the code: code that's there counts, even if an earlier attempt " +
+  "wrote it, and a claim the code doesn't back up doesn't. When you're done reading, answer with exactly " +
+  "one line: DONE, or MISSING: followed by what's still missing. A step that only needed reading or " +
+  "checking is DONE if the reply reports what it found.";
 
-// Asks the model, with no tools, whether the step's files do what the step
-// says. `messages` is the step's turn: from its "Do step" message on. `own`
-// are the files it changed, `others` the files other steps changed, all read
-// now (see pack). `unchecked` says why it couldn't judge; the model isn't
-// asked then, and `split` says whether splitting the step would help.
+// Asks the model whether the step's changes do what the step says, letting
+// it read with the read-only disk tools. `messages` is the step's turn: from
+// its "Do step" message on. `own` are the files it changed, `others` the
+// files other steps changed, read now (see pack). `tools` are those tools'
+// definitions; `read` runs one of their calls and returns its result.
 export async function reviewStep(
-  { connectorId, model, think, room }: { connectorId: string; model: string; think: boolean; room: number },
+  {
+    connectorId,
+    model,
+    think,
+    room,
+    tools,
+    read,
+  }: {
+    connectorId: string;
+    model: string;
+    think: boolean;
+    room: number;
+    tools: unknown[];
+    read: (call: ToolCall) => Promise<string>;
+  },
   step: string,
   messages: ChatMessage[],
   own: WholeFile[],
   others: WholeFile[],
   signal: AbortSignal,
-): Promise<{ done: boolean; missing?: string; unchecked?: string; split?: boolean }> {
-  const packed = pack(own, others, room);
-  if ("unchecked" in packed) return { done: false, unchecked: packed.unchecked, split: packed.split };
-  const whole =
-    packed.shown.map((f) => ("text" in f ? `=== ${f.path}\n${f.text}` : "")).join("\n\n") +
-    (packed.left.length ? `\n\nNot shown, for lack of room (changed by other steps): ${packed.left.join(", ")}` : "");
+): Promise<{ done: boolean; missing?: string }> {
+  const { shown, left } = pack(own, others, room);
+  const files =
+    shown.map((f) => ("text" in f ? `=== ${f.path}\n${f.text}` : "")).join("\n\n") +
+    (left.length ? `\n\nAlso changed, too big to include, so read what you need: ${left.join(", ")}` : "");
   const replyText = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content ?? "";
-  let answer = "";
-  await streamChat(
+  const history: ChatMessage[] = [
+    { role: "system", content: REVIEW_PROMPT },
     {
-      connectorId,
-      model,
-      think,
-      messages: [
-        { role: "system", content: REVIEW_PROMPT },
-        {
-          role: "user",
-          content:
-            `Step: ${step}\n\nThe files it changed, as they are now:\n${whole || "(none)"}\n\n` +
-            `Changes made during this step:\n${changesIn(messages) || "(no file changes)"}\n\n` +
-            `The reply:\n${clip(replyText, MAX_CHANGE_CHARS) || "(empty)"}`,
-        },
-      ],
+      role: "user",
+      content:
+        `Step: ${step}\n\nThe files it changed, as they are now:\n${files || "(none)"}\n\n` +
+        `Changes made during this step:\n${changesIn(messages) || "(no file changes)"}\n\n` +
+        `The reply:\n${clip(replyText, MAX_CHANGE_CHARS) || "(empty)"}`,
     },
-    (d) => (answer += d.content ?? ""),
-    signal,
-  );
+  ];
+  let answer = "";
+  for (let round = 0; ; round++) {
+    answer = "";
+    const last = round >= MAX_CHECK_ROUNDS;
+    const { toolCalls } = await streamChat(
+      // Like a reply, only the first request thinks; then it reads and decides.
+      { connectorId, model, think: think && round === 0, messages: history, tools: last ? undefined : tools },
+      (d) => (answer += d.content ?? ""),
+      signal,
+    );
+    if (last || toolCalls.length === 0) break;
+    history.push({ role: "assistant", content: answer, toolCalls });
+    for (const call of toolCalls) {
+      const result = CHECK_TOOLS.has(call.name) ? await read(call) : `Error: ${call.name} isn't available to the check`;
+      history.push({ role: "tool", toolCallId: call.id, content: result });
+    }
+  }
   const missing = answer.match(/MISSING:\s*(.+)/i);
   if (missing) return { done: false, missing: missing[1].trim() };
   if (/\bDONE\b/i.test(answer)) return { done: true };
@@ -232,19 +241,6 @@ export async function reviewStep(
 // against what it actually read. The verdict is about the step, not the
 // check: asked for CHECK RIGHT / CHECK WRONG, the model showed the step was
 // done and then wrote "CHECK RIGHT", meaning the step was right.
-// After a step the check couldn't judge (see pack): the model proposes a plan
-// change, which the user accepts or not. It's sent as a planning turn, so it
-// can only read and call update_plan. Splitting is suggested only when the
-// step's own files were too big: told to split when other steps' files had
-// filled the room, the model split the step anyway, which couldn't help.
-export function uncheckedPrompt(i: number, why: string, split: boolean): string {
-  return split
-    ? `${why}\n\nPropose a change to the plan that makes step ${i + 1} checkable, for example by splitting ` +
-        "it so each step changes less, with one update_plan call. Say why in one or two lines."
-    : `${why}\n\nSay in one or two lines what would let step ${i + 1} be checked. Change the plan with one ` +
-        "update_plan call only if that would help.";
-}
-
 // After a step whose folder's check command failed. Unlike the model check,
 // the command isn't argued with: its output is the fix list.
 export function commandFailedPrompt(i: number, command: string, output: string): string {
@@ -360,6 +356,7 @@ export function PlanView({
   formatTime,
   onCancel,
   onClone,
+  prompt,
 }: {
   steps: PlanStep[];
   // An older finished plan passes none of running, onRun, onChange and
@@ -382,6 +379,10 @@ export function PlanView({
   // Starts a new plan with a finished plan's steps; absent when it can't
   // (see Chat.tsx). A finished plan never runs again, so this is how to redo it.
   onClone?: () => void;
+  // A question for the user from the running step (approve a change, allow a
+  // folder), shown under that step: at the bottom of the chat, it meant
+  // scrolling between it and the plan's progress.
+  prompt?: ReactNode;
 }) {
   // Once every step is done, nothing in the plan runs again: no rerun, edit
   // or cancel. Redoing work is a new plan, from a new message.
@@ -542,6 +543,7 @@ export function PlanView({
                   </Tooltip>
                 )}
               </Box>
+              {s.status === "running" && prompt && <InView>{prompt}</InView>}
               {turns && open.has(s.id) && (
                 <Stack spacing={1} sx={{ ml: 3.5, mt: 1, mb: 1.5, pl: 1.5, borderLeft: 2, borderColor: "divider" }}>
                   {turns}
@@ -600,6 +602,22 @@ function ProposalView({
           Use this plan
         </Button>
       </Stack>
+    </Box>
+  );
+}
+
+// Scrolls its content into view once, when it appears: a step's prompt may
+// show above what's on screen, in a plan card higher up the chat.
+function InView({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Braces: scrollIntoView returns a Promise in newer browsers, and an effect
+  // that returns one crashes React when it cleans up.
+  useEffect(() => {
+    ref.current?.scrollIntoView({ block: "nearest" });
+  }, []);
+  return (
+    <Box ref={ref} sx={{ ml: 3.5, mt: 1, mb: 1.5 }}>
+      {children}
     </Box>
   );
 }

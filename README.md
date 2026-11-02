@@ -218,34 +218,33 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
     change files too.
   - A command that can't be run at all (the server failed) shows as an
     error and doesn't stop the step: it isn't the model's to fix.
-- Then chat **checks** the step: one more call to the model, with no tools,
-  given the step, **every file any step of the plan wrote or edited, in any
-  run, whole, as it is now**, the changes made during it (for each change you approved, the diff
-  you saw; each change cut at 12,000 characters, all of them at 24,000), and
-  the reply.
-  - Whole files, because diffs alone misled the check: a hunk hid a
+- Then chat **checks** the step: a separate conversation with the model,
+  with only the read-only disk tools (`read_file`, `grep`, `find_files`,
+  `list_directory`), given the step, the changes made during it (for each
+  change you approved, the diff you saw; each change cut at 12,000
+  characters, all of them at 24,000), the reply, and **every file any step of
+  the plan wrote or edited, in any run, as it is now**.
+  - Files go in its first message whole while they fit in a quarter of the
+    model's context (its context size from the server, or 32,000 tokens if
+    it's unknown, at about 4 characters a token), the step's own first, then
+    other steps'. The rest are listed, and it reads what it needs. It gets up
+    to 8 rounds of reads, then answers without tools.
+  - Whole files and reads, because diffs alone misled the check: a hunk hid a
     function's first line, so its parameter looked undefined, and a rerun's
     changes were only its fixes, so a route the first attempt wrote looked
-    missing. Code that's in the file counts, whoever wrote it. Other runs
-    and steps count too: a step whose work was already done (by a rerun, or
-    by an earlier step) changed nothing, and the check, seeing no file, said
-    the file was never created.
-  - The files get half the model's context (its context size from the
-    server, or 32,000 tokens if it's unknown, at about 4 characters a
-    token). The step's own files go first; files other steps changed fill
-    what's left, and the check is told which didn't fit. (With all of them, a
-    step that had only changed the README overflowed: `Chat.tsx` and three
-    other files came to ~33,000 tokens.) If the step's own files don't fit,
-    or can't be read, they aren't cut or swapped for the diffs: a check that
-    can't see the code guesses. Instead the step gets ✗ with "Couldn't check
-    this step: server/x.ts (~N tokens) is too big for the check…", the plan
-    stops, and the model gets a planning turn to propose a plan change, which
-    shows under the plan for you to accept or not. It's asked to split the
-    step only when the step's own files were too big; a file it couldn't
-    read is something splitting doesn't fix.
-  - chat reads the files with `read_file` under a chat id of its own
-    (`<chat>:check`), so they don't count as read by the model for the
-    read-before-edit rule. It answers
+    missing. Code that's there counts, whoever wrote it. Other runs and steps
+    count too: a step whose work was already done (by a rerun, or by an
+    earlier step) changed nothing, and the check, seeing no file, said the
+    file was never created.
+  - Tools, because a check that only gets what fits couldn't judge big
+    files: every step of a refactor touching `Chat.tsx` (~25,000 tokens) was
+    "too big for the check", even one that only changed imports, and the plan
+    stopped there. Nothing in it knows about languages; the check decides
+    what to read, the way a stronger model would.
+  - Its reads go through the same rules as the model's (attachments only,
+    never the settings file), under a chat id of its own (`<chat>:check`), so
+    they don't count as read by the model for the read-before-edit rule. It
+    answers
   `DONE` or `MISSING: …`. The check uses the chat's **Think** setting, and
   works much better with it on.
 - **Not done**: the model gets one retry, which starts by asking whether the
@@ -276,6 +275,9 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
   goes back to pending (with "The reply failed: …" if it did) and the plan
   stops. **Continue** picks it up again.
 - While a plan runs, you can't send messages or switch sessions.
+- What a step asks you while it runs (approve a change or a command, allow a
+  folder) shows in the plan card, under that step, and scrolls into view.
+  At the bottom of the chat, it meant scrolling between it and the plan.
 
 ### Who marks a step done
 

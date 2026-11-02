@@ -99,6 +99,7 @@ import {
   PLANNING_TOOLS,
   PlanView,
   type WholeFile,
+  CHECK_TOOLS,
   checkRoom,
   commandFailedPrompt,
   disputeHolds,
@@ -108,7 +109,6 @@ import {
   planFromCall,
   reviewStep,
   stepPrompt,
-  uncheckedPrompt,
   weighDispute,
 } from "./Plan";
 
@@ -635,9 +635,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .finally(() => setOfferThink(false));
   const toolCount = toolContext.offered.length;
 
+  // A prompt from a plan step shows in the plan card, under the step (see
+  // PlanView); others show at the bottom of the chat.
+  const promptInPlan = !!pending && planRunning && !!plan;
   // Not smooth: an animation per token never caught up, and fought the user.
+  // A prompt in the plan card scrolls itself into view instead.
   useEffect(() => {
-    if (followingRef.current) stickToBottom();
+    if (followingRef.current && !promptInPlan) stickToBottom();
   }, [messages, pending]);
 
   const attach = (a: Attachment) => setAttachments((as) => (as.some((x) => x.path === a.path) ? as : [...as, a]));
@@ -1004,8 +1008,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       const own = await readWhole(mine);
       const others = await readWhole(filesChanged(planMessages).filter((p) => !mine.includes(p)));
       const room = checkRoom(models.find((m) => m.id === model)?.contextSize);
+      // The check's own reads, under the same chat id as readWhole's.
+      const read = async (call: ToolCall) => {
+        const out = await runTool(call, { chatId: `${sessionId}:check`, attachments: attachedPaths(attachments) });
+        return "result" in out ? out.result : "Error: that isn't attached to this session";
+      };
+      const tools = toolContext.definitions.filter((d) => CHECK_TOOLS.has((d as { function: { name: string } }).function.name));
       return await reviewStep(
-        { connectorId: connector.id, model, think: thinkOn, room },
+        { connectorId: connector.id, model, think: thinkOn, room, tools, read },
         step,
         stepMessages,
         own,
@@ -1048,8 +1058,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     planRunningRef.current = true;
     setPlanRunning(true);
     let msgs = messages;
-    // A step the check couldn't judge; the model proposes a plan change after the run.
-    let unchecked: { i: number; why: string; split: boolean } | null = null;
     try {
       for (;;) {
         const steps = planRef.current;
@@ -1076,7 +1084,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           }
         }
         let check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
-        if (check && !check.done && !check.unchecked) {
+        if (check && !check.done) {
           const missing = check.missing ?? "";
           const retryStart = msgs.length;
           r = await reply(disputePrompt(i, missing), msgs, { planStep: id });
@@ -1101,11 +1109,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           setStep(i, r.error ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}` } : { status: "pending" });
           break;
         }
-        if (check.unchecked) {
-          setStep(i, { status: "failed", note: check.unchecked, ms: took() });
-          unchecked = { i, why: check.unchecked, split: !!check.split };
-          break;
-        }
         setStep(i, check.done ? { status: "done", ms: took() } : { status: "failed", note: check.missing, ms: took() });
         if (!check.done) break;
       }
@@ -1113,8 +1116,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       planRunningRef.current = false;
       setPlanRunning(false);
     }
-    // Outside the run, so its update_plan becomes a proposal (see reply()).
-    if (unchecked) await reply(uncheckedPrompt(unchecked.i, unchecked.why, unchecked.split), msgs, { planning: true });
   };
 
   // Retries the last user message, dropping the failed reply.
@@ -1213,6 +1214,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 formatTime={formatSeconds}
                 onCancel={() => setConfirmCancelPlan(true)}
                 onClone={canClone ? () => clonePlan(plan) : undefined}
+                prompt={promptInPlan && pending ? <PendingPrompt ask={pending.ask} onDecide={pending.decide} /> : undefined}
               />
             ),
           },
@@ -1586,7 +1588,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             {contextStart > 0 && contextStart === messages.length && <ContextDivider />}
             {cardsBefore("end", true)}
             {planCards.filter((c) => slot(c.anchor).lost).map((c) => c.card)}
-            {pending && <PendingPrompt ask={pending.ask} onDecide={pending.decide} />}
+            {pending && !promptInPlan && <PendingPrompt ask={pending.ask} onDecide={pending.decide} />}
             {notLoaded && (
               <Alert severity="info">
                 {notLoaded} isn't loaded, so nothing was sent. Load it with ▶ in the model menu (it takes a moment and
