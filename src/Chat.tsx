@@ -913,6 +913,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const clearContext = () => {
     setContextStart(messages.length);
     setUsage(null);
+    // The model reprocesses its history from here anyway, so this is the cheap
+    // moment to bring the system prompt up to date: it names the working
+    // directory as it is now, and the next reply's update lists the attachments.
+    setFixedPromptDir(undefined);
   };
 
   // Asks in a Dialog first, like deleting a chat: window.confirm is answered

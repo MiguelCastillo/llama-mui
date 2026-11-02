@@ -1,6 +1,7 @@
 // Registry of the tools the model can call in chat, grouped for Settings →
 // Tools. Tools are on unless the user turned them off.
 
+import os from "node:os";
 import { DISK_TOOLS, checkAttachments, workingDirOf } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { load, save } from "./store.ts";
@@ -102,11 +103,14 @@ const isOffered = (ctx: ToolContext, t: ToolSpec) => !ctx.store.disabledTools.in
 // Everything but the last line is the same in every session, so a new one
 // reuses another's cached start (the tool list comes first, then this). Only
 // the working directory differs, so it must stay last: anything per-session
-// earlier would make each new session reprocess the rest.
+// earlier would make each new session reprocess the rest. The home folder is
+// the same in every session; without it a model with nothing attached guessed
+// Linux paths like /home/user.
 function toolsSystemPrompt(promptDir: string | null): string {
   return [
     "You have tools. Use one when it helps answer the question; otherwise answer directly.",
     ...GROUPS.map((g) => g.instructions),
+    `The user's home folder is ${os.homedir()}.`,
     promptDir ? `Working directory: ${promptDir}` : "There's no working directory: use absolute paths.",
   ].join("\n\n");
 }
@@ -144,6 +148,13 @@ type Outcome =
   | { needsLocation: { description: string; kind: AttachmentTarget["kind"] } }
   | { needsApproval: Approval };
 
+// A path the model made up, where nothing exists, is first answered with an
+// error it can correct from. Asking the user each time made a model that kept
+// guessing (once 14 paths in a row) cost a Deny click per guess; only one that
+// keeps going is brought to them. Any call that works starts the count over.
+const MISSING_PATH_ERRORS = 2;
+const missingPaths = new Map<string, number>();
+
 async function runTool(name: string, rawArgs: unknown, ctx: ToolContext): Promise<Outcome> {
   const text = (result: string) => ({ result });
   const tool = TOOLS.find((t) => t.name === name);
@@ -156,9 +167,22 @@ async function runTool(name: string, rawArgs: unknown, ctx: ToolContext): Promis
     return text("Error: the tool arguments were not valid JSON");
   }
   try {
-    return text(await tool.run(ctx, args));
+    const result = await tool.run(ctx, args);
+    missingPaths.delete(ctx.chatId);
+    return text(result);
   } catch (e: any) {
-    if (e instanceof AccessNeeded) return { needsAccess: e.target };
+    if (e instanceof AccessNeeded) {
+      if (e.target.kind === null) {
+        const misses = (missingPaths.get(ctx.chatId) ?? 0) + 1;
+        missingPaths.set(ctx.chatId, misses);
+        if (misses <= MISSING_PATH_ERRORS) {
+          return text(
+            `Error: ${e.target.path} doesn't exist. Don't guess paths: call locate_path so the user can pick it, or ask them.`,
+          );
+        }
+      }
+      return { needsAccess: e.target };
+    }
     if (e instanceof LocateNeeded) return { needsLocation: e.request };
     if (e instanceof ApprovalNeeded) return { needsApproval: e.approval };
     if (e instanceof ToolError) return text(`Error: ${e.message}`);

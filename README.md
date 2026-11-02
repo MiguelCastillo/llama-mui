@@ -143,7 +143,7 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
 
 | Layer | What it holds | When it's sent | How long it holds |
 |---|---|---|---|
-| **System prompt** | What holds for the whole session: how to use each tool group, the plan rules, the working directory | First in every request, and never changed in a session | The whole session |
+| **System prompt** | What holds for the whole session: how to use each tool group, the plan rules, your home folder, the working directory | First in every request, and never changed in a session, except when you clear the context | The whole session |
 | **Chat update** | Facts about the session that changed since: other attachments, a new working directory, tools turned off | After your next message, only when the facts changed | Until the next chat update replaces it |
 | **Note** | An instruction for one turn: the planning note (see [How plans work](#how-plans-work)) | After the message it's for | That turn only |
 
@@ -151,9 +151,18 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   same in every session except its last line, the working directory, so a new
   session reuses another's cached start; that line has to stay last. The tool
   list, which comes before it, lists every tool, even ones that are off, and a
-  call to one that's off fails with "turned off in Settings". The working
-  directory is fixed by the session's first message: if you pick another one
-  later, a chat update says so.
+  call to one that's off fails with "turned off in Settings". The line before
+  the working directory names your home folder, which is the same in every
+  session; without it a model with nothing attached guessed paths like
+  `/home/user`. The working directory is fixed by the session's first message:
+  if you pick another one later, a chat update says so. Clearing the context
+  makes the model reprocess its history anyway, so that is when the prompt is
+  brought up to date: it names the working directory as it is then.
+- A path the model made up, where nothing exists, is answered with an error
+  that tells it to use `locate_path` or ask you, for its first two such guesses
+  in a session; only a model that keeps guessing is brought to you with the
+  prompt for pointing it to the right file. Any call that works starts that
+  count over (`runTool` in `server/tools.ts`).
 - **Chat updates** (`chatUpdate` in `server/tools.ts`) and **notes**
   (`PLANNING_NOTE` in `src/agent/plan.ts`) both go after your message's text and
   aren't shown, and both are saved with the message, so later requests send
