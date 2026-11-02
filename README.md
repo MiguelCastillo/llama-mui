@@ -374,6 +374,11 @@ step that was running when the page closed comes back as pending.
   it changes, so reloading the page reopens it. The **Sessions** panel on the
   left lists them newest first; click one to switch, **+** starts a new session,
   and the trash icon deletes one.
+- **Session naming**: after the first reply, the model is asked to name the
+  session in 3–6 words. The name shows as the session title unless you give it
+  one yourself. Hover the session and click the **✎** icon to rename it: a text
+  field appears, press **Enter** to save, **Escape** to cancel, or leave it
+  blank to fall back to the model's name.
 - **Resend**: when a reply fails, your message gets a red outline and a line
   saying what went wrong (the reply was cut off, the llama server couldn't be
   reached, or it returned an error), with a **Resend** button. Hover the line

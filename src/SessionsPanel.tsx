@@ -6,11 +6,13 @@ import {
   ListItem,
   ListItemButton,
   ListItemText,
+  TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import type { SessionSummary } from "./api";
 import { useState } from "react";
 
@@ -47,6 +49,11 @@ function ago(t: number): string {
   return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+// The display title for a session: userName wins, then modelName, then title.
+function displayTitle(s: SessionSummary): string {
+  return s.userName ?? s.modelName ?? s.title;
+}
+
 // The saved chats, newest first. Beside the chat on wide screens; on phones
 // it slides in over it.
 export default function SessionsPanel({
@@ -58,6 +65,7 @@ export default function SessionsPanel({
   onSelect,
   onNew,
   onDelete,
+  onRename,
   onClose,
 }: {
   sessions: SessionSummary[];
@@ -70,9 +78,19 @@ export default function SessionsPanel({
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  // `name`: what the user typed, trimmed; empty goes back to the model's name.
+  onRename: (id: string, name: string) => void;
   onClose: () => void;
 }) {
   const [width, setWidth] = useState(loadWidth);
+  // Which session is being renamed: { id, value }.
+  const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
+
+  const saveEdit = (id: string, value: string) => {
+    onRename(id, value.trim());
+    setEditing(null);
+  };
+
   const list = (
     <Box
       sx={{
@@ -97,45 +115,110 @@ export default function SessionsPanel({
       </Box>
       {sessions.length === 0 ? (
         <Typography variant="body2" color="text.secondary" sx={{ px: 2 }}>
-          Your chats show up here once you send a message.
+          Your sessions show up here once you send a message.
         </Typography>
       ) : (
         <List dense sx={{ overflowY: "auto", flexGrow: 1, px: 1 }}>
-          {sessions.map((s) => (
-            <ListItem
-              key={s.id}
-              disablePadding
-              // The delete button shows on hover, except on phones (no hover).
-              sx={{
-                "& .MuiListItemSecondaryAction-root": { visibility: narrow ? "visible" : "hidden" },
-                "&:hover .MuiListItemSecondaryAction-root": { visibility: "visible" },
-              }}
-              secondaryAction={
-                <Tooltip title="Delete session">
-                  <span>
-                    <IconButton
-                      edge="end"
-                      size="small"
-                      aria-label={`Delete ${s.title}`}
-                      disabled={busy && s.id === currentId}
-                      onClick={() => onDelete(s.id)}
-                    >
-                      <DeleteOutlinedIcon fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              }
-            >
-              <ListItemButton
-                selected={s.id === currentId}
-                disabled={busy && s.id !== currentId}
-                onClick={() => onSelect(s.id)}
-                sx={{ borderRadius: 1, pr: 5 }}
+          {sessions.map((s) => {
+            const isEditing = editing?.id === s.id;
+            const title = displayTitle(s);
+            return (
+              <ListItem
+                key={s.id}
+                disablePadding
+                // The action buttons show on hover, except on phones (no hover).
+                sx={{
+                  "& .MuiListItemSecondaryAction-root": { visibility: narrow ? "visible" : "hidden" },
+                  "&:hover .MuiListItemSecondaryAction-root": { visibility: "visible" },
+                }}
+                secondaryAction={
+                  <Box sx={{ display: "flex", gap: 0.5 }}>
+                    <Tooltip title="Rename session">
+                      <span>
+                        <IconButton
+                          edge="end"
+                          size="small"
+                          aria-label={`Rename ${title}`}
+                          disabled={busy}
+                          onClick={() => setEditing({ id: s.id, value: title })}
+                        >
+                          <EditOutlinedIcon fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                    <Tooltip title="Delete session">
+                      <span>
+                        <IconButton
+                          edge="end"
+                          size="small"
+                          aria-label={`Delete ${title}`}
+                          disabled={busy && s.id === currentId}
+                          onClick={() => onDelete(s.id)}
+                        >
+                          <DeleteOutlinedIcon fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  </Box>
+                }
               >
-                <ListItemText primary={s.title} secondary={ago(s.updatedAt)} slotProps={{ primary: { noWrap: true } }} />
-              </ListItemButton>
-            </ListItem>
-          ))}
+                <ListItemButton
+                  selected={s.id === currentId}
+                  disabled={busy && s.id !== currentId}
+                  onClick={() => onSelect(s.id)}
+                  sx={{ borderRadius: 1, pr: 5 }}
+                >
+                  {isEditing ? (
+                    <TextField
+                      autoFocus
+                      size="small"
+                      fullWidth
+                      value={editing.value}
+                      placeholder={s.modelName ?? "Session name"}
+                      onChange={(e) => setEditing({ id: s.id, value: e.target.value })}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          saveEdit(s.id, (e.target as HTMLInputElement).value);
+                        }
+                        if (e.key === "Escape") setEditing(null);
+                      }}
+                      onBlur={() => saveEdit(s.id, editing.value)}
+                      slotProps={{
+                        input: {
+                          endAdornment: (
+                            // Keeps focus in the field, so its blur (which saves)
+                            // doesn't fire before Cancel's click.
+                            <Box
+                              sx={{ display: "flex", alignItems: "center", pr: 0.5 }}
+                              onMouseDown={(e) => e.preventDefault()}
+                            >
+                              <Tooltip title="Save">
+                                <IconButton size="small" onClick={() => saveEdit(s.id, editing.value)}>
+                                  ✓
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Cancel">
+                                <IconButton size="small" onClick={() => setEditing(null)}>
+                                  ✕
+                                </IconButton>
+                              </Tooltip>
+                            </Box>
+                          ),
+                        },
+                      }}
+                    />
+                  ) : (
+                    <ListItemText
+                      primary={title}
+                      secondary={ago(s.updatedAt)}
+                      slotProps={{ primary: { noWrap: true } }}
+                    />
+                  )}
+                </ListItemButton>
+              </ListItem>
+            );
+          })}
         </List>
       )}
     </Box>

@@ -398,6 +398,11 @@ export interface Session {
   // first message so the system prompt never changes (see Chat.tsx). Missing
   // until then, and in older chats.
   promptDir?: string | null;
+  // The name the model gave the session on its first reply (if any).
+  // The user can override it with a rename. Displayed title is userName,
+  // else modelName, else title (first message). Never overwritten by save.
+  modelName?: string | null;
+  userName?: string | null;
 }
 
 export interface PastPlan {
@@ -428,6 +433,8 @@ export interface SessionSummary {
   id: string;
   title: string;
   updatedAt: number;
+  modelName?: string | null;
+  userName?: string | null;
 }
 
 // Saved chats, newest first, and the calls to open, save and delete one.
@@ -435,6 +442,14 @@ export const listSessions = () => call<SessionSummary[]>("GET", "/api/chats");
 export const getSession = (id: string) => call<Session>("GET", `/api/chats/${id}`);
 export const saveSession = (s: Session) => call<SessionSummary>("PUT", `/api/chats/${s.id}`, s);
 export const deleteSession = (id: string) => call<{ id: string }>("DELETE", `/api/chats/${id}`);
+
+export interface RenameSessionParams {
+  title?: string;
+  modelName?: string | null;
+  userName?: string | null;
+}
+export const renameSession = (id: string, params: RenameSessionParams) =>
+  call<SessionSummary>("PATCH", `/api/chats/${id}`, params);
 
 export interface Usage {
   // Everything now in the model's context: prompt, tools, history and reply.

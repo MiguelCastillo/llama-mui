@@ -85,6 +85,7 @@ import {
   deleteSession,
   getSession,
   listSessions,
+  renameSession,
   runTool,
   saveSession,
 } from "./api";
@@ -93,6 +94,7 @@ import SessionsPanel from "./SessionsPanel";
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
+import { askForSessionName } from "./agent/sessionNaming";
 import {
   PlanView,
   checkRoom,
@@ -185,6 +187,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // The model's name for this session, carried by saves in case it came before
+  // the first one. The user's name is only ever written by a rename (PATCH),
+  // so renaming doesn't save the session and move it to the top.
+  const [modelName, setModelName] = useState<string | null>(null);
   // Per-model options from Settings → Models, plus the server's defaults for
   // models nobody changed.
   const [modelSettings, setModelSettings] = useState<{
@@ -343,7 +349,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What was last saved or loaded, so opening a chat doesn't save it again
   // (which would move it to the top of the list).
   const savedKey = useRef("");
-  const keyOf = (s: Session) => JSON.stringify([s.title, s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planAnchor, s.pastPlans, s.promptDir]);
+  // Not the title: it comes from the names and the first message, and a saved
+  // one holds the user's name, which saves never send.
+  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planAnchor, s.pastPlans, s.promptDir, s.modelName]);
 
   const applySession = (s: Session) => {
     // Saved before plans had a place: pinned after the chat's last message as
@@ -359,6 +367,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setFixedPromptDir(s.promptDir);
     setUsage(s.usage);
     setFailed(s.failed ?? null);
+    setModelName(s.modelName ?? null);
     // A step that was running when the page went away didn't finish.
     changePlan(
       s.plan?.map((st) => ({
@@ -392,9 +401,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   const saveNow = () => {
     if (!loaded || messages.length === 0) return;
+    const firstUser = messages.find((m) => m.role === "user")?.content ?? "New session";
+    // The server puts the user's name, when there is one, ahead of this.
     const session: Session = {
       id: sessionId,
-      title: (messages.find((m) => m.role === "user")?.content ?? "New session").slice(0, 80),
+      title: modelName ?? firstUser.slice(0, 80),
       model,
       messages,
       contextStart,
@@ -406,6 +417,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       planAnchor,
       pastPlans,
       promptDir: fixedPromptDir,
+      modelName,
     };
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -420,7 +432,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   useEffect(() => {
     const timer = setTimeout(saveNow, 800);
     return () => clearTimeout(timer);
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planAnchor, pastPlans, fixedPromptDir]);
+  // modelName too: the model often names a session before its first save, when
+  // the rename (PATCH) has no file to change yet, so the next save carries it.
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planAnchor, pastPlans, fixedPromptDir, modelName]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -436,6 +450,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setAttachments([]);
     setFixedPromptDir(undefined);
     setFailed(null);
+    setModelName(null);
     changePlan(null);
     setPlanProposal(null);
     setPlanAnchor(null);
@@ -460,6 +475,18 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // without being shown, in some browsers (the Claude app's browser pane).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const removeSession = (id: string) => setConfirmDelete(id);
+  // The user's name for a session is userName; an empty one clears it, and the
+  // title falls back to the model's name, then the first message.
+  const renameSessionLocal = (id: string, name: string) => {
+    const s = sessions.find((x) => x.id === id);
+    const userNameVal = name || null;
+    const title = userNameVal ?? s?.modelName ?? s?.title ?? "New session";
+    renameSession(id, { title, userName: userNameVal })
+      .then((summary) => {
+        setSessions((ss) => ss.map((x) => (x.id === id ? { ...x, ...summary, userName: userNameVal } : x)));
+      })
+      .catch((e) => setError(e.message));
+  };
   const deleteConfirmed = () => {
     const id = confirmDelete;
     setConfirmDelete(null);
@@ -701,6 +728,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // Update streamRate for the UI (tokens per second display).
     streamRate.current = { pieces: result.messages.length, first: started };
 
+    // After a successful reply, ask the model to name the session if it has
+    // no name yet (modelName is null).
+    if (result.ok && !modelName) {
+      const name = await askForSessionName(result.messages, connectorId, model, controller.signal);
+      if (name) {
+        setModelName(name);
+        renameSession(sessionId, { title: name, modelName: name });
+      }
+    }
+
     return { ok: result.ok, messages: result.messages, error: result.error };
   };
 
@@ -897,6 +934,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         onSelect={(id) => id !== sessionId && openSession(id)}
         onNew={newChat}
         onDelete={removeSession}
+        onRename={renameSessionLocal}
         onClose={() => setDrawerOpen(false)}
       />
       <Box sx={{ flexGrow: 1, minWidth: 0, height: "100dvh", display: "flex", flexDirection: "column", position: "relative" }}>

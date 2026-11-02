@@ -28,6 +28,7 @@ async function readSession(id: string): Promise<any | null> {
 //   GET          → [{ id, title, updatedAt }], newest first
 //   GET /<id>    → the saved session
 //   PUT /<id>    → saves it; the server sets createdAt and updatedAt
+//   PATCH /<id>  → updates only the name fields, keeps updatedAt
 //   DELETE /<id> → deletes it
 export async function chatRoutes({ req, res, parts, method }: Route): Promise<boolean> {
   if (parts[0] !== "chats") return false;
@@ -39,7 +40,13 @@ export async function chatRoutes({ req, res, parts, method }: Route): Promise<bo
     );
     const list = sessions
       .filter((s) => s !== null)
-      .map((s) => ({ id: String(s.id), title: String(s.title), updatedAt: Number(s.updatedAt) }))
+      .map((s) => ({
+        id: String(s.id),
+        title: String(s.title),
+        updatedAt: Number(s.updatedAt),
+        modelName: s.modelName ?? null,
+        userName: s.userName ?? null,
+      }))
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
     sendJson(res, 200, list);
     return true;
@@ -59,13 +66,35 @@ export async function chatRoutes({ req, res, parts, method }: Route): Promise<bo
     const file = fileFor(id);
     const old = await readSession(id);
     const now = Date.now();
-    const title = String(body.title ?? "New chat").slice(0, 100);
-    const session = { ...body, id, title, createdAt: old?.createdAt ?? now, updatedAt: now };
+    // The names are PATCH's, never a save's: a save from a copy made before
+    // the model named the session wiped the name out. The title follows them.
+    const modelName = old?.modelName ?? body.modelName ?? null;
+    const userName = old ? (old.userName ?? null) : (body.userName ?? null);
+    const title = String(userName ?? modelName ?? body.title ?? "New session").slice(0, 100);
+    const session = { ...body, id, title, modelName, userName, createdAt: old?.createdAt ?? now, updatedAt: now };
     await mkdir(CHATS_DIR, { recursive: true, mode: 0o700 });
     // Write-then-rename so a crash mid-write can't leave a truncated file.
     await writeFile(`${file}.tmp`, JSON.stringify(session), { mode: 0o600 });
     await rename(`${file}.tmp`, file);
     sendJson(res, 200, { id, title, updatedAt: now });
+    return true;
+  }
+  if (method === "PATCH") {
+    const body = await readJson(req);
+    const file = fileFor(id);
+    const old = await readSession(id);
+    if (!old) throw new HttpError(404, "No such session");
+    const title = body.title !== undefined ? String(body.title).slice(0, 100) : old.title;
+    const session = {
+      ...old,
+      title,
+      modelName: body.modelName !== undefined ? body.modelName : old.modelName,
+      userName: body.userName !== undefined ? body.userName : old.userName,
+    };
+    await mkdir(CHATS_DIR, { recursive: true, mode: 0o700 });
+    await writeFile(`${file}.tmp`, JSON.stringify(session), { mode: 0o600 });
+    await rename(`${file}.tmp`, file);
+    sendJson(res, 200, { id, title, updatedAt: old.updatedAt });
     return true;
   }
   if (method === "DELETE") {
