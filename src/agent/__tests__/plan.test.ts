@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { type ChatMessage, type PlanStep } from "../../api";
-import { planFromCall, stepPrompt, filesChanged, weighDispute } from "../plan";
+import { planFromCall, stepPrompt, filesChanged, weighDispute, extractContext } from "../plan";
 
 // ── planFromCall ────────────────────────────────────────────────────────────
 
@@ -73,6 +73,95 @@ describe("planFromCall", () => {
     const ids = result!.map((s) => s.id);
     expect(new Set(ids).size).toBe(3);
   });
+
+  it("gives a plan that drops its done steps the running step first, then pending steps", () => {
+    // Old plan: 9 steps, 3 done, step 4 running, steps 5-9 pending. The model
+    // sends the work left, its first step the running one reworded.
+    const old: PlanStep[] = [
+      { id: "s1", text: "Old step 1", status: "done" },
+      { id: "s2", text: "Old step 2", status: "done" },
+      { id: "s3", text: "Old step 3", status: "done" },
+      { id: "s4", text: "Old step 4", status: "running" },
+      { id: "s5", text: "Old step 5", status: "pending" },
+      { id: "s6", text: "Old step 6", status: "pending" },
+      { id: "s7", text: "Old step 7", status: "pending" },
+      { id: "s8", text: "Old step 8", status: "pending" },
+      { id: "s9", text: "Old step 9", status: "pending" },
+    ];
+    const args = JSON.stringify({
+      steps: ["New remaining 1", "New remaining 2", "New remaining 3"],
+    });
+    const result = planFromCall(args, old, true);
+    expect(result!.map((s) => [s.id === "s4" ? "s4" : "new", s.status])).toEqual([
+      ["s4", "running"],
+      ["new", "pending"],
+      ["new", "pending"],
+    ]);
+    expect(new Set(result!.map((s) => s.id)).size).toBe(3);
+  });
+
+  it("preserves running step id and status when it is reworded and at its old position", () => {
+    // The running step is at index 2 in both old and new; text changed.
+    const old: PlanStep[] = [
+      { id: "s1", text: "Step one", status: "done" },
+      { id: "s2", text: "Step two", status: "done" },
+      { id: "s3", text: "Do the hard part", status: "running" },
+      { id: "s4", text: "After that", status: "pending" },
+    ];
+    const args = JSON.stringify({
+      steps: ["Step one", "Step two", "Tweaked the hard part", "After that"],
+    });
+    const result = planFromCall(args, old, true);
+    // The reworded running step keeps its id and status.
+    expect(result![2].id).toBe("s3");
+    expect(result![2].status).toBe("running");
+    // The step matching "After that" by text keeps its id/status.
+    expect(result![3].id).toBe("s4");
+    expect(result![3].status).toBe("pending");
+  });
+});
+
+// ── extractContext ──────────────────────────────────────────────────────────
+
+describe("extractContext", () => {
+  it("returns the context string when present", () => {
+    const args = JSON.stringify({ steps: ["Do A"], context: "Some background" });
+    expect(extractContext(args)).toBe("Some background");
+  });
+
+  it("returns null when context is missing", () => {
+    const args = JSON.stringify({ steps: ["Do A"] });
+    expect(extractContext(args)).toBeNull();
+  });
+
+  it("returns null when context is explicitly null", () => {
+    const args = JSON.stringify({ steps: ["Do A"], context: null });
+    expect(extractContext(args)).toBeNull();
+  });
+
+  it("returns null when args is not valid JSON", () => {
+    expect(extractContext("not json")).toBeNull();
+  });
+
+  it("trims whitespace from the context string", () => {
+    const args = JSON.stringify({ steps: ["Do A"], context: "  Some background  " });
+    expect(extractContext(args)).toBe("Some background");
+  });
+
+  it("returns null for an empty string context", () => {
+    const args = JSON.stringify({ steps: ["Do A"], context: "" });
+    expect(extractContext(args)).toBeNull();
+  });
+
+  it("returns null for a whitespace-only context", () => {
+    const args = JSON.stringify({ steps: ["Do A"], context: "   \n\t  " });
+    expect(extractContext(args)).toBeNull();
+  });
+
+  it("returns null when context is not a string", () => {
+    const args = JSON.stringify({ steps: ["Do A"], context: 42 });
+    expect(extractContext(args)).toBeNull();
+  });
 });
 
 // ── stepPrompt ──────────────────────────────────────────────────────────────
@@ -90,6 +179,8 @@ describe("stepPrompt", () => {
     expect(prompt).toContain("[x] 1. Do A");
     expect(prompt).toContain("[ ] 2. Do B");
     expect(prompt).toContain("[ ] 3. Do C");
+    // "Do step N" must be the last line of the prompt.
+    expect(prompt.split("\n").pop()?.trim()).toBe("Do step 2 of 3: Do B");
   });
 
   it("uses [ ] for pending steps", () => {
@@ -106,6 +197,22 @@ describe("stepPrompt", () => {
     ];
     const prompt = stepPrompt(steps, 0);
     expect(prompt).toContain("[x] 1. Step 1");
+  });
+
+  it("includes context when provided", () => {
+    const steps: PlanStep[] = [
+      { id: "1", text: "Step 1", status: "pending" },
+    ];
+    const prompt = stepPrompt(steps, 0, undefined, undefined, "Remember the auth flow");
+    expect(prompt).toContain("What the steps need from the conversation:\nRemember the auth flow");
+  });
+
+  it("omits context section when context is null or empty", () => {
+    const steps: PlanStep[] = [
+      { id: "1", text: "Step 1", status: "pending" },
+    ];
+    const prompt = stepPrompt(steps, 0, undefined, undefined, null);
+    expect(prompt).not.toContain("What the steps need from the conversation:");
   });
 });
 
@@ -308,5 +415,30 @@ describe("stepPrompt for a fresh step", () => {
     expect(text).toContain("Do step 2 of 2: Use them");
     expect(text).toContain("The task the plan is for:\nName sessions");
     expect(text).toContain("src/api.ts\nserver/chats.ts");
+  });
+
+  it("orders context before request before plan before changed files", () => {
+    const steps: PlanStep[] = [
+      { id: "a", text: "Add fields", status: "done" },
+      { id: "b", text: "Use them", status: "pending" },
+    ];
+    const text = stepPrompt(
+      steps,
+      1,
+      "Name sessions",
+      ["src/api.ts"],
+      "Background about the session naming",
+    );
+    const contextIdx = text.indexOf("What the steps need from the conversation:");
+    const requestIdx = text.indexOf("The task the plan is for:");
+    const planIdx = text.indexOf("The plan:");
+    const filesIdx = text.indexOf("Files earlier steps changed;");
+    expect(contextIdx).toBeGreaterThan(-1);
+    expect(requestIdx).toBeGreaterThan(-1);
+    expect(planIdx).toBeGreaterThan(-1);
+    expect(filesIdx).toBeGreaterThan(-1);
+    expect(contextIdx).toBeLessThan(requestIdx);
+    expect(requestIdx).toBeLessThan(planIdx);
+    expect(planIdx).toBeLessThan(filesIdx);
   });
 });

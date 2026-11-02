@@ -2,7 +2,7 @@
 
 import { type ChatMessage, type ToolCall, type Usage, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, streamChat, runTool } from "../api";
 import { callKey, shareTokens } from "./helpers";
-import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall } from "./plan";
+import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext } from "./plan";
 
 // Maximum number of identical tool calls (same name + arguments) before the
 // repeat guard fires and stops the model from looping.
@@ -83,10 +83,12 @@ export interface RunTurnCallbacks {
   setPlanProposal: (p: any[]) => void;
   setPastPlans: (fn: (p: any[]) => any[]) => void;
   setPlanAnchor: (a: string | null) => void;
+  setPlanContext: (c: string | null) => void;
   changePlan: (s: any[]) => void;
   planRef: { current: any[] | null };
   planRunningRef: { current: boolean };
   planAnchor: string | null;
+  planContext: string | null;
 }
 
 // Configuration needed for a single reply turn.
@@ -132,7 +134,7 @@ export async function runTurn(
     history: baseHistory, forgotten, attached: attachedBase,
     chatId, controller, started, text,
   } = config;
-  const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setPlanProposal, setPastPlans, setPlanAnchor, changePlan, planRef, planRunningRef, planAnchor } = callbacks;
+  const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, changePlan, planRef, planRunningRef, planAnchor, planContext } = callbacks;
 
   const tag = planStep ? { planStep } : {};
   let error: string | undefined;
@@ -310,14 +312,18 @@ export async function runTurn(
           const finished = current.length > 0 && current.every((st: any) => st.status === "done");
           const old = finished ? [] : current;
           const steps = planFromCall(call.arguments, old, planRunningRef.current);
+          const ctx = extractContext(call.arguments);
           const underway = old.some((st: any) => st.status !== "pending") && old.some((st: any) => st.status !== "done");
           if (steps && underway && !planRunningRef.current) {
             setPlanProposal(steps);
             result = "Proposed, not made: the user sees your change next to the plan and decides. Tell them what you changed and why.";
           } else if (steps) {
-            if (finished) setPastPlans((p: any[]) => [...p, { steps: current, anchor: planAnchor }]);
+            if (finished) setPastPlans((p: any[]) => [...p, { steps: current, anchor: planAnchor, context: planContext }]);
             if (!planRunningRef.current) setPlanAnchor(call.id);
             changePlan(steps);
+            // A step revising the plan mid-run usually leaves context out; the
+            // plan's context still holds.
+            if (ctx !== null || !planRunningRef.current) setPlanContext(ctx);
           }
           if (steps && planning) planned = true;
         }
@@ -448,10 +454,12 @@ export interface RunPlanCallbacks {
   setPlanRunning: (v: boolean) => void;
   messages: ChatMessage[];
   planRef: { current: PlanStep[] | null };
-  setStep: (i: number, patch: Omit<PlanStep, "id" | "text">) => void;
+  setStep: (id: string, patch: Omit<PlanStep, "id" | "text">) => void;
   reply: (text: string, before: ChatMessage[], opts?: { planning?: boolean; planStep?: string; from?: number }) => Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }>;
   // The message that asked for the plan, sent with each step (see stepPrompt).
   request?: string;
+  // The context for the plan, sent with each step (see stepPrompt).
+  context?: string | null;
   // Settings → Chat, "Fresh context for each plan step"; on unless false.
   freshSteps?: boolean;
   setError: (err: string | null) => void;
@@ -487,7 +495,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       const i = steps?.findIndex((st) => st.status !== "done") ?? -1;
       if (!steps || i < 0 || steps[i].status === "disputed") break;
       const { id, text } = steps[i];
-      setStep(i, { status: "running" });
+      setStep(id, { status: "running" });
       const start = msgs.length;
       const startedAt = performance.now();
       const took = () => performance.now() - startedAt;
@@ -499,7 +507,9 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       const fresh = callbacks.freshSteps !== false;
       const from = fresh ? start : undefined;
       const changed = fresh ? filesChanged(msgs.filter((m) => m.planStep)) : [];
-      let r = await reply(stepPrompt(steps, i, fresh ? callbacks.request : undefined, changed), msgs, { planStep: id, from });
+      const request = fresh ? callbacks.request : undefined;
+      const ctx = fresh ? callbacks.context : undefined;
+      let r = await reply(stepPrompt(steps, i, request, changed, ctx), msgs, { planStep: id, from });
       msgs = r.messages;
       let failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError) : null;
       if (failed) {
@@ -507,7 +517,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
         msgs = r.messages;
         failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError) : null;
         if (failed) {
-          setStep(i, { status: "failed", note: `\`${failed.command}\` still fails: ${commandSummary(failed.output)}`, ms: took() });
+          setStep(id, { status: "failed", note: `\`${failed.command}\` still fails: ${commandSummary(failed.output)}`, ms: took() });
           break;
         }
       }
@@ -522,12 +532,12 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
         msgs = r.messages;
         const d = r.ok ? weighDispute(msgs.slice(retryStart), msgs.slice(start)) : null;
         if (d?.verdict === "wrong" && !d.changed) {
-          setStep(i, { status: disputeHolds(d) ? "disputed" : "failed", note: disputeNote(missing, d), ms: took() });
+          setStep(id, { status: disputeHolds(d) ? "disputed" : "failed", note: disputeNote(missing, d), ms: took() });
           break;
         }
         failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError) : null;
         if (failed) {
-          setStep(i, { status: "failed", note: `\`${failed.command}\` fails: ${commandSummary(failed.output)}`, ms: took() });
+          setStep(id, { status: "failed", note: `\`${failed.command}\` fails: ${commandSummary(failed.output)}`, ms: took() });
           break;
         }
         check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep), {
@@ -536,10 +546,10 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
         }) : null;
       }
       if (!check) {
-        setStep(i, r.error ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}` } : { status: "pending" });
+        setStep(id, r.error ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}` } : { status: "pending" });
         break;
       }
-      setStep(i, check.done ? { status: "done", ms: took() } : { status: "failed", note: check.missing, ms: took() });
+      setStep(id, check.done ? { status: "done", ms: took() } : { status: "failed", note: check.missing, ms: took() });
       if (!check.done) break;
     }
   } finally {

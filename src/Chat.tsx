@@ -246,6 +246,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     planRef.current = next;
     setPlan(next);
   };
+  // Context the model wrote alongside the plan (requirements, notes); saved
+  // with the session, cleared when the plan is cancelled, moved into pastPlans
+  // when a plan is archived, and kept when a plan is cloned.
+  const [planContext, setPlanContext] = useState<string | null>(null);
   // Where each plan shows: after the turn whose update_plan call wrote it, so
   // it stays in place in the history (see Session). A finished plan stays
   // there when a new one is written; the new one shows after its own turn.
@@ -254,10 +258,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // A finished plan never runs again; Clone starts a new one with its steps,
   // all pending, at the end of the chat. Not while another plan is unfinished,
   // which the clone would replace (see canClone).
-  const clonePlan = (steps: PlanStep[]) => {
-    if (plan) setPastPlans((p) => [...p, { steps: plan, anchor: planAnchor }]);
+  const clonePlan = (steps: PlanStep[], context?: string | null) => {
+    if (plan) setPastPlans((p) => [...p, { steps: plan, anchor: planAnchor, context: planContext }]);
     setPlanAnchor(`at:${messages.length}`);
     changePlan(steps.map((st) => ({ id: crypto.randomUUID(), text: st.text, status: "pending" })));
+    setPlanContext(context ?? null);
     toBottom();
   };
   // A change the model suggested to a plan that's under way; see reply().
@@ -351,7 +356,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const savedKey = useRef("");
   // Not the title: it comes from the names and the first message, and a saved
   // one holds the user's name, which saves never send.
-  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planAnchor, s.pastPlans, s.promptDir, s.modelName]);
+  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planAnchor, s.pastPlans, s.promptDir, s.modelName]);
 
   const applySession = (s: Session) => {
     // Saved before plans had a place: pinned after the chat's last message as
@@ -377,6 +382,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       })) ?? null,
     );
     setPlanProposal(s.planProposal ?? null);
+    setPlanContext(s.planContext ?? null);
     setPlanAnchor(planAnchor);
     setPastPlans(pastPlans);
     if (s.model) setModel(s.model);
@@ -414,6 +420,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       failed: abort ? INTERRUPTED : failed,
       plan,
       planProposal,
+      planContext,
       planAnchor,
       pastPlans,
       promptDir: fixedPromptDir,
@@ -434,7 +441,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return () => clearTimeout(timer);
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planAnchor, pastPlans, fixedPromptDir, modelName]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planAnchor, pastPlans, fixedPromptDir, modelName]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -453,6 +460,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setModelName(null);
     changePlan(null);
     setPlanProposal(null);
+    setPlanContext(null);
     setPlanAnchor(null);
     setPastPlans([]);
     setDrawerOpen(false);
@@ -469,6 +477,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     abort?.abort();
     changePlan(null);
     setPlanProposal(null);
+    setPlanContext(null);
     setPlanAnchor(null);
   };
   // Deleting asks first, in a Dialog: window.confirm is answered "no" at once,
@@ -718,10 +727,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         setPlanProposal,
         setPastPlans,
         setPlanAnchor,
+        setPlanContext,
         changePlan,
         planRef,
         planRunningRef,
         planAnchor,
+        planContext,
       },
     );
 
@@ -742,10 +753,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
 
   // Changes one step, keeping its text. The patch replaces the rest, so a
-  // step that runs again loses its old note and "may need a rerun" mark.
-  const setStep = (i: number, patch: Omit<PlanStep, "id" | "text">) => {
+  // step that runs again loses its old note and "may need a rerun" mark. By
+  // id: a step that rewrites the plan moves steps, and its id goes with it.
+  const setStep = (id: string, patch: Omit<PlanStep, "id" | "text">) => {
     const steps = planRef.current;
-    if (steps?.[i]) changePlan(steps.map((st, j) => (j === i ? { id: st.id, text: st.text, ...patch } : st)));
+    if (steps?.some((st) => st.id === id)) changePlan(steps.map((st) => (st.id === id ? { id: st.id, text: st.text, ...patch } : st)));
   };
 
   // Runs the plan's open steps in order, one turn each, and checks every step
@@ -762,6 +774,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
   const runPlanWrapper = () => runPlan({
     request: planRequest(),
+    context: planContext,
     freshSteps: prefs?.freshPlanSteps,
     connector: connector ?? null,
     model,
@@ -855,9 +868,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         <PlanView
           key={`past-${i}`}
           steps={p.steps}
+          context={p.context}
           details={stepTurns}
           formatTime={formatSeconds}
-          onClone={canClone ? () => clonePlan(p.steps) : undefined}
+          onClone={canClone ? () => clonePlan(p.steps, p.context) : undefined}
         />
       ),
     })),
@@ -869,6 +883,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               <PlanView
                 key="plan"
                 steps={plan}
+                context={planContext}
                 running={planRunning || !!abort}
                 since={planRunning ? busySince : null}
                 counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
@@ -879,7 +894,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 details={stepTurns}
                 formatTime={formatSeconds}
                 onCancel={() => setConfirmCancelPlan(true)}
-                onClone={canClone ? () => clonePlan(plan) : undefined}
+                onClone={canClone ? () => clonePlan(plan, planContext) : undefined}
                 prompt={promptInPlan && pending ? <PendingPrompt ask={pending.ask} onDecide={pending.decide} /> : undefined}
               />
             ),

@@ -32,18 +32,41 @@ export const PLANNING_NOTE =
 
 // The plan from an update_plan call's arguments, merged with the plan so far.
 // Only chat's check ticks a step off, so a step keeps its id, status and note
-// only if it's the same step as before, and otherwise starts pending: while
-// the plan runs, the step in the same position (the model may reword the step
-// it's on); otherwise, the step with the same text. See README, "How plans work".
+// only if it's the same step as before, by text, and otherwise starts pending.
+// Not by position: a step that dropped the finished steps from the plan once
+// gave their "done" to the steps that took their places. The step running may
+// be reworded, so it keeps its id (its messages and runPlan use it) as the
+// first new step with no match. See README, "How plans work".
 export function planFromCall(args: string, old: PlanStep[], running: boolean): PlanStep[] | null {
   try {
     const steps = JSON.parse(args).steps;
     if (!Array.isArray(steps)) return null;
-    return steps.map((s: any, i: number) => {
-      const text = String(typeof s === "string" ? s : s.text).trim();
-      const same = running ? old[i] : old.find((o) => o.text === text);
-      return same ? { ...same, text } : { id: crypto.randomUUID(), text, status: "pending" };
+    const texts = steps.map((s: any) => String(typeof s === "string" ? s : s.text).trim());
+    const current = running ? old.find((o) => o.status === "running") : undefined;
+    let reworded = current && !texts.includes(current.text) ? current : undefined;
+    return texts.map((text: string) => {
+      const same = old.find((o) => o.text === text);
+      if (same) return { ...same, text };
+      if (reworded) {
+        const step = { ...reworded, text };
+        reworded = undefined;
+        return step;
+      }
+      return { id: crypto.randomUUID(), text, status: "pending" };
     });
+  } catch {
+    return null;
+  }
+}
+
+// The context from an update_plan call's arguments, alongside planFromCall.
+export function extractContext(args: string): string | null {
+  try {
+    const parsed = JSON.parse(args);
+    const val = parsed.context;
+    if (typeof val !== "string") return null;
+    const trimmed = val.trim();
+    return trimmed ? trimmed : null;
   } catch {
     return null;
   }
@@ -51,14 +74,29 @@ export function planFromCall(args: string, old: PlanStep[], running: boolean): P
 
 // The message that runs step i: just that step, with the plan for context.
 // Steps start with a fresh context (see runPlan), so the prompt carries what
-// a step needs from before it: the request (requirements live there, not just
-// in the step text), and the files earlier steps changed, to read before
-// building on them (step 7 has to use the fields step 1 added).
-export function stepPrompt(steps: PlanStep[], i: number, request?: string, changed: string[] = []): string {
+// a step needs from before it: the context (background the model should
+// remember), the request (requirements live there, not just in the step
+// text), and the files earlier steps changed, to read before building on
+// them (step 7 has to use the fields step 1 added).
+//
+// The context and request are the same for every step, so they come first:
+// llama.cpp reuses a cached prompt only up to its first change. The plan's
+// checkmarks, the files changed and which step to do differ, so they follow.
+export function stepPrompt(
+  steps: PlanStep[],
+  i: number,
+  request?: string,
+  changed: string[] = [],
+  context?: string | null,
+): string {
   const list = steps.map((s, j) => `${s.status === "done" ? "[x]" : "[ ]"} ${j + 1}. ${s.text}`).join("\n");
-  const task = request ? `\n\nThe task the plan is for:\n${request}` : "";
-  const files = changed.length ? `\n\nFiles earlier steps changed; read what this step builds on:\n${changed.join("\n")}` : "";
-  return `Do step ${i + 1} of ${steps.length}: ${steps[i].text}\n\nThe plan:\n${list}${task}${files}`;
+  const parts: string[] = [];
+  if (context) parts.push(`What the steps need from the conversation:\n${context}`);
+  if (request) parts.push(`The task the plan is for:\n${request}`);
+  parts.push(`The plan:\n${list}`);
+  if (changed.length) parts.push(`Files earlier steps changed; read what this step builds on:\n${changed.join("\n")}`);
+  parts.push(`Do step ${i + 1} of ${steps.length}: ${steps[i].text}`);
+  return parts.join("\n\n");
 }
 
 // Room for a new file of a few hundred lines: a step that writes one is judged

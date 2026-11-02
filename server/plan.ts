@@ -14,7 +14,8 @@ export const planInstructions =
   "the user reviews the plan and runs it. Each step is one change you can make in one turn, written so " +
   "someone could check it from the diff alone. When a message says \"Do step N\", do only that step, then " +
   "reply with one line saying what you changed. Call update_plan again only if the plan itself has to change. " +
-  "Questions that don't change files need no plan.";
+  "Questions that don't change files need no plan. " +
+  "You may also include a `context` field: a brief description of the decisions, constraints, and other details from the conversation that each step needs (each step starts without the chat). Keep it short.";
 
 const updatePlan: ToolSpec = {
   name: "update_plan",
@@ -38,6 +39,11 @@ const updatePlan: ToolSpec = {
             },
             required: ["text"],
           },
+        },
+        context: {
+          type: "string",
+          description:
+            "Brief description of the decisions, constraints, and other details from the conversation that each step needs (each step starts without the chat).",
         },
       },
       required: ["steps"],

@@ -5,7 +5,20 @@
 // draws them, or returns null for a step with none.
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Box, Button, CircularProgress, IconButton, Paper, Stack, TextField, Tooltip, Typography } from "@mui/material";
+import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Box,
+  Button,
+  CircularProgress,
+  IconButton,
+  Paper,
+  Stack,
+  TextField,
+  Tooltip,
+  Typography,
+} from "@mui/material";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
@@ -29,6 +42,7 @@ const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
 
 export function PlanView({
   steps,
+  context,
   running,
   onRun,
   onChange,
@@ -43,6 +57,9 @@ export function PlanView({
   prompt,
 }: {
   steps: PlanStep[];
+  // Context the model wrote for this plan, describing what the steps need
+  // from the conversation. Shown collapsed by default.
+  context?: string | null;
   // An older finished plan passes none of running, onRun, onChange and
   // onCancel. Any finished plan is read-only (see `readOnly`).
   running?: boolean;
@@ -105,6 +122,20 @@ export function PlanView({
 
   return (
     <Paper variant="outlined" sx={{ p: 1.5 }}>
+      {context && (
+        <Accordion elevation={0} sx={{ bgcolor: "action.hover", "&:before": { display: "none" } }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="caption" color="text.secondary">
+              Context
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails sx={{ pt: 0.75 }}>
+            <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+              {context}
+            </Typography>
+          </AccordionDetails>
+        </Accordion>
+      )}
       <Stack direction="row" sx={{ alignItems: "center", mb: 1 }}>
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
           Plan · {done} of {steps.length} done

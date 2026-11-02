@@ -210,6 +210,10 @@ vitest (`npm test`).
   the plan, your next message sends the session as usual. **Fresh context for
   each plan step** in Settings → Chat turns it off, for comparing; it's meant
   to go away once it's proven.
+- The plan may also include a `context` field: a brief description of the
+  decisions, constraints, and other details from the conversation that each
+  step needs (since each step starts without the chat). It shows collapsed
+  in the plan card.
 - Then chat runs the **check command** of each attached folder that has one,
   once the plan has changed files. It's set per folder in **Chat settings**,
   under the folder (for this repo, `npx tsc --noEmit -p .`), and kept for
@@ -294,12 +298,12 @@ vitest (`npm test`).
 
 Only the check. The model writes only the steps' text: statuses it sends are
 ignored. When it calls `update_plan` again, a step keeps its status (and its
-note and history) only if it's the same step as before:
-
-- **While the plan runs**, the step in the same position. The model may
-  reword the step it's on, or add steps at the end.
-- **Otherwise**, the step with exactly the same text. A reworded or new step
-  starts pending.
+note and history) only if it's the same step as before: the step with
+exactly the same text. A reworded or new step starts pending, except that
+while the plan runs, the step it's on may be reworded: it stays the step it
+was, as the first new step whose text matches none of the old ones. Matching
+by position once let a plan that dropped its finished steps hand their "done"
+to the steps that took their places, which then never ran.
 
 A plan that's under way (some steps have run, some aren't done) isn't changed
 by the model outside a run, in a planning turn or not. Its `update_plan`

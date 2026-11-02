@@ -388,6 +388,9 @@ export interface Session {
   // A change to the plan the model suggested outside planning and runs,
   // waiting for the user to accept it. Older saved chats don't have it.
   planProposal?: PlanStep[] | null;
+  // Context the model wrote alongside the plan (e.g. requirements, notes),
+  // kept when the plan is approved and moved into pastPlans when archived.
+  planContext?: string | null;
   // Where `plan` shows: the id of the update_plan call that wrote it, or
   // "at:N", after the chat's first N messages: a clone, a plan from a chat
   // saved before this field, or one whose turn was compacted away ("at:0").
@@ -408,6 +411,8 @@ export interface Session {
 export interface PastPlan {
   steps: PlanStep[];
   anchor: string | null;
+  // Context the model wrote alongside this plan, kept when archived.
+  context?: string | null;
 }
 
 // One step of a plan. The model writes only the text; chat sets the status
