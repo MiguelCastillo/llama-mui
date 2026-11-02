@@ -58,7 +58,6 @@ import {
   type ChatMessage,
   type StepStats,
   type ToolCall,
-  runCheckCommand,
   type ModelSettings,
   type Preferences,
   type Attachment,
@@ -88,29 +87,28 @@ import {
   listSessions,
   runTool,
   saveSession,
-  streamChat,
 } from "./api";
 import ChatSettings, { AttachmentIcon } from "./ChatSettings";
 import SessionsPanel from "./SessionsPanel";
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
+import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
 import {
-  PLANNING_NOTE,
-  PLANNING_TOOLS,
   PlanView,
-  type WholeFile,
-  CHECK_TOOLS,
   checkRoom,
   commandFailedPrompt,
   disputeHolds,
   disputeNote,
   disputePrompt,
+  reviewStep,
+} from "./Plan";
+import {
   filesChanged,
   planFromCall,
-  reviewStep,
   stepPrompt,
   weighDispute,
-} from "./Plan";
+} from "./agent/plan";
+import { runTurn, runPlan } from "./agent/agent";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
 // and whether the Tools switch is on. Storage can be unavailable (private
@@ -121,9 +119,6 @@ const TOOLBAR_KEY = "llama-mui:toolbarOpen";
 const TOOLS_KEY = "llama-mui:toolsOn";
 // On by default: with tools on, a task gets a plan that chat runs and checks.
 const PLAN_KEY = "llama-mui:planOn";
-// Saved as `failed` while a reply runs, so a chat reopened after the page
-// went away mid-reply offers to resend.
-const INTERRUPTED = "interrupted";
 // Whether the chats panel is open (wide screens; on phones it's a drawer).
 const SESSIONS_OPEN_KEY = "llama-mui:sessionsOpen";
 // Which saved chat is open, so a reload reopens it.
@@ -164,16 +159,6 @@ function saveFlag(key: string, value: boolean) {
 // Splits the tokens a turn read fresh among the previous round's tool results,
 // by length. The total is exact (it includes a little chat-template framing);
 // the split is an estimate.
-function shareTokens(history: ChatMessage[], indexes: number[], tokens: number): ChatMessage[] {
-  const chars = indexes.reduce((n, i) => n + history[i].content.length, 0) || 1;
-  const next = [...history];
-  for (const i of indexes) {
-    const m = next[i];
-    next[i] = { ...m, stats: { ms: m.stats?.ms ?? 0, tokens: Math.round((tokens * m.content.length) / chars) } };
-  }
-  return next;
-}
-
 // What a tool call can wait on the user for, and their answer: allow or deny,
 // or, for a path, the files or folders they picked in its place.
 type Ask =
@@ -186,40 +171,14 @@ type Answer = boolean | AttachmentTarget[];
 // same arguments) in one reply isn't run, and the model answers with what it
 // has. MAX_TOOL_ROUNDS backs that up for loops whose arguments keep changing;
 // small models make one call per round, so it's set well above real work.
-const MAX_REPEATS = 2;
-const CHANGES_DISK = new Set(["write_file", "edit_file", "run_command"]);
-const MAX_TOOL_ROUNDS = 50;
 
 // The model menu's "Manage models" item: its value opens Settings → Models
 // instead of picking a model.
 const MANAGE_MODELS = "__manage_models__";
 
-// Same call, even if the model spaced its JSON differently.
-function callKey(call: ToolCall): string {
-  try {
-    return `${call.name} ${JSON.stringify(JSON.parse(call.arguments))}`;
-  } catch {
-    return `${call.name} ${call.arguments}`;
-  }
-}
-
 // What happened to a failed reply, in the user's terms. Our server answers 502
 // when it can't reach the llama server; a TypeError means the request never
 // got an answer at all.
-// The first lines of a check command's output, for a step's note: past its
-// "$ command" line, without the "[exit code N]" line.
-function commandSummary(output: string): string {
-  const lines = output.split("\n").slice(1, -1).filter((l) => l.trim());
-  const text = lines.slice(0, 2).join(" ").trim() || "(no output)";
-  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
-}
-
-function failureLine(failed: string): string {
-  if (failed === INTERRUPTED) return "The reply was cut off.";
-  if (failed.startsWith("TypeError") || failed.includes(": 502 ")) return "Couldn't reach the llama server.";
-  return "The llama server returned an error.";
-}
-
 export default function Chat({ visible, onOpenSettings }: { visible: boolean; onOpenSettings: () => void }) {
   // undefined until the first load, null when no server is configured.
   const [connector, setConnector] = useState<Connector | null | undefined>(undefined);
@@ -682,289 +641,64 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     before: ChatMessage[],
     { planning = false, planStep }: { planning?: boolean; planStep?: string } = {},
   ): Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }> => {
-    const tag = planStep ? { planStep } : {};
-    let error: string | undefined;
     if (!connector) return { ok: false, messages: before };
     // Every request checks, not just send(): a plan's steps and Resend come
     // here too, and the model may have been unloaded since.
     if (!(await modelLoaded())) return { ok: false, messages: before };
-    let ok = false;
     const connectorId = connector.id;
     // Fixed for this reply, even if the user changes attachments meanwhile;
     // only paths the user allows mid-reply are added.
-    let attached = attachedPaths(attachments);
     if (fixedPromptDir === undefined) setFixedPromptDir(workingDir);
     const forgotten = before.slice(0, contextStart);
-    // A planning turn's instructions travel with the message as its `note`, not
-    // in the system prompt: changing the system prompt (or the tools) made
-    // llama.cpp reprocess the whole chat, about a minute on a 40k-token one.
     // Attachments and tools that are off go the same way, as `update`, and
     // only when they changed since the last one the model saw.
     const seen = [...before.slice(contextStart)].reverse().find((m) => m.update)?.update;
-    const update = toolsOn && toolContext.update !== seen ? { update: toolContext.update } : {};
-    let history: ChatMessage[] = [
-      ...before.slice(contextStart),
-      { role: "user", content: text, ...update, ...(planning && { note: PLANNING_NOTE }), ...tag },
-    ];
-    setError(null);
-    setFailed(null);
-
     const controller = new AbortController();
-    setAbort(controller);
     const started = performance.now();
-    // For took: pieces and streaming time over all rounds, and the server's
-    // speed for the latest round.
-    let pieces = 0;
-    let streamedMs = 0;
-    let serverTps: number | undefined;
-    try {
-      // Each round streams one assistant turn. If it asks for tools, run them,
-      // add the results, and let the model continue from there.
-      // Indexes (in history) of the last round's tool results, which get their
-      // token counts once the next turn reports what it had to read.
-      let lastToolResults: number[] = [];
-      // How often each call ran in this reply, by callKey, since the last
-      // change to disk: after one, the same read or search can find something
-      // new, so repeating it isn't a loop.
-      const ran = new Map<string, number>();
-      // Set once the model has to stop using tools; it gets one more turn,
-      // without them, to answer from what it has.
-      let stopReason: string | null = null;
-      // A planning turn's job is done once a plan lands. Asked to go on, the
-      // model rewrote it instead: 16 update_plan calls in one turn, each
-      // reworded, so the repeat guard never fired.
-      let planned = false;
-      for (let round = 0; ; round++) {
-        const lastTurn: boolean = stopReason !== null;
-        const reply: ChatMessage = { role: "assistant", content: "", reasoning: "", ...tag };
-        let thinkStart = 0;
-        let thinkEnd = 0;
-        let thinkPieces = 0;
-        const show = () => setMessages([...forgotten, ...history, { ...reply }]);
-        streamRate.current = { pieces: 0, first: 0 };
-        // The empty reply goes on screen before the request is sent, so its
-        // bubble shows the waiting dots from the start, not from the first
-        // token (see `waiting` in MessageBubble).
-        show();
-        const { toolCalls: asked, usage: replyUsage } = await streamChat(
-          {
-            connectorId,
-            model,
-            messages:
-              toolsOn && !lastTurn && toolContext.systemPrompt
-                ? [{ role: "system", content: toolContext.systemPrompt }, ...history]
-                : history,
-            // With Think on, only a reply's first request thinks, where the model
-            // decides what to do; after tool results it mostly carries that out.
-            // Planning turns don't think: they read and list steps. Qwen3.6 spent
-            // minutes per planning turn thinking, nearly all of it between file
-            // reads (594 characters before its first read, then 20k, 17k, 36k).
-            // Turning it off per request costs nothing in the prompt cache.
-            think: thinkOn && !planning && round === 0,
-            // The same tools in every turn, planning included, so the prompt's
-            // start stays the same for the cache; a planning turn refuses the
-            // ones that change things when they're called (see below).
-            tools: toolsOn && !lastTurn ? toolContext.definitions : undefined,
-          },
-          (d) => {
-            streamRate.current.first ||= performance.now();
-            streamRate.current.pieces++;
-            if (d.reasoning) {
-              thinkStart ||= performance.now();
-              thinkPieces++;
-            }
-            if (d.content && thinkStart) thinkEnd ||= performance.now();
-            reply.content += d.content ?? "";
-            reply.reasoning += d.reasoning ?? "";
-            show();
-          },
-          controller.signal,
-        );
-        // Calls the model writes anyway on its last turn have nothing to run them.
-        const toolCalls: ToolCall[] = lastTurn ? [] : asked;
-        if (replyUsage) setUsage(replyUsage);
-        const r = streamRate.current;
-        if (r.first) {
-          pieces += r.pieces;
-          streamedMs += performance.now() - r.first;
-        }
-        serverTps = replyUsage?.tokensPerSecond ?? serverTps;
-        if (thinkStart) reply.stats = { ms: (thinkEnd || performance.now()) - thinkStart, tokens: thinkPieces };
-        if (replyUsage?.promptTokens && lastToolResults.length) {
-          history = shareTokens(history, lastToolResults, replyUsage.promptTokens);
-        }
-        lastToolResults = [];
-        // After a tool result, small models (Qwen 9B) sometimes write the whole
-        // answer inside their thinking and end with no text. Promote it, or
-        // the reply is blank (with steps hidden) and the next turn lacks it.
-        if (!toolCalls.length && !reply.content.trim() && reply.reasoning?.trim()) {
-          reply.content = reply.reasoning.trim();
-          reply.reasoning = "";
-        }
-        if (toolCalls.length) reply.toolCalls = toolCalls;
-        history = [...history, reply];
-        setMessages([...forgotten, ...history]);
-        if (!toolCalls.length) {
-          if (stopReason) setError(stopReason);
-          ok = !stopReason;
-          break;
-        }
 
-        for (const call of toolCalls) {
-          if (controller.signal.aborted) return { ok, messages: [...forgotten, ...history] };
-          let started = performance.now();
-          let result: string;
-          let diff: string | undefined;
-          const key = callKey(call);
-          const times = ran.get(key) ?? 0;
-          ran.set(key, times + 1);
-          try {
-            // A planning turn only reads and plans. Its tools are all offered
-            // (for the cache, above), so the rest are refused here, unrun.
-            if (planning && !PLANNING_TOOLS.has(call.name)) {
-              throw new Error(
-                `${call.name} isn't available while planning; read what you need, then call update_plan with the steps`,
-              );
-            }
-            if (times >= MAX_REPEATS) {
-              stopReason = `Stopped: the model kept repeating ${call.name} with the same arguments.`;
-              throw new Error(
-                `this exact call already ran ${times} times in this reply; answer with what you have`,
-              );
-            }
-            // A call can need the user more than once: access to a folder,
-            // then approval of the change it makes there.
-            let outcome = await runTool(call, { chatId: sessionId, attachments: attached });
-            while (!("result" in outcome)) {
-              const answer = await askUser(outcome, controller.signal);
-              if (controller.signal.aborted) return { ok, messages: [...forgotten, ...history] };
-              // Time spent waiting on the user isn't the tool's.
-              started = performance.now();
-              if (Array.isArray(answer)) {
-                // The user pointed to the right place; the model continues
-                // with it, which beats it guessing paths.
-                attached = [...attached, ...answer.map((a) => a.path)];
-                answer.forEach((a) => attach({ ...a, source: "request" }));
-                const picked = answer.map((a) => `${a.path} (${a.kind})`).join(", ");
-                outcome = {
-                  result:
-                    "needsAccess" in outcome
-                      ? `Instead of ${outcome.needsAccess.path}, the user attached ${picked}. Use that path; call the tool again with it.`
-                      : `The user picked ${picked}; it's attached to this chat. Use that path.`,
-                };
-                break;
-              }
-              if ("needsLocation" in outcome) {
-                outcome = { result: `Error: the user didn't pick ${outcome.needsLocation.description}` };
-                break;
-              }
-              if ("needsAccess" in outcome) {
-                const target = outcome.needsAccess;
-                if (!target.kind) {
-                  outcome = {
-                    result: `Error: nothing exists at ${target.path}, and the user didn't point to where it is`,
-                  };
-                  break;
-                }
-                if (!answer) {
-                  outcome = { result: `Error: the user didn't allow access to ${target.path}` };
-                  break;
-                }
-                attached = [...attached, target.path];
-                attach({ path: target.path, kind: target.kind, source: "request" });
-                outcome = await runTool(call, { chatId: sessionId, attachments: attached });
-              } else {
-                const approval = outcome.needsApproval;
-                if (!answer) {
-                  outcome = {
-                    result:
-                      approval.type === "change"
-                        ? `Error: the user didn't approve this change to ${approval.path}; nothing was written`
-                        : "Error: the user didn't approve running this command; it didn't run",
-                  };
-                  break;
-                }
-                if (approval.type === "change") diff = approval.diff;
-                // The server asks again if, say, the file changed since the preview.
-                outcome = await runTool(call, { chatId: sessionId, attachments: attached, approved: approval });
-              }
-            }
-            result = outcome.result;
-          } catch (e: any) {
-            result = `Error: ${e.message}`;
-          }
-          if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) ran.clear();
-          if (call.name === "update_plan" && !result.startsWith("Error:")) {
-            const current = planRef.current ?? [];
-            // A finished plan isn't changed: it stays as it ran, and this call
-            // starts a new one (keeping its steps would mark them done).
-            const finished = current.length > 0 && current.every((st) => st.status === "done");
-            const old = finished ? [] : current;
-            const steps = planFromCall(call.arguments, old, planRunningRef.current);
-            // A plan under way is the user's: outside a run, the model's change
-            // waits for them. Asked about a failed step, the model once
-            // "proposed" a fix by sending only that step, deleting the other 7.
-            const underway = old.some((st) => st.status !== "pending") && old.some((st) => st.status !== "done");
-            if (steps && underway && !planRunningRef.current) {
-              setPlanProposal(steps);
-              result =
-                "Proposed, not made: the user sees your change next to the plan and decides. Tell them what you changed and why.";
-            } else if (steps) {
-              if (finished) setPastPlans((p) => [...p, { steps: current, anchor: planAnchor }]);
-              // A change during a run keeps the card where it is.
-              if (!planRunningRef.current) setPlanAnchor(call.id);
-              changePlan(steps);
-            }
-            if (steps && planning) planned = true;
-          }
-          lastToolResults.push(history.length);
-          history = [
-            ...history,
-            {
-              role: "tool",
-              content: result,
-              toolCallId: call.id,
-              stats: { ms: performance.now() - started },
-              ...(diff && !result.startsWith("Error:") && { diff }),
-              ...tag,
-            },
-          ];
-          setMessages([...forgotten, ...history]);
-        }
-        if (planned) {
-          ok = true;
-          break;
-        }
-        if (round === MAX_TOOL_ROUNDS - 1) stopReason ??= `Stopped after ${MAX_TOOL_ROUNDS} rounds of tool calls.`;
-      }
-    } catch (e) {
-      if (!controller.signal.aborted) {
-        error = String(e);
-        if (!planStep) setFailed(error);
-      }
-    } finally {
-      setAbort(null);
-      // The server loads models on demand, so a reply can change their status.
-      refreshModels(connectorId);
-    }
-    const lastReply = history.map((m) => m.role).lastIndexOf("assistant");
-    if (lastReply >= 0) {
-      history = history.map((m, i) =>
-        i === lastReply
-          ? {
-              ...m,
-              took: {
-                ms: performance.now() - started,
-                // Under half a second of streaming is too short to rate.
-                clientTps: streamedMs >= 500 ? pieces / (streamedMs / 1000) : undefined,
-                serverTps,
-              },
-            }
-          : m,
-      );
-      setMessages([...forgotten, ...history]);
-    }
-    return { ok, messages: [...forgotten, ...history], error };
+    const result = await runTurn(
+      {
+        connectorId,
+        model,
+        toolsOn,
+        thinkOn,
+        planning,
+        planStep,
+        systemPrompt: toolContext.systemPrompt,
+        toolDefinitions: toolContext.definitions,
+        toolContextUpdate: toolContext.update,
+        seenUpdate: seen ?? "",
+        history: before.slice(contextStart),
+        forgotten,
+        attached: attachedPaths(attachments),
+        chatId: sessionId,
+        controller,
+        started,
+        text,
+      },
+      {
+        setMessages,
+        setError,
+        setFailed,
+        setUsage: (u) => { if (u) setUsage(u); },
+        setAbort,
+        refreshModels,
+        askUser,
+        attach,
+        setPlanProposal,
+        setPastPlans,
+        setPlanAnchor,
+        changePlan,
+        planRef,
+        planRunningRef,
+        planAnchor,
+      },
+    );
+
+    // Update streamRate for the UI (tokens per second display).
+    streamRate.current = { pieces: result.messages.length, first: started };
+
+    return { ok: result.ok, messages: result.messages, error: result.error };
   };
 
   // Changes one step, keeping its text. The patch replaces the rest, so a
@@ -974,149 +708,32 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (steps?.[i]) changePlan(steps.map((st, j) => (j === i ? { id: st.id, text: st.text, ...patch } : st)));
   };
 
-  // The files a step changed, as they are now, for its check. Read under a
-  // chat id of its own, so the model's read-before-edit record
-  // (server/reads.ts) only has what the model read itself.
-  const readWhole = (paths: string[]): Promise<WholeFile[]> =>
-    Promise.all(
-      paths.map(async (path) => {
-        const call = { id: "check", name: "read_file", arguments: JSON.stringify({ path, max_lines: Number.MAX_SAFE_INTEGER }) };
-        try {
-          const out = await runTool(call, { chatId: `${sessionId}:check`, attachments: attachedPaths(attachments) });
-          if (!("result" in out)) return { path, error: "it isn't attached to this session" };
-          if (out.result.startsWith("Error:")) return { path, error: out.result.slice(7).trim() };
-          // After read_file's "<path> (lines 1-N of N)" line.
-          const text = out.result.slice(out.result.indexOf("\n") + 1);
-          return { path, text, cut: /… \(output cut at \d+ characters\)$/.test(text) };
-        } catch (e: any) {
-          return { path, error: e.message };
-        }
-      }),
-    );
-
-  // Checks a step's turn with reviewStep. Null if it couldn't be checked
-  // (stopped, or the server failed), which leaves the step open. The check
-  // sees the files any step of the plan changed, in any run, the step's own
-  // first: a step whose work is already done (by a rerun before, or by an
-  // earlier step) changes nothing, and the check then saw no file at all.
-  const checkStep = async (step: string, stepMessages: ChatMessage[], planMessages: ChatMessage[]) => {
-    if (!connector || !(await modelLoaded())) return null;
-    const controller = new AbortController();
-    setAbort(controller);
-    try {
-      const mine = filesChanged(stepMessages);
-      const own = await readWhole(mine);
-      const others = await readWhole(filesChanged(planMessages).filter((p) => !mine.includes(p)));
-      const room = checkRoom(models.find((m) => m.id === model)?.contextSize);
-      // The check's own reads, under the same chat id as readWhole's.
-      const read = async (call: ToolCall) => {
-        const out = await runTool(call, { chatId: `${sessionId}:check`, attachments: attachedPaths(attachments) });
-        return "result" in out ? out.result : "Error: that isn't attached to this session";
-      };
-      const tools = toolContext.definitions.filter((d) => CHECK_TOOLS.has((d as { function: { name: string } }).function.name));
-      return await reviewStep(
-        { connectorId: connector.id, model, think: thinkOn, room, tools, read },
-        step,
-        stepMessages,
-        own,
-        others,
-        controller.signal,
-      );
-    } catch (e: any) {
-      if (!controller.signal.aborted) setError(`Couldn't check the step: ${e.message}`);
-      return null;
-    } finally {
-      setAbort(null);
-    }
-  };
-
-  // Runs the check command of each attached folder that has one, once the plan
-  // has changed files; the first that fails, or null. They come before the
-  // model check: a failing typecheck or test is a fact, where the check is a
-  // model's opinion, and their output tells the model exactly what to fix.
-  const failedCommand = async (planMessages: ChatMessage[]) => {
-    if (filesChanged(planMessages).length === 0) return null;
-    for (const folder of Object.keys(toolContext.checkCommands)) {
-      try {
-        const r = await runCheckCommand(attachedPaths(attachments), folder);
-        if (!r.passed) return r;
-      } catch (e: any) {
-        // Not the model's fault, so not its to fix: shown, and the model check goes on.
-        setError(`Couldn't run the check command for ${folder}: ${e.message}`);
-      }
-    }
-    return null;
-  };
-
   // Runs the plan's open steps in order, one turn each, and checks every step
   // before ticking it off: the model saying it's done isn't enough. First the
   // folders' check commands, then the model check. A step that isn't done gets
   // one retry (to fix what a command reported, or to answer the check), then
   // waits for the user.
-  const runPlan = async () => {
-    if (!connector || !model || abort || planRunningRef.current) return;
-    planRunningRef.current = true;
-    setPlanRunning(true);
-    let msgs = messages;
-    try {
-      for (;;) {
-        const steps = planRef.current;
-        // A disputed step waits for the user, and the steps after it with it.
-        const i = steps?.findIndex((st) => st.status !== "done") ?? -1;
-        if (!steps || i < 0 || steps[i].status === "disputed") break;
-        const { id, text } = steps[i];
-        setStep(i, { status: "running" });
-        // `start` is the step's first message, for slicing out its turns;
-        // `startedAt` is when it began, for its time.
-        const start = msgs.length;
-        const startedAt = performance.now();
-        const took = () => performance.now() - startedAt;
-        let r = await reply(stepPrompt(steps, i), msgs, { planStep: id });
-        msgs = r.messages;
-        let failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep)) : null;
-        if (failed) {
-          r = await reply(commandFailedPrompt(i, failed.command, failed.output), msgs, { planStep: id });
-          msgs = r.messages;
-          failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep)) : null;
-          if (failed) {
-            setStep(i, { status: "failed", note: `\`${failed.command}\` still fails: ${commandSummary(failed.output)}`, ms: took() });
-            break;
-          }
-        }
-        let check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
-        if (check && !check.done) {
-          const missing = check.missing ?? "";
-          const retryStart = msgs.length;
-          r = await reply(disputePrompt(i, missing), msgs, { planStep: id });
-          msgs = r.messages;
-          // Said the check is wrong and changed nothing: checking again would
-          // only repeat the check, so the step waits for the user. Shown
-          // evidence makes it disputed; a bare claim leaves it failed.
-          const d = r.ok ? weighDispute(msgs.slice(retryStart), msgs.slice(start)) : null;
-          if (d?.verdict === "wrong" && !d.changed) {
-            setStep(i, { status: disputeHolds(d) ? "disputed" : "failed", note: disputeNote(missing, d), ms: took() });
-            break;
-          }
-          // The retry may have changed files, so the commands run again first.
-          failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep)) : null;
-          if (failed) {
-            setStep(i, { status: "failed", note: `\`${failed.command}\` fails: ${commandSummary(failed.output)}`, ms: took() });
-            break;
-          }
-          check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
-        }
-        if (!check) {
-          setStep(i, r.error ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}` } : { status: "pending" });
-          break;
-        }
-        setStep(i, check.done ? { status: "done", ms: took() } : { status: "failed", note: check.missing, ms: took() });
-        if (!check.done) break;
-      }
-    } finally {
-      planRunningRef.current = false;
-      setPlanRunning(false);
-    }
-  };
+  const runPlanWrapper = () => runPlan({
+    connector: connector ?? null,
+    model,
+    abort,
+    planRunningRef,
+    setPlanRunning,
+    messages,
+    planRef,
+    setStep,
+    reply,
+    setError,
+    setAbort,
+    modelLoaded,
+    models,
+    attachments,
+    checkCommands: toolContext.checkCommands,
+    attachedPaths,
+    sessionId,
+    thinkOn,
+    toolDefinitions: toolContext.definitions,
+  });
 
   // Retries the last user message, dropping the failed reply.
   const retry = () => {
@@ -1206,7 +823,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 running={planRunning || !!abort}
                 since={planRunning ? busySince : null}
                 counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
-                onRun={runPlan}
+                onRun={runPlanWrapper}
                 onChange={changePlan}
                 proposal={planProposal}
                 onProposal={answerProposal}

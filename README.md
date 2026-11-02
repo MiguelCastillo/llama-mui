@@ -117,7 +117,7 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   directory is fixed by the session's first message: if you pick another one
   later, a chat update says so.
 - **Chat updates** (`chatUpdate` in `server/tools.ts`) and **notes**
-  (`PLANNING_NOTE` in `src/Plan.tsx`) both go after your message's text and
+  (`PLANNING_NOTE` in `src/agent/plan.ts`) both go after your message's text and
   aren't shown, and both are saved with the message, so later requests send
   the same text and keep matching the cache. They differ in meaning: a chat
   update is a fact the next one replaces ("Also attached: a, b", later "Also
@@ -133,7 +133,10 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
 Small models often say they're done when they aren't. A plan makes the work
 visible and checked: the model writes the steps, chat runs them one at a time,
 and a step only gets its checkmark when a separate check agrees it's done. The
-code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
+code is in `src/agent/` (`plan.ts` for the prompts and the check, `agent.ts`
+for `runPlan` and the turn loop), the plan card in `src/PlanView.tsx`, and
+`server/plan.ts`. The logic in `src/agent/` has no React and is tested with
+vitest (`npm test`).
 
 ### When a plan is made
 
@@ -254,7 +257,7 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
   retry asks it to read the files with `read_file`, quote the lines that
   settle it in a code block, and end with `STEP NOT DONE` (the check is
   right) or `STEP DONE` (the check is wrong) before changing anything
-  (`disputePrompt` in `src/Plan.tsx`). The answer is about the step, since
+  (`disputePrompt` in `src/agent/plan.ts`). The answer is about the step, since
   asked for "CHECK RIGHT" or "CHECK WRONG", the model showed the step was done
   and then wrote "CHECK RIGHT".
   - **Check right** (or no answer): it fixes the step, and the step is
