@@ -32,8 +32,28 @@ const SKIP_DIRS = new Set([".git", "node_modules"]);
 
 const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p);
 
+export const sessionsDir = path.join(os.homedir(), ".llama-mui", "sessions");
+
 export const isInside = (child: string, root: string) =>
   child === root || child.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+
+// The one place the model may work with no access prompt and no change
+// approval: a worktree, ~/.llama-mui/sessions/<id>/worktrees/. The rest of a
+// session's folder (its chat file and plans), ~/.llama-mui and everything else
+// stay behind the normal prompts, so the model can't rewrite its own history.
+//
+// `real` is a path with symlinks already resolved (by resolveAllowed or
+// resolveWritable), so a link in a worktree that points at the chat file
+// resolves outside and doesn't count. The sessions folder is also checked by
+// its real path, in case ~/.llama-mui is itself reached by a link.
+export async function inSessionWorktrees(real: string): Promise<boolean> {
+  for (const root of [sessionsDir, await realpath(sessionsDir).catch(() => sessionsDir)]) {
+    if (!isInside(real, root)) continue;
+    const [id, folder] = path.relative(root, real).split(path.sep);
+    if (id && folder === "worktrees") return true;
+  }
+  return false;
+}
 
 // settings.json holds API keys, so no tool may read it even inside an attached folder.
 export const isSettingsFile = (p: string) => p.startsWith(SETTINGS_FILE);
@@ -72,11 +92,11 @@ export async function resolveAllowed(roots: string[], raw: unknown): Promise<str
     if (e.code !== "ENOENT" && e.code !== "ENOTDIR") throw e;
     // Outside the attachments, a missing path is usually a guess; the user
     // may know where the real one is.
-    if (!roots.some((r) => isInside(abs, r))) throw new AccessNeeded({ path: abs, kind: null });
+    if (!roots.some((r) => isInside(abs, r)) && !(await inSessionWorktrees(abs))) throw new AccessNeeded({ path: abs, kind: null });
     throw new ToolError(`${given} does not exist`);
   }
   if (isSettingsFile(real)) throw new ToolError(`${given} holds this app's API keys and can't be read`);
-  if (!roots.some((r) => isInside(real, r))) await needAccess(real);
+  if (!roots.some((r) => isInside(real, r)) && !(await inSessionWorktrees(real))) await needAccess(real);
   return real;
 }
 

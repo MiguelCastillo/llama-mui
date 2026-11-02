@@ -8,7 +8,7 @@
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createTwoFilesPatch } from "diff";
-import { isInside, isSettingsFile, looksBinary, needAccess, toAbsolute } from "./disk.ts";
+import { inSessionWorktrees, isInside, isSettingsFile, looksBinary, needAccess, toAbsolute } from "./disk.ts";
 import { markRead, requireRead } from "./reads.ts";
 import { type Approval, type ToolContext, ToolError, type ToolSpec, fn, requireApproval } from "./toolkit.ts";
 
@@ -38,7 +38,7 @@ async function resolveWritable(roots: string[], raw: unknown): Promise<string> {
   if (missing.length && !isDir) throw new ToolError(`${real} is a file, not a folder`);
   const target = path.join(real, ...missing);
   if (isSettingsFile(target)) throw new ToolError(`${given} holds this app's API keys and can't be written`);
-  if (!roots.some((r) => isInside(target, r))) await needAccess(missing.length ? real : target);
+  if (!roots.some((r) => isInside(target, r)) && !(await inSessionWorktrees(target))) await needAccess(missing.length ? real : target);
   return target;
 }
 
@@ -68,7 +68,10 @@ type ChangeAction = Extract<Approval, { type: "change" }>["action"];
 async function commit(ctx: ToolContext, file: string, before: string | null, after: string, action: ChangeAction) {
   if (Buffer.byteLength(after) > MAX_WRITE_BYTES) throw new ToolError("the new content is over 1 MB");
   if (before === after) throw new ToolError(`${file} already has that content; nothing to change`);
-  requireApproval(ctx, { type: "change", path: file, action, diff: hunks(file, before ?? "", after) });
+  // `file` is already resolved (see resolveWritable), so a worktree is checked by its real path.
+  if (!(await inSessionWorktrees(file))) {
+    requireApproval(ctx, { type: "change", path: file, action, diff: hunks(file, before ?? "", after) });
+  }
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, after);
   // The model wrote it, so it knows what's there; its next edit can follow.
