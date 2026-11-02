@@ -210,7 +210,7 @@ export const createConnector = (input: ConnectorInput) => call<Connector>("POST"
 export const updateConnector = (id: string, input: ConnectorInput) => call<Connector>("PUT", `/api/connectors/${id}`, input);
 export const deleteConnector = (id: string) => call<{ activeId: string | null }>("DELETE", `/api/connectors/${id}`);
 export const setActiveConnector = (id: string) => call<{ activeId: string }>("PUT", "/api/active", { id });
-export const testConnector = (input: { id?: string; url?: string; apiKey?: string; clearKey?: boolean; api?: Api }) =>
+export const testConnector = (input: { id?: string; url?: string; apiKey?: string; clearKey?: boolean }) =>
   call<TestResult>("POST", "/api/connectors/test", input);
 
 export async function listModels(connectorId: string): Promise<Model[]> {

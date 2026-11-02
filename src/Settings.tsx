@@ -310,7 +310,7 @@ function ConnectorDialog({
 
   const runTest = () => {
     setTest("checking");
-    testConnector({ id: connector?.id, url, api, ...keyInput })
+    testConnector({ id: connector?.id, url, ...keyInput })
       .catch((e): TestResult => ({ ok: false, error: e.message }))
       .then(setTest);
   };

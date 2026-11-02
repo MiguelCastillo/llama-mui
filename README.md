@@ -28,13 +28,13 @@ the **Chat API** chat speaks to it. llama.cpp serves two:
 - **Anthropic Messages** (`/v1/messages`), the default, through Anthropic's
   SDK (`@anthropic-ai/sdk`). It keeps each reply's thinking signature and sends
   thinking back only with one; llama.cpp's is empty, so earlier thinking isn't
-  resent (Qwen's chat template drops it anyway). The key goes as `x-api-key`.
+  resent (Qwen's chat template drops it anyway).
 - **OpenAI Chat Completions** (`/v1/chat/completions`), through OpenAI's SDK
   (`openai`). It also shows llama.cpp's own generation speed (from its
-  `timings`), which the Messages API doesn't report. The key goes as a bearer
-  token.
+  `timings`), which the Messages API doesn't report.
 
-Either way thinking is turned off with `chat_template_kwargs`: llama.cpp
+The key is the llama server's own (`--api-key`), sent as a bearer token with
+either API. Either way thinking is turned off with `chat_template_kwargs`: llama.cpp
 ignores the Messages API's `thinking: {type: "disabled"}`. And notes and chat
 updates go as text in the user's message: llama.cpp ignores `system` messages
 in the middle of the conversation. `streamChat` in `src/api.ts` picks the API

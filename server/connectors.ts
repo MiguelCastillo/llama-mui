@@ -40,17 +40,14 @@ const NETWORK_ERRORS: Record<string, string> = {
 };
 const describeNetworkError = (e: any) => NETWORK_ERRORS[e.cause?.code] ?? e.cause?.code ?? e.message;
 
-// Anthropic's API takes the key as x-api-key and needs a version; the SDK
-// sends one, plain fetches like the model list don't. OpenAI-style servers
-// take a bearer token.
-function authHeaders(apiKey: string, api: Api): Record<string, string> {
-  if (api === "openai") return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-  return { "anthropic-version": "2023-06-01", ...(apiKey ? { "x-api-key": apiKey } : {}) };
-}
+// The key is the llama server's own (--api-key), which it takes as a bearer
+// token whichever chat API is used. A server of another kind, like
+// Anthropic's API, would bring its own.
+const authHeaders = (apiKey: string): Record<string, string> => (apiKey ? { Authorization: `Bearer ${apiKey}` } : {});
 
-async function probe(url: string, apiKey: string, api: Api) {
+async function probe(url: string, apiKey: string) {
   try {
-    const res = await fetch(`${url}/v1/models`, { headers: authHeaders(apiKey, api), signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${url}/v1/models`, { headers: authHeaders(apiKey), signal: AbortSignal.timeout(5000) });
     if (res.status === 401 || res.status === 403) {
       return { ok: false, error: apiKey ? "The server rejected the API key" : "The server needs an API key" };
     }
@@ -86,7 +83,7 @@ async function proxy(req: IncomingMessage, res: ServerResponse, id: string, rest
     upstream = await fetch(`${c.url}${rest}`, {
       method: req.method,
       headers: {
-        ...authHeaders(c.apiKey, apiOf(c)),
+        ...authHeaders(c.apiKey),
         ...(req.headers["content-type"] ? { "Content-Type": req.headers["content-type"] } : {}),
         ...(typeof req.headers["anthropic-version"] === "string" && { "anthropic-version": req.headers["anthropic-version"] }),
         ...(typeof req.headers["anthropic-beta"] === "string" && { "anthropic-beta": req.headers["anthropic-beta"] }),
@@ -160,8 +157,7 @@ export async function connectorRoutes({ req, res, parts, method, search }: Route
     const url = body.url !== undefined ? normalizeUrl(body.url) : saved?.url;
     if (!url) throw new HttpError(400, "Missing url");
     const apiKey = body.clearKey ? "" : String(body.apiKey ?? "").trim() || saved?.apiKey || "";
-    const api = body.api !== undefined ? readApi(body.api) : apiOf(saved ?? {});
-    sendJson(res, 200, await probe(url, apiKey, api));
+    sendJson(res, 200, await probe(url, apiKey));
     return true;
   }
 
