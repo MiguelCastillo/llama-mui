@@ -639,8 +639,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const reply = async (
     text: string,
     before: ChatMessage[],
-    { planning = false, planStep }: { planning?: boolean; planStep?: string } = {},
+    { planning = false, planStep, from }: { planning?: boolean; planStep?: string; from?: number } = {},
   ): Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }> => {
+    // Where the model's history starts: the session's (after a clear), or for
+    // a plan step, the step's own first message (see runPlan).
+    const start = Math.max(from ?? contextStart, contextStart);
     if (!connector) return { ok: false, messages: before };
     // Every request checks, not just send(): a plan's steps and Resend come
     // here too, and the model may have been unloaded since.
@@ -649,10 +652,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // Fixed for this reply, even if the user changes attachments meanwhile;
     // only paths the user allows mid-reply are added.
     if (fixedPromptDir === undefined) setFixedPromptDir(workingDir);
-    const forgotten = before.slice(0, contextStart);
+    const forgotten = before.slice(0, start);
     // Attachments and tools that are off go the same way, as `update`, and
     // only when they changed since the last one the model saw.
-    const seen = [...before.slice(contextStart)].reverse().find((m) => m.update)?.update;
+    const seen = [...before.slice(start)].reverse().find((m) => m.update)?.update;
     const controller = new AbortController();
     const started = performance.now();
 
@@ -668,7 +671,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         toolDefinitions: toolContext.definitions,
         toolContextUpdate: toolContext.update,
         seenUpdate: seen ?? "",
-        history: before.slice(contextStart),
+        history: before.slice(start),
         forgotten,
         attached: attachedPaths(attachments),
         chatId: sessionId,
@@ -713,7 +716,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // folders' check commands, then the model check. A step that isn't done gets
   // one retry (to fix what a command reported, or to answer the check), then
   // waits for the user.
+  // The message that asked for the plan: the last one you sent (not a step's)
+  // before the update_plan call that wrote it, or before "at:N" for a clone.
+  const planRequest = () => {
+    const call = messages.findIndex((m) => m.toolCalls?.some((c) => c.id === planAnchor));
+    const end = call >= 0 ? call : planAnchor?.startsWith("at:") ? Number(planAnchor.slice(3)) : messages.length;
+    return [...messages.slice(0, end)].reverse().find((m) => m.role === "user" && !m.planStep)?.content;
+  };
   const runPlanWrapper = () => runPlan({
+    request: planRequest(),
+    freshSteps: prefs?.freshPlanSteps,
     connector: connector ?? null,
     model,
     abort,

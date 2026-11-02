@@ -449,7 +449,11 @@ export interface RunPlanCallbacks {
   messages: ChatMessage[];
   planRef: { current: PlanStep[] | null };
   setStep: (i: number, patch: Omit<PlanStep, "id" | "text">) => void;
-  reply: (text: string, before: ChatMessage[], opts?: { planning?: boolean; planStep?: string }) => Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }>;
+  reply: (text: string, before: ChatMessage[], opts?: { planning?: boolean; planStep?: string; from?: number }) => Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }>;
+  // The message that asked for the plan, sent with each step (see stepPrompt).
+  request?: string;
+  // Settings → Chat, "Fresh context for each plan step"; on unless false.
+  freshSteps?: boolean;
   setError: (err: string | null) => void;
   setAbort: (c: AbortController | null) => void;
   modelLoaded: () => Promise<boolean>;
@@ -487,11 +491,19 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       const start = msgs.length;
       const startedAt = performance.now();
       const took = () => performance.now() - startedAt;
-      let r = await reply(stepPrompt(steps, i), msgs, { planStep: id });
+      // With freshSteps (the default), each step starts fresh: the model gets
+      // the request, the plan, the files earlier steps changed and this step's
+      // own turns, not earlier steps or the planning discussion. With all of
+      // it, long plans filled the 64k context every step or two. The session
+      // keeps everything, for chatting after the plan.
+      const fresh = callbacks.freshSteps !== false;
+      const from = fresh ? start : undefined;
+      const changed = fresh ? filesChanged(msgs.filter((m) => m.planStep)) : [];
+      let r = await reply(stepPrompt(steps, i, fresh ? callbacks.request : undefined, changed), msgs, { planStep: id, from });
       msgs = r.messages;
       let failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError) : null;
       if (failed) {
-        r = await reply(commandFailedPrompt(i, failed.command, failed.output), msgs, { planStep: id });
+        r = await reply(commandFailedPrompt(i, failed.command, failed.output), msgs, { planStep: id, from });
         msgs = r.messages;
         failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError) : null;
         if (failed) {
@@ -506,7 +518,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       if (check && !check.done) {
         const missing = check.missing ?? "";
         const retryStart = msgs.length;
-        r = await reply(disputePrompt(i, missing), msgs, { planStep: id });
+        r = await reply(disputePrompt(i, missing), msgs, { planStep: id, from });
         msgs = r.messages;
         const d = r.ok ? weighDispute(msgs.slice(retryStart), msgs.slice(start)) : null;
         if (d?.verdict === "wrong" && !d.changed) {

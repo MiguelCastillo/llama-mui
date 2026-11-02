@@ -297,3 +297,16 @@ describe("weighDispute", () => {
     expect(result.reason).toBe("");
   });
 });
+
+describe("stepPrompt for a fresh step", () => {
+  it("lists the request and the files earlier steps changed", () => {
+    const steps: PlanStep[] = [
+      { id: "a", text: "Add fields", status: "done" },
+      { id: "b", text: "Use them", status: "pending" },
+    ];
+    const text = stepPrompt(steps, 1, "Name sessions", ["src/api.ts", "server/chats.ts"]);
+    expect(text).toContain("Do step 2 of 2: Use them");
+    expect(text).toContain("The task the plan is for:\nName sessions");
+    expect(text).toContain("src/api.ts\nserver/chats.ts");
+  });
+});

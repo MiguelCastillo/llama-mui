@@ -202,6 +202,14 @@ vitest (`npm test`).
   waits for you, so there's no **Continue** until you mark it done or rerun it.
 - Each step is one turn: chat sends "Do step 2 of 4: …" with the plan so far,
   and the model works on that step only, with all its tools.
+- Each step starts with a **fresh context**: the model gets the step, the
+  plan, the message that asked for it, the files earlier steps changed (to
+  read what it builds on), and the step's own turns, retries included, but
+  not earlier steps' turns or the planning discussion. With all of it, long
+  plans filled the 64k context every step or two. Nothing is cleared: after
+  the plan, your next message sends the session as usual. **Fresh context for
+  each plan step** in Settings → Chat turns it off, for comparing; it's meant
+  to go away once it's proven.
 - Then chat runs the **check command** of each attached folder that has one,
   once the plan has changed files. It's set per folder in **Chat settings**,
   under the folder (for this repo, `npx tsc --noEmit -p .`), and kept for

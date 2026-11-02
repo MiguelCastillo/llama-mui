@@ -276,6 +276,22 @@ describe("runPlan", () => {
   });
 });
 
+describe("runPlan context", () => {
+  it("starts each step's history at the step, with the plan's request", async () => {
+    const steps: PlanStep[] = [{ id: "s1", text: "Step 1", status: "pending" }];
+    const earlier: ChatMessage[] = [
+      { role: "user", content: "the request" },
+      { role: "assistant", content: "planning chatter" },
+    ];
+    const reply = vi.fn().mockResolvedValue({ ok: false, messages: earlier });
+    await runPlan(mockCallbacks({ planRef: { current: steps }, messages: earlier, reply, request: "the request" }));
+    const [text, before, opts] = reply.mock.calls[0];
+    expect(before).toBe(earlier);
+    expect(opts).toMatchObject({ planStep: "s1", from: earlier.length });
+    expect(text).toContain("The task the plan is for:\nthe request");
+  });
+});
+
 // ── checkStep early-return guard ────────────────────────────────────────────
 
 describe("checkStep", () => {

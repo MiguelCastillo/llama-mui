@@ -20,6 +20,9 @@ export interface Preferences {
   showSteps: boolean;
   // Formatting in messages; off shows the raw text.
   renderMarkdown: boolean;
+  // Each plan step starts with a fresh context (see runPlan in
+  // src/agent/agent.ts). A switch while it's tested; meant to go away.
+  freshPlanSteps: boolean;
 }
 
 // Options for one model, keyed by its id (e.g. "unsloth/Qwen3.5-9B-GGUF:Q4_K_M"),
@@ -65,7 +68,7 @@ const empty = (): Store => ({
   activeId: null,
   connectors: [],
   disabledTools: [],
-  preferences: { showContextMeter: true, showSteps: true, renderMarkdown: true },
+  preferences: { showContextMeter: true, showSteps: true, renderMarkdown: true, freshPlanSteps: true },
   models: {},
   checkCommands: {},
 });

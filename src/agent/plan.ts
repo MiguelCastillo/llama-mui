@@ -50,9 +50,15 @@ export function planFromCall(args: string, old: PlanStep[], running: boolean): P
 }
 
 // The message that runs step i: just that step, with the plan for context.
-export function stepPrompt(steps: PlanStep[], i: number): string {
+// Steps start with a fresh context (see runPlan), so the prompt carries what
+// a step needs from before it: the request (requirements live there, not just
+// in the step text), and the files earlier steps changed, to read before
+// building on them (step 7 has to use the fields step 1 added).
+export function stepPrompt(steps: PlanStep[], i: number, request?: string, changed: string[] = []): string {
   const list = steps.map((s, j) => `${s.status === "done" ? "[x]" : "[ ]"} ${j + 1}. ${s.text}`).join("\n");
-  return `Do step ${i + 1} of ${steps.length}: ${steps[i].text}\n\nThe plan:\n${list}`;
+  const task = request ? `\n\nThe task the plan is for:\n${request}` : "";
+  const files = changed.length ? `\n\nFiles earlier steps changed; read what this step builds on:\n${changed.join("\n")}` : "";
+  return `Do step ${i + 1} of ${steps.length}: ${steps[i].text}\n\nThe plan:\n${list}${task}${files}`;
 }
 
 // Room for a new file of a few hundred lines: a step that writes one is judged
