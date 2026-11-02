@@ -505,11 +505,11 @@ export interface SessionSummary {
   userName?: string | null;
 }
 
-// Saved chats, newest first, and the calls to open, save and delete one.
-export const listSessions = () => call<SessionSummary[]>("GET", "/api/chats");
-export const getSession = (id: string) => call<Session>("GET", `/api/chats/${id}`);
-export const saveSession = (s: Session) => call<SessionSummary>("PUT", `/api/chats/${s.id}`, s);
-export const deleteSession = (id: string) => call<{ id: string }>("DELETE", `/api/chats/${id}`);
+// Saved sessions, newest first, and the calls to open, save and delete one.
+export const listSessions = () => call<SessionSummary[]>("GET", "/api/sessions");
+export const getSession = (id: string) => call<Session>("GET", `/api/sessions/${id}`);
+export const saveSession = (s: Session) => call<SessionSummary>("PUT", `/api/sessions/${s.id}`, s);
+export const deleteSession = (id: string) => call<{ id: string }>("DELETE", `/api/sessions/${id}`);
 
 export interface RenameSessionParams {
   title?: string;
@@ -517,7 +517,7 @@ export interface RenameSessionParams {
   userName?: string | null;
 }
 export const renameSession = (id: string, params: RenameSessionParams) =>
-  call<SessionSummary>("PATCH", `/api/chats/${id}`, params);
+  call<SessionSummary>("PATCH", `/api/sessions/${id}`, params);
 
 export interface Usage {
   // Everything now in the model's context: prompt, tools, history and reply.

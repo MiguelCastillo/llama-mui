@@ -1,6 +1,6 @@
 // The app's saved settings: llama servers (with their keys), which tools are
 // turned off, per-model options, and chat display preferences. Lives in
-// ~/.llama-mui/settings.json, next to the saved chats, readable only by you;
+// ~/.llama-mui/settings.json, next to the saved sessions, readable only by you;
 // only this server code touches it.
 
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
