@@ -2,7 +2,7 @@
 // say they're done when they aren't, so chat runs a plan one step per turn and
 // checks each step with reviewStep before ticking it off.
 
-import { type ChatMessage, type PlanStep, type ToolCall, streamChat } from "../api";
+import { type Api, type ChatMessage, type PlanStep, type ToolCall, streamChat } from "../api";
 
 // With Plan on, a new message first gets a planning turn: the model can only
 // read and call update_plan, so it writes the plan instead of starting on the
@@ -207,6 +207,7 @@ const REVIEW_PROMPT =
 export async function reviewStep(
   {
     connectorId,
+    api,
     model,
     think,
     room,
@@ -214,6 +215,7 @@ export async function reviewStep(
     read,
   }: {
     connectorId: string;
+    api?: Api;
     model: string;
     think: boolean;
     room: number;
@@ -247,7 +249,7 @@ export async function reviewStep(
     const last = round >= MAX_CHECK_ROUNDS;
     const { toolCalls } = await streamChat(
       // Like a reply, only the first request thinks; then it reads and decides.
-      { connectorId, model, think: think && round === 0, messages: history, tools: last ? undefined : tools },
+      { connectorId, api, model, think: think && round === 0, messages: history, tools: last ? undefined : tools },
       (d) => (answer += d.content ?? ""),
       signal,
     );

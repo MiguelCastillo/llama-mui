@@ -17,6 +17,7 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  MenuItem,
   Paper,
   Radio,
   Stack,
@@ -36,6 +37,7 @@ import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
 import ChatOutlinedIcon from "@mui/icons-material/ChatOutlined";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import {
+  type Api,
   type Connector,
   type ConnectorList,
   type TestResult,
@@ -288,6 +290,7 @@ function ConnectorDialog({
   const [name, setName] = useState(connector?.name ?? "");
   const [url, setUrl] = useState(connector?.url ?? "");
   const [apiKey, setApiKey] = useState("");
+  const [api, setApi] = useState<Api>(connector?.api ?? "anthropic");
   // The saved key is never sent to the browser, so for a server that has one
   // the field starts as "keep it" rather than as an empty input.
   const [keyMode, setKeyMode] = useState<"keep" | "replace" | "remove">(connector?.hasKey ? "keep" : "replace");
@@ -307,7 +310,7 @@ function ConnectorDialog({
 
   const runTest = () => {
     setTest("checking");
-    testConnector({ id: connector?.id, url, ...keyInput })
+    testConnector({ id: connector?.id, url, api, ...keyInput })
       .catch((e): TestResult => ({ ok: false, error: e.message }))
       .then(setTest);
   };
@@ -316,7 +319,7 @@ function ConnectorDialog({
     setSaving(true);
     setError(null);
     try {
-      const input = { name, url, ...keyInput };
+      const input = { name, url, api, ...keyInput };
       await (connector ? updateConnector(connector.id, input) : createConnector(input));
       onSaved();
     } catch (e: any) {
@@ -348,6 +351,23 @@ function ConnectorDialog({
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
+          <TextField
+            select
+            label="Chat API"
+            value={api}
+            onChange={(e) => {
+              setApi(e.target.value as Api);
+              setTest(null);
+            }}
+            helperText={
+              api === "anthropic"
+                ? "Anthropic Messages (/v1/messages)."
+                : "OpenAI Chat Completions (/v1/chat/completions). Also shows llama.cpp's own generation speed."
+            }
+          >
+            <MenuItem value="anthropic">Anthropic Messages</MenuItem>
+            <MenuItem value="openai">OpenAI Chat Completions</MenuItem>
+          </TextField>
           {keyMode === "replace" ? (
             <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
               <TextField

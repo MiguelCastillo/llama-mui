@@ -7,9 +7,15 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { HttpError, type Route, readBody, readJson, sendJson } from "./http.ts";
-import { type Connector, type Store, load, save } from "./store.ts";
+import { type Api, type Connector, type Store, load, save } from "./store.ts";
 
-const publicView = (c: Connector) => ({ id: c.id, name: c.name, url: c.url, hasKey: !!c.apiKey });
+const apiOf = (c: { api?: Api }): Api => c.api ?? "anthropic";
+const publicView = (c: Connector) => ({ id: c.id, name: c.name, url: c.url, hasKey: !!c.apiKey, api: apiOf(c) });
+
+function readApi(raw: unknown): Api {
+  if (raw === undefined || raw === "anthropic" || raw === "openai") return raw ?? "anthropic";
+  throw new HttpError(400, 'api must be "anthropic" or "openai"');
+}
 
 // Accepts what people paste, e.g. "http://host:9931/v1/", and stores the root.
 function normalizeUrl(raw: unknown): string {
@@ -34,11 +40,17 @@ const NETWORK_ERRORS: Record<string, string> = {
 };
 const describeNetworkError = (e: any) => NETWORK_ERRORS[e.cause?.code] ?? e.cause?.code ?? e.message;
 
-const authHeaders = (apiKey: string): Record<string, string> => (apiKey ? { Authorization: `Bearer ${apiKey}` } : {});
+// Anthropic's API takes the key as x-api-key and needs a version; the SDK
+// sends one, plain fetches like the model list don't. OpenAI-style servers
+// take a bearer token.
+function authHeaders(apiKey: string, api: Api): Record<string, string> {
+  if (api === "openai") return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+  return { "anthropic-version": "2023-06-01", ...(apiKey ? { "x-api-key": apiKey } : {}) };
+}
 
-async function probe(url: string, apiKey: string) {
+async function probe(url: string, apiKey: string, api: Api) {
   try {
-    const res = await fetch(`${url}/v1/models`, { headers: authHeaders(apiKey), signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${url}/v1/models`, { headers: authHeaders(apiKey, api), signal: AbortSignal.timeout(5000) });
     if (res.status === 401 || res.status === 403) {
       return { ok: false, error: apiKey ? "The server rejected the API key" : "The server needs an API key" };
     }
@@ -74,8 +86,10 @@ async function proxy(req: IncomingMessage, res: ServerResponse, id: string, rest
     upstream = await fetch(`${c.url}${rest}`, {
       method: req.method,
       headers: {
-        ...authHeaders(c.apiKey),
+        ...authHeaders(c.apiKey, apiOf(c)),
         ...(req.headers["content-type"] ? { "Content-Type": req.headers["content-type"] } : {}),
+        ...(typeof req.headers["anthropic-version"] === "string" && { "anthropic-version": req.headers["anthropic-version"] }),
+        ...(typeof req.headers["anthropic-beta"] === "string" && { "anthropic-beta": req.headers["anthropic-beta"] }),
       },
       body: hasBody ? new Uint8Array(await readBody(req)) : undefined,
       signal: controller.signal,
@@ -122,7 +136,13 @@ export async function connectorRoutes({ req, res, parts, method, search }: Route
   if (parts.length === 1 && method === "POST") {
     const body = await readJson(req);
     const url = normalizeUrl(body.url);
-    const c: Connector = { id: randomUUID(), name: nameOrHost(body.name, url), url, apiKey: String(body.apiKey ?? "").trim() };
+    const c: Connector = {
+      id: randomUUID(),
+      name: nameOrHost(body.name, url),
+      url,
+      apiKey: String(body.apiKey ?? "").trim(),
+      api: readApi(body.api),
+    };
     const store = await load();
     store.connectors.push(c);
     store.activeId ??= c.id;
@@ -140,7 +160,8 @@ export async function connectorRoutes({ req, res, parts, method, search }: Route
     const url = body.url !== undefined ? normalizeUrl(body.url) : saved?.url;
     if (!url) throw new HttpError(400, "Missing url");
     const apiKey = body.clearKey ? "" : String(body.apiKey ?? "").trim() || saved?.apiKey || "";
-    sendJson(res, 200, await probe(url, apiKey));
+    const api = body.api !== undefined ? readApi(body.api) : apiOf(saved ?? {});
+    sendJson(res, 200, await probe(url, apiKey, api));
     return true;
   }
 
@@ -150,6 +171,7 @@ export async function connectorRoutes({ req, res, parts, method, search }: Route
     const c = find(store, parts[1]);
     c.url = normalizeUrl(body.url);
     c.name = nameOrHost(body.name, c.url);
+    if (body.api !== undefined) c.api = readApi(body.api);
     // Omitted or blank keeps the saved key; clearKey removes it.
     if (body.clearKey) c.apiKey = "";
     else if (String(body.apiKey ?? "").trim()) c.apiKey = String(body.apiKey).trim();

@@ -1,0 +1,460 @@
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { streamChat, toMessages, type ChatMessage, type StreamDelta, type ToolCall } from "../api";
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function tc(name: string, args: object, id = "call_x"): ToolCall {
+  return { name, arguments: JSON.stringify(args), id };
+}
+
+// ── toMessages: empty ────────────────────────────────────────────────────────
+
+describe("toMessages", () => {
+  it("returns empty messages and no system for an empty history", () => {
+    const result = toMessages([]);
+    expect(result.system).toBeUndefined();
+    expect(result.messages).toEqual([]);
+  });
+
+  // ── system prompt ──────────────────────────────────────────────────────────
+
+  it("collects system messages into a single system string", () => {
+    const history: ChatMessage[] = [
+      { role: "system", content: "You are helpful." },
+    ];
+    const result = toMessages(history);
+    expect(result.system).toBe("You are helpful.");
+    expect(result.messages).toEqual([]);
+  });
+
+  it("joins multiple system messages with double newlines", () => {
+    const history: ChatMessage[] = [
+      { role: "system", content: "Be concise." },
+      { role: "system", content: "No pleasantries." },
+    ];
+    const result = toMessages(history);
+    expect(result.system).toBe("Be concise.\n\nNo pleasantries.");
+  });
+
+  // ── user messages ──────────────────────────────────────────────────────────
+
+  it("converts a user message to a text block", () => {
+    const history: ChatMessage[] = [{ role: "user", content: "Hello" }];
+    const result = toMessages(history);
+    expect(result.messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "Hello" }] },
+    ]);
+  });
+
+  it("appends update and note to user text", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "user",
+        content: "Fix the bug",
+        update: "Chat update: tests pass",
+        note: "Planning note",
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].type).toBe("text");
+    expect(blocks[0].text).toBe("Fix the bug\n\nChat update: tests pass\n\nPlanning note");
+  });
+
+  // ── assistant messages ─────────────────────────────────────────────────────
+
+  it("converts an assistant message with content to a text block", () => {
+    const history: ChatMessage[] = [{ role: "assistant", content: "Sure thing" }];
+    const result = toMessages(history);
+    expect(result.messages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "Sure thing" }] },
+    ]);
+  });
+
+  it("adds a thinking block when reasoning and signature are present", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "Answer",
+        reasoning: "Let me think...",
+        signature: "sig123",
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].type).toBe("thinking");
+    expect(blocks[0].thinking).toBe("Let me think...");
+    expect(blocks[0].signature).toBe("sig123");
+    expect(blocks[1].type).toBe("text");
+    expect(blocks[1].text).toBe("Answer");
+  });
+
+  it("omits the thinking block when signature is missing", () => {
+    const history: ChatMessage[] = [
+      { role: "assistant", content: "Answer", reasoning: "Let me think..." },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].type).toBe("text");
+    expect(blocks[0].text).toBe("Answer");
+    expect(blocks.length).toBe(1);
+  });
+
+  it("adds tool_use blocks for tool calls", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [tc("read_file", { path: "a.txt" })],
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].type).toBe("tool_use");
+    expect(blocks[0].id).toBe("call_x");
+    expect(blocks[0].name).toBe("read_file");
+    expect(blocks[0].input).toEqual({ path: "a.txt" });
+  });
+
+  it("handles broken JSON in tool arguments", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ name: "read_file", arguments: "not json", id: "call_y" }],
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].input).toEqual({ input: "not json" });
+  });
+
+  it("handles empty arguments as {}", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ name: "read_file", arguments: "", id: "call_z" }],
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].input).toEqual({});
+  });
+
+  it("orders blocks as thinking, text, tool_use", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "Done",
+        reasoning: "Thinking",
+        signature: "sig",
+        toolCalls: [tc("read_file", { path: "a.txt" })],
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].type).toBe("thinking");
+    expect(blocks[1].type).toBe("text");
+    expect(blocks[2].type).toBe("tool_use");
+  });
+
+  // ── tool messages ──────────────────────────────────────────────────────────
+
+  it("converts a tool result to a tool_result block", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "tool",
+        content: "file contents",
+        toolCallId: "call_x",
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].type).toBe("tool_result");
+    expect(blocks[0].tool_use_id).toBe("call_x");
+    expect(blocks[0].content).toBe("file contents");
+  });
+
+  // ── turn alternation ───────────────────────────────────────────────────────
+
+  it("keeps assistant blocks in one message, tool results in the next user message", () => {
+    const history: ChatMessage[] = [
+      { role: "assistant", content: "Let me check", toolCalls: [tc("read_file", { path: "a.txt" })] },
+      { role: "tool", content: "file contents", toolCallId: "call_x" },
+    ];
+    const result = toMessages(history);
+    expect(result.messages.length).toBe(2);
+    expect(result.messages[0].role).toBe("assistant");
+    expect(result.messages[1].role).toBe("user");
+  });
+
+  it("appends to an existing assistant message when consecutive", () => {
+    const history: ChatMessage[] = [
+      { role: "assistant", content: "First" },
+      { role: "assistant", content: "Second" },
+    ];
+    const result = toMessages(history);
+    expect(result.messages.length).toBe(1);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].text).toBe("First");
+    expect(blocks[1].text).toBe("Second");
+  });
+
+  it("appends to an existing user message when consecutive", () => {
+    const history: ChatMessage[] = [
+      { role: "user", content: "First" },
+      { role: "user", content: "Second" },
+    ];
+    const result = toMessages(history);
+    expect(result.messages.length).toBe(1);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].text).toBe("First");
+    expect(blocks[1].text).toBe("Second");
+  });
+
+  // ── full conversation ──────────────────────────────────────────────────────
+
+  it("handles a complete conversation with system, user, assistant, tool", () => {
+    const history: ChatMessage[] = [
+      { role: "system", content: "You are a coding assistant." },
+      { role: "user", content: "Read a.txt" },
+      {
+        role: "assistant",
+        content: "",
+        reasoning: "I'll read the file.",
+        signature: "sig1",
+        toolCalls: [tc("read_file", { path: "a.txt" })],
+      },
+      { role: "tool", content: "file contents here", toolCallId: "call_x" },
+      { role: "assistant", content: "The file says hello." },
+    ];
+    const result = toMessages(history);
+    expect(result.system).toBe("You are a coding assistant.");
+    expect(result.messages.length).toBe(4);
+    // 1: user
+    // 2: assistant (thinking + tool_use)
+    // 3: user (tool_result)
+    // 4: assistant (text)
+    expect(result.messages[0].role).toBe("user");
+    expect(result.messages[1].role).toBe("assistant");
+    expect(result.messages[2].role).toBe("user");
+    expect(result.messages[3].role).toBe("assistant");
+  });
+
+  // ── edge cases ─────────────────────────────────────────────────────────────
+
+  it("skips empty assistant content blocks", () => {
+    const history: ChatMessage[] = [{ role: "assistant", content: "" }];
+    const result = toMessages(history);
+    expect(result.messages).toEqual([]);
+  });
+
+  it("skips empty user content blocks", () => {
+    const history: ChatMessage[] = [{ role: "user", content: "" }];
+    const result = toMessages(history);
+    expect(result.messages).toEqual([]);
+  });
+
+  it("skips user message when content, update, and note are all empty", () => {
+    const history: ChatMessage[] = [{ role: "user", content: "", update: "", note: "" }];
+    const result = toMessages(history);
+    expect(result.messages).toEqual([]);
+  });
+
+  it("skips assistant message when reasoning without signature, and content and toolCalls are absent", () => {
+    const history: ChatMessage[] = [
+      { role: "assistant", content: "", reasoning: "thinking", signature: undefined },
+    ];
+    const result = toMessages(history);
+    expect(result.messages).toEqual([]);
+  });
+
+  // ── tool_use with complex input ────────────────────────────────────────────
+
+  it("parses nested JSON in tool arguments", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            name: "update_plan",
+            arguments: JSON.stringify({ steps: [{ text: "Do thing", status: "pending" }] }),
+            id: "call_nested",
+          },
+        ],
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].input).toEqual({
+      steps: [{ text: "Do thing", status: "pending" }],
+    });
+  });
+});
+
+// ── parseInput (internal helper) via toMessages ──────────────────────────────
+
+describe("parseInput behavior via toMessages", () => {
+  it("treats a JSON array as { input: <raw string> }", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ name: "tool", arguments: "[1, 2]", id: "c1" }],
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].input).toEqual({ input: "[1, 2]" });
+  });
+
+  it("treats a JSON string as { input: <raw string> }", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ name: "tool", arguments: '"hello"', id: "c1" }],
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].input).toEqual({ input: '"hello"' });
+  });
+
+  it("treats a JSON number as { input: <raw string> }", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ name: "tool", arguments: "42", id: "c1" }],
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].input).toEqual({ input: "42" });
+  });
+
+  it("treats null JSON as { input: \"null\" }", () => {
+    const history: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ name: "tool", arguments: "null", id: "c1" }],
+      },
+    ];
+    const result = toMessages(history);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].input).toEqual({ input: "null" });
+  });
+});
+
+// ── streamChat, against a recorded stream ───────────────────────────────────
+
+// Serves `events` as one server-sent-events response to every fetch, and
+// keeps the requests so a test can check what was sent.
+function serve(events: object[], status = 200) {
+  const requests: { url: string; body: any }[] = [];
+  // The Anthropic SDK reads each event's name from its `event:` line.
+  const sse = events.map((e: any) => `${e.type ? `event: ${e.type}\n` : ""}data: ${JSON.stringify(e)}\n\n`).join("");
+  vi.stubGlobal("location", { origin: "http://test" });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url instanceof Request ? url.url : url), body: JSON.parse(String(init?.body ?? "{}")) });
+      return status === 200
+        ? new Response(sse, { headers: { "content-type": "text/event-stream" } })
+        : new Response(JSON.stringify(events[0]), { status, headers: { "content-type": "application/json" } });
+    }),
+  );
+  return requests;
+}
+
+const tool = { type: "function", function: { name: "read_file", description: "Read a file", parameters: { type: "object" } } };
+const request = { connectorId: "c1", model: "qwen", think: true, tools: [tool], messages: [{ role: "user" as const, content: "Read README.md" }] };
+
+async function collect(api: "anthropic" | "openai") {
+  const deltas: StreamDelta[] = [];
+  const reply = await streamChat({ ...request, api }, (d) => deltas.push(d), new AbortController().signal);
+  return { reply, text: deltas.map((d) => d.content ?? "").join(""), reasoning: deltas.map((d) => d.reasoning ?? "").join("") };
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("streamChat with the Messages API", () => {
+  const events = [
+    { type: "message_start", message: { id: "m1", type: "message", role: "assistant", content: [], model: "qwen", stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, cache_read_input_tokens: 90, output_tokens: 0 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Need the file." } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Reading it." } },
+    { type: "content_block_stop", index: 1 },
+    { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "t1", name: "read_file", input: {} } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"path":' } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '"README.md"}' } },
+    { type: "content_block_stop", index: 2 },
+    { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 5 } },
+    { type: "message_stop" },
+  ];
+
+  it("returns the text, thinking, signature, tool call and usage it streamed", async () => {
+    serve(events);
+    const { reply, text, reasoning } = await collect("anthropic");
+    expect(text).toBe("Reading it.");
+    expect(reasoning).toBe("Need the file.");
+    expect(reply.signature).toBe("sig");
+    expect(reply.toolCalls).toEqual([{ id: "t1", name: "read_file", arguments: '{"path":"README.md"}' }]);
+    expect(reply.usage).toEqual({ contextTokens: 105, promptTokens: 10 });
+  });
+
+  it("posts to the connector's /v1/messages with the tools converted and thinking set", async () => {
+    const requests = serve(events);
+    await collect("anthropic");
+    expect(requests[0].url).toBe("http://test/api/c/c1/v1/messages");
+    expect(requests[0].body.tools).toEqual([{ name: "read_file", description: "Read a file", input_schema: { type: "object" } }]);
+    expect(requests[0].body.chat_template_kwargs).toEqual({ enable_thinking: true });
+    expect(requests[0].body.max_tokens).toBeGreaterThan(0);
+  });
+
+  it("reports llama.cpp's error message with the status", async () => {
+    serve([{ error: { code: 400, message: "model 'qwen' not found", type: "invalid_request_error" } }], 400);
+    await expect(collect("anthropic")).rejects.toThrow("POST /v1/messages: 400 model 'qwen' not found");
+  });
+});
+
+describe("streamChat with the Chat Completions API", () => {
+  const chunks = [
+    { choices: [{ delta: { reasoning_content: "Need the file." } }] },
+    { choices: [{ delta: { content: "Reading it." } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "t1", function: { name: "read_file", arguments: '{"path":' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"README.md"}' } }] } }] },
+    { choices: [{ delta: {} }], timings: { cache_n: 90, prompt_n: 10, predicted_n: 5, predicted_per_second: 42 } },
+  ];
+
+  it("returns the text, thinking, tool call and llama.cpp's timings it streamed", async () => {
+    serve(chunks);
+    const { reply, text, reasoning } = await collect("openai");
+    expect(text).toBe("Reading it.");
+    expect(reasoning).toBe("Need the file.");
+    expect(reply.signature).toBeUndefined();
+    expect(reply.toolCalls).toEqual([{ id: "t1", name: "read_file", arguments: '{"path":"README.md"}' }]);
+    expect(reply.usage).toEqual({ contextTokens: 105, tokensPerSecond: 42, promptTokens: 10 });
+  });
+
+  it("posts to the connector's /v1/chat/completions with the tools as they are", async () => {
+    const requests = serve(chunks);
+    await collect("openai");
+    expect(requests[0].url).toBe("http://test/api/c/c1/v1/chat/completions");
+    expect(requests[0].body.tools).toEqual([tool]);
+    expect(requests[0].body.chat_template_kwargs).toEqual({ enable_thinking: true });
+  });
+
+  it("reports llama.cpp's error message with the status", async () => {
+    serve([{ error: { code: 400, message: "model 'qwen' not found", type: "invalid_request_error" } }], 400);
+    await expect(collect("openai")).rejects.toThrow("POST /v1/chat/completions: 400 model 'qwen' not found");
+  });
+});
+

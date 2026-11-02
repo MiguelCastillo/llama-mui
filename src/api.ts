@@ -1,7 +1,11 @@
 // Client for the dev server's /api routes: settings, attachments, the model's
-// tools, and llama.cpp's OpenAI-compatible API proxied
-// per connector at /api/c/<id>/v1. The dev server adds each connector's key,
-// so none of this code ever sees one.
+// tools, and the model's API, proxied per connector at /api/c/<id>/v1: each
+// connector speaks Anthropic's Messages (/v1/messages) or OpenAI's Chat
+// Completions (/v1/chat/completions); llama.cpp serves both. The dev server
+// adds each connector's key, so none of this code ever sees one.
+
+import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 
 export type ModelStatus = "loaded" | "loading" | "unloaded" | string;
 
@@ -68,6 +72,9 @@ export interface ChatMessage {
   content: string;
   // Thinking tokens that Qwen-style models stream separately from the answer.
   reasoning?: string;
+  // The thinking block's signature, sent back with `reasoning`: Anthropic's
+  // API only takes back thinking it signed, unchanged.
+  signature?: string;
   // Set on assistant messages that asked to run tools.
   toolCalls?: ToolCall[];
   // Set on tool messages: which call this is the result of.
@@ -106,24 +113,68 @@ export interface StepStats {
   tokens?: number;
 }
 
-// Converts to the OpenAI wire format, dropping UI-only fields like reasoning.
-function toWire(m: ChatMessage) {
-  if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
-  if (m.toolCalls?.length) {
-    return {
-      role: m.role,
-      content: m.content,
-      tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments } })),
-    };
+// Converts the chat to the Messages API's shape. The system prompt goes in
+// `system`. An assistant turn is its thinking, text and tool calls, in the
+// order the model wrote them; its tool results go in the user turn after it.
+// The API wants turns to alternate, so a user message after tool results
+// joins their turn. Thinking is sent back only with its signature: Anthropic's
+// API rejects thinking it didn't sign, and older messages saved before
+// signatures were kept have none.
+export function toMessages(history: ChatMessage[]): { system?: string; messages: Anthropic.MessageParam[] } {
+  let system: string | undefined;
+  const messages: Anthropic.MessageParam[] = [];
+  const add = (role: "user" | "assistant", blocks: Anthropic.ContentBlockParam[]) => {
+    if (!blocks.length) return;
+    const last = messages[messages.length - 1];
+    if (last?.role === role) (last.content as Anthropic.ContentBlockParam[]).push(...blocks);
+    else messages.push({ role, content: blocks });
+  };
+  for (const m of history) {
+    if (m.role === "system") {
+      system = system === undefined ? m.content : `${system}\n\n${m.content}`;
+    } else if (m.role === "user") {
+      const text = [m.content, m.update, m.note].filter(Boolean).join("\n\n");
+      add("user", text ? [{ type: "text", text }] : []);
+    } else if (m.role === "tool") {
+      add("user", [{ type: "tool_result", tool_use_id: m.toolCallId ?? "", content: m.content }]);
+    } else {
+      const blocks: Anthropic.ContentBlockParam[] = [];
+      if (m.reasoning && m.signature) blocks.push({ type: "thinking", thinking: m.reasoning, signature: m.signature });
+      if (m.content) blocks.push({ type: "text", text: m.content });
+      for (const c of m.toolCalls ?? []) blocks.push({ type: "tool_use", id: c.id, name: c.name, input: parseInput(c.arguments) });
+      add("assistant", blocks);
+    }
   }
-  return { role: m.role, content: [m.content, m.update, m.note].filter(Boolean).join("\n\n") };
+  return { system, messages };
 }
+
+// A tool call's arguments as the object tool_use wants. Text that isn't a
+// JSON object (a model's broken call) goes as-is under `input`, so the call
+// and its error result still pair up.
+function parseInput(args: string): Record<string, unknown> {
+  try {
+    const v = JSON.parse(args || "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? v : { input: args };
+  } catch {
+    return { input: args };
+  }
+}
+
+// The tools' definitions are OpenAI-shaped (see fn in server/toolkit.ts).
+function toTool(t: any): Anthropic.Tool {
+  const f = t.function ?? t;
+  return { name: f.name, description: f.description, input_schema: f.parameters ?? f.input_schema };
+}
+
+// Which API chat speaks to a connector (see Connector in server/store.ts).
+export type Api = "anthropic" | "openai";
 
 export interface Connector {
   id: string;
   name: string;
   url: string;
   hasKey: boolean;
+  api: Api;
 }
 
 export interface ConnectorList {
@@ -137,6 +188,7 @@ export interface ConnectorInput {
   // Blank keeps the saved key when editing.
   apiKey?: string;
   clearKey?: boolean;
+  api?: Api;
 }
 
 export type TestResult = { ok: true; models: number } | { ok: false; error: string };
@@ -158,7 +210,7 @@ export const createConnector = (input: ConnectorInput) => call<Connector>("POST"
 export const updateConnector = (id: string, input: ConnectorInput) => call<Connector>("PUT", `/api/connectors/${id}`, input);
 export const deleteConnector = (id: string) => call<{ activeId: string | null }>("DELETE", `/api/connectors/${id}`);
 export const setActiveConnector = (id: string) => call<{ activeId: string }>("PUT", "/api/active", { id });
-export const testConnector = (input: { id?: string; url?: string; apiKey?: string; clearKey?: boolean }) =>
+export const testConnector = (input: { id?: string; url?: string; apiKey?: string; clearKey?: boolean; api?: Api }) =>
   call<TestResult>("POST", "/api/connectors/test", input);
 
 export async function listModels(connectorId: string): Promise<Model[]> {
@@ -466,6 +518,124 @@ export interface Usage {
   promptTokens?: number;
 }
 
+export interface StreamDelta {
+  content?: string;
+  reasoning?: string;
+}
+
+export interface ChatRequest {
+  connectorId: string;
+  model: string;
+  messages: ChatMessage[];
+  // false asks the chat template to skip the reasoning phase, which small
+  // Qwen models can otherwise drag out for minutes on trivial prompts.
+  think: boolean;
+  tools?: unknown[];
+  // The connector's API; "anthropic" when left out.
+  api?: Api;
+}
+
+export interface ChatReply {
+  // Whole, with arguments as the JSON text the model wrote.
+  toolCalls: ToolCall[];
+  usage?: Usage;
+  // The thinking's signature, for the message to keep (see ChatMessage).
+  // Only the Messages API has one.
+  signature?: string;
+}
+
+// Streams one reply, calling onDelta for each piece of text or thinking, in
+// the connector's API.
+export function streamChat(req: ChatRequest, onDelta: (d: StreamDelta) => void, signal: AbortSignal): Promise<ChatReply> {
+  return req.api === "openai" ? streamCompletions(req, onDelta, signal) : streamMessages(req, onDelta, signal);
+}
+
+// The Messages API requires a cap. Big enough for a step that writes a whole
+// file; llama.cpp stops sooner when the context fills.
+const MAX_TOKENS = 32768;
+
+// The SDK's key is a placeholder: the dev server's proxy replaces it with the
+// connector's, which is why it's safe in a browser.
+async function streamMessages(
+  { connectorId, model, messages, think, tools }: ChatRequest,
+  onDelta: (d: StreamDelta) => void,
+  signal: AbortSignal,
+): Promise<ChatReply> {
+  const client = new Anthropic({
+    baseURL: `${location.origin}/api/c/${connectorId}`,
+    apiKey: "set-by-the-server",
+    dangerouslyAllowBrowser: true,
+    // A retried reply would stream its text twice.
+    maxRetries: 0,
+  });
+  const { system, messages: wire } = toMessages(messages);
+  const params = {
+    model,
+    max_tokens: MAX_TOKENS,
+    messages: wire,
+    ...(system ? { system } : {}),
+    ...(tools?.length ? { tools: tools.map(toTool) } : {}),
+    // llama.cpp ignores `thinking: {type: "disabled"}`; its chat template
+    // takes this instead. Not in the SDK's types, but it sends the field.
+    chat_template_kwargs: { enable_thinking: think },
+  };
+
+  const calls = new Map<number, ToolCall>();
+  let signature = "";
+  let input = 0;
+  let cached = 0;
+  let output = 0;
+  try {
+    const stream = client.messages.stream(params as Anthropic.MessageStreamParams, { signal });
+    for await (const event of stream) {
+      if (event.type === "message_start") {
+        input = event.message.usage.input_tokens ?? 0;
+        cached = (event.message.usage.cache_read_input_tokens ?? 0) + (event.message.usage.cache_creation_input_tokens ?? 0);
+      } else if (event.type === "message_delta") {
+        output = event.usage.output_tokens ?? output;
+      } else if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
+        calls.set(event.index, { id: event.content_block.id, name: event.content_block.name, arguments: "" });
+      } else if (event.type === "content_block_delta") {
+        const d = event.delta;
+        if (d.type === "text_delta") onDelta({ content: d.text });
+        else if (d.type === "thinking_delta") onDelta({ reasoning: d.thinking });
+        else if (d.type === "signature_delta") signature += d.signature;
+        else if (d.type === "input_json_delta") {
+          const c = calls.get(event.index);
+          if (c) c.arguments += d.partial_json;
+        }
+      }
+    }
+  } catch (e) {
+    // fetch's own TypeError, which failureLine reads as "couldn't reach".
+    if (e instanceof Anthropic.APIConnectionError && e.cause instanceof TypeError) throw e.cause;
+    if (e instanceof Anthropic.APIError && e.status) {
+      // llama.cpp's errors are {error: {message}}, Anthropic's {type, error: {message}}.
+      const body = e.error as any;
+      throw new Error(`POST /v1/messages: ${e.status} ${body?.error?.message ?? body?.message ?? e.message}`);
+    }
+    throw e;
+  }
+  return {
+    toolCalls: [...calls.values()].map((c, i) => ({ ...c, id: c.id || `call_${i}`, arguments: c.arguments || "{}" })),
+    usage: input || cached || output ? { contextTokens: input + cached + output, promptTokens: input } : undefined,
+    ...(signature ? { signature } : {}),
+  };
+}
+
+// Converts to the OpenAI wire format, dropping UI-only fields like reasoning.
+function toWire(m: ChatMessage) {
+  if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
+  if (m.toolCalls?.length) {
+    return {
+      role: m.role,
+      content: m.content,
+      tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments } })),
+    };
+  }
+  return { role: m.role, content: [m.content, m.update, m.note].filter(Boolean).join("\n\n") };
+}
+
 // llama.cpp puts a timings block on the last chunk: cache_n tokens reused,
 // prompt_n read this turn, predicted_n generated. OpenAI-style usage is the
 // fallback for servers that send that instead.
@@ -485,69 +655,36 @@ function readUsage(chunk: any): Usage | undefined {
   return undefined;
 }
 
-export interface StreamDelta {
-  content?: string;
-  reasoning?: string;
-}
-
-export interface ChatRequest {
-  connectorId: string;
-  model: string;
-  messages: ChatMessage[];
-  // false asks the chat template to skip the reasoning phase, which small
-  // Qwen models can otherwise drag out for minutes on trivial prompts.
-  think: boolean;
-  tools?: unknown[];
-}
-
-// Streams one chat completion, calling onDelta for each piece of text. Tool
-// calls arrive as fragments spread over many chunks, so they're assembled
-// here and returned once the stream ends.
-export async function streamChat(
+// OpenAI's Chat Completions, through OpenAI's SDK (same placeholder key as
+// streamMessages). Tool calls arrive as fragments spread over many chunks, so
+// they're assembled here and returned once the stream ends. The SDK hands
+// chunks over as parsed JSON, so llama.cpp's own fields (reasoning_content,
+// timings) are there, just not in its types.
+async function streamCompletions(
   { connectorId, model, messages, think, tools }: ChatRequest,
   onDelta: (d: StreamDelta) => void,
   signal: AbortSignal,
-): Promise<{ toolCalls: ToolCall[]; usage?: Usage }> {
-  const res = await fetch(`/api/c/${connectorId}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      stream: true,
-      messages: messages.map(toWire),
-      chat_template_kwargs: { enable_thinking: think },
-      ...(tools?.length ? { tools } : {}),
-    }),
-    signal,
+): Promise<ChatReply> {
+  const client = new OpenAI({
+    baseURL: `${location.origin}/api/c/${connectorId}/v1`,
+    apiKey: "set-by-the-server",
+    dangerouslyAllowBrowser: true,
+    maxRetries: 0,
   });
-  if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`POST /v1/chat/completions: ${res.status} ${text || res.statusText}`);
-  }
+  const params = {
+    model,
+    stream: true,
+    messages: messages.map(toWire),
+    chat_template_kwargs: { enable_thinking: think },
+    ...(tools?.length ? { tools } : {}),
+  };
 
   // Keyed by the fragment's index; the id and name come in the first one.
   const calls: ToolCall[] = [];
-  // Tool results must reference an id, so make one up if the server sent none.
   let usage: Usage | undefined;
-  const result = () => ({
-    toolCalls: calls.filter(Boolean).map((c, i) => ({ ...c, id: c.id || `call_${i}` })),
-    usage,
-  });
-
-  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) return result();
-    buffer += value;
-    // SSE events can split across reads; keep the trailing partial line.
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const data = line.slice(6).trim();
-      if (data === "[DONE]") return result();
-      const chunk = JSON.parse(data);
+  try {
+    const stream = await client.chat.completions.create(params as OpenAI.ChatCompletionCreateParamsStreaming, { signal });
+    for await (const chunk of stream as AsyncIterable<any>) {
       usage = readUsage(chunk) ?? usage;
       const delta = chunk.choices?.[0]?.delta;
       if (!delta) continue;
@@ -561,5 +698,15 @@ export async function streamChat(
         onDelta({ content: delta.content ?? undefined, reasoning: delta.reasoning_content ?? undefined });
       }
     }
+  } catch (e) {
+    // fetch's own TypeError, which failureLine reads as "couldn't reach".
+    if (e instanceof OpenAI.APIConnectionError && e.cause instanceof TypeError) throw e.cause;
+    if (e instanceof OpenAI.APIError && e.status) {
+      const err = e.error as any;
+      throw new Error(`POST /v1/chat/completions: ${e.status} ${err?.message ?? err?.error?.message ?? e.message}`);
+    }
+    throw e;
   }
+  // Tool results must reference an id, so make one up if the server sent none.
+  return { toolCalls: calls.filter(Boolean).map((c, i) => ({ ...c, id: c.id || `call_${i}` })), usage };
 }

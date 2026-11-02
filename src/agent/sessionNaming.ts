@@ -1,7 +1,7 @@
 // Ask the model to name the conversation so far (3-6 words), and parse its
 // reply. Called once after the first successful reply.
 
-import { type ChatMessage, streamChat, type StreamDelta } from "../api";
+import { type Api, type ChatMessage, streamChat, type StreamDelta } from "../api";
 
 // Build the prompt the model receives to name the conversation.
 export function namingPrompt(messages: ChatMessage[]): string {
@@ -44,6 +44,7 @@ export async function askForSessionName(
   connectorId: string,
   model: string,
   signal: AbortSignal,
+  api?: Api,
 ): Promise<string | null> {
   const prompt = namingPrompt(messages);
   const fullAnswer: string[] = [];
@@ -51,6 +52,7 @@ export async function askForSessionName(
     await streamChat(
       {
         connectorId,
+        api,
         model,
         messages: [{ role: "user", content: prompt }],
         think: false,

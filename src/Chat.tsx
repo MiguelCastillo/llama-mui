@@ -698,6 +698,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const result = await runTurn(
       {
         connectorId,
+        api: connector.api,
         model,
         toolsOn,
         thinkOn,
@@ -742,7 +743,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // After a successful reply, ask the model to name the session if it has
     // no name yet (modelName is null).
     if (result.ok && !modelName) {
-      const name = await askForSessionName(result.messages, connectorId, model, controller.signal);
+      const name = await askForSessionName(result.messages, connectorId, model, controller.signal, connector.api);
       if (name) {
         setModelName(name);
         renameSession(sessionId, { title: name, modelName: name });

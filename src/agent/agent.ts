@@ -1,6 +1,6 @@
 // Turn-loop helpers extracted from Chat.tsx.
 
-import { type ChatMessage, type ToolCall, type Usage, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, streamChat, runTool } from "../api";
+import { type Api, type ChatMessage, type ToolCall, type Usage, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, streamChat, runTool } from "../api";
 import { callKey, shareTokens } from "./helpers";
 import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext } from "./plan";
 
@@ -94,6 +94,7 @@ export interface RunTurnCallbacks {
 // Configuration needed for a single reply turn.
 export interface RunTurnConfig {
   connectorId: string;
+  api?: Api;
   model: string;
   toolsOn: boolean;
   thinkOn: boolean;
@@ -129,7 +130,7 @@ export async function runTurn(
   callbacks: RunTurnCallbacks,
 ): Promise<RunTurnResult> {
   const {
-    connectorId, model, toolsOn, thinkOn, planning, planStep,
+    connectorId, api, model, toolsOn, thinkOn, planning, planStep,
     systemPrompt, toolDefinitions, toolContextUpdate, seenUpdate,
     history: baseHistory, forgotten, attached: attachedBase,
     chatId, controller, started, text,
@@ -173,9 +174,10 @@ export async function runTurn(
       const streamRate = { pieces: 0, first: 0 };
 
       show();
-      const { toolCalls: asked, usage: replyUsage } = await streamChat(
+      const { toolCalls: asked, usage: replyUsage, signature } = await streamChat(
         {
           connectorId,
+          api,
           model,
           messages:
             toolsOn && !lastTurn && systemPrompt
@@ -215,6 +217,8 @@ export async function runTurn(
       if (!toolCalls.length && !reply.content.trim() && reply.reasoning?.trim()) {
         reply.content = reply.reasoning.trim();
         reply.reasoning = "";
+      } else if (signature && reply.reasoning) {
+        reply.signature = signature;
       }
       if (toolCalls.length) reply.toolCalls = toolCalls;
       history = [...history, reply];
@@ -597,7 +601,7 @@ export async function checkStep(
     };
     const tools = toolDefinitions.filter((d) => CHECK_TOOLS.has((d as { function: { name: string } }).function.name));
     return await reviewStep(
-      { connectorId: connector.id, model, think: thinkOn, room, tools, read },
+      { connectorId: connector.id, api: connector.api, model, think: thinkOn, room, tools, read },
       step,
       stepMessages,
       own,
