@@ -44,6 +44,7 @@ import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import LayersClearOutlinedIcon from "@mui/icons-material/LayersClearOutlined";
 import CompressOutlinedIcon from "@mui/icons-material/CompressOutlined";
+import AccountTreeOutlinedIcon from "@mui/icons-material/AccountTreeOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -1858,10 +1859,18 @@ function ApprovalPrompt({ approval, onDecide }: { approval: Approval; onDecide: 
   return (
     <Alert
       severity={isCommand ? "warning" : "info"}
-      icon={isCommand ? <TerminalOutlinedIcon fontSize="small" /> : <EditOutlinedIcon fontSize="small" />}
+      icon={
+        isCommand ? (
+          <TerminalOutlinedIcon fontSize="small" />
+        ) : approval.type === "worktree" ? (
+          <AccountTreeOutlinedIcon fontSize="small" />
+        ) : (
+          <EditOutlinedIcon fontSize="small" />
+        )
+      }
       sx={{ "& .MuiAlert-message": { minWidth: 0, flexGrow: 1 } }}
     >
-      {isCommand ? (
+      {approval.type === "command" ? (
         <>
           <Typography variant="body2">The model wants to run this command:</Typography>
           <Box sx={{ position: "relative", my: 1 }}>
@@ -1885,6 +1894,20 @@ function ApprovalPrompt({ approval, onDecide }: { approval: Approval; onDecide: 
           </Box>
           <Typography variant="caption" color="text.secondary" component="div">
             In {approval.cwd}. It runs as you, with your network access and credentials.
+          </Typography>
+        </>
+      ) : approval.type === "worktree" ? (
+        <>
+          <Typography variant="body2">
+            The model wants to {approval.action === "create" ? "create" : "remove"} a git worktree:
+          </Typography>
+          <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere", my: 0.5 }}>
+            {approval.path}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" component="div">
+            {approval.action === "create"
+              ? `A copy of the files ${approval.repo} tracks, on a new branch ${approval.branch}. It also adds that branch to the repo. After this, the model works in the copy without being asked.`
+              : `Of ${approval.repo}. The branch ${approval.branch} stays, with its commits.`}
           </Typography>
         </>
       ) : (

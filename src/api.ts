@@ -403,7 +403,7 @@ export const runCheckCommand = (attachments: string[], folder: string) =>
 export const getToolContext = (attachments: string[], promptDir: string | null) =>
   call<ToolContext>("POST", "/api/tools/context", { attachments, promptDir });
 // Something a tool wants to do that the user approves first: a change to a
-// file, or a shell command.
+// file, a shell command, or a git worktree made or removed.
 export type Approval =
   | {
       type: "change";
@@ -412,7 +412,8 @@ export type Approval =
       // Unified diff hunks.
       diff: string;
     }
-  | { type: "command"; command: string; cwd: string };
+  | { type: "command"; command: string; cwd: string }
+  | { type: "worktree"; action: "create" | "remove"; repo: string; branch: string; path: string };
 
 // Text for the model, a path outside the attachments that the user must allow
 // before the call can run, or something the user must approve.

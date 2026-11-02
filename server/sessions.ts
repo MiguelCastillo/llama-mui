@@ -15,9 +15,13 @@ import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 const OLD_CHATS_DIR = path.join(os.homedir(), ".llama-mui", "chats");
 
 // Ids come from the browser and become folder names, so only plain ones pass.
-function fileFor(id: string): string {
+export function sessionFolder(id: string): string {
   if (!/^[a-z0-9-]{1,64}$/.test(id)) throw new HttpError(400, "Bad session id");
-  return path.join(sessionsDir, id, "session.json");
+  return path.join(sessionsDir, id);
+}
+
+function fileFor(id: string): string {
+  return path.join(sessionFolder(id), "session.json");
 }
 
 async function readSession(id: string): Promise<any | null> {
@@ -29,13 +33,14 @@ async function readSession(id: string): Promise<any | null> {
   }
 }
 
-async function writeSession(id: string, session: unknown) {
-  const file = fileFor(id);
+// Write-then-rename so a crash mid-write can't leave a truncated file.
+async function writeText(file: string, text: string) {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  // Write-then-rename so a crash mid-write can't leave a truncated file.
-  await writeFile(`${file}.tmp`, JSON.stringify(session), { mode: 0o600 });
+  await writeFile(`${file}.tmp`, text, { mode: 0o600 });
   await rename(`${file}.tmp`, file);
 }
+
+const writeSession = (id: string, session: unknown) => writeText(fileFor(id), JSON.stringify(session));
 
 // Moves each old chat file into its session folder. A file is removed only
 // after the copy is read back and matches; one that doesn't parse, whose id

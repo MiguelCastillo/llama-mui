@@ -20,6 +20,7 @@ import { FETCH_TOOLS } from "./fetch.ts";
 import { PLAN_TOOLS, planInstructions } from "./plan.ts";
 import { TERMINAL_TOOLS, exec } from "./terminal.ts";
 import { WEB_TOOLS } from "./web.ts";
+import { WORKTREE_TOOLS } from "./worktree.ts";
 import { WRITE_TOOLS } from "./write.ts";
 
 interface Group {
@@ -66,6 +67,20 @@ const GROUPS: Group[] = [
       "use edit_file for changes to part of a file.",
   },
   {
+    id: "worktree",
+    label: "Worktrees",
+    description:
+      "Make a git worktree of a repo in your home folder, on a new branch, in the session's own folder. You " +
+      "approve each one being made or removed; after that the model works in it without being asked. It holds " +
+      "only the files git tracks.",
+    instructions:
+      "To change a repo without touching the user's own checkout, call create_worktree with the repo's path " +
+      "(it must be in their home folder): the user approves it once, and then you can read, write and run " +
+      "commands in the worktree with no further approval, using its path as cwd. It holds only the files git " +
+      "tracks, so install dependencies before running tests. Remove it with remove_worktree when done; the " +
+      "branch and its commits stay.",
+  },
+  {
     id: "terminal",
     label: "Terminal",
     description:
@@ -90,7 +105,15 @@ const GROUPS: Group[] = [
   },
 ];
 
-const TOOLS: ToolSpec[] = [...PLAN_TOOLS, ...DISK_TOOLS, ...WRITE_TOOLS, ...TERMINAL_TOOLS, ...WEB_TOOLS, ...FETCH_TOOLS];
+const TOOLS: ToolSpec[] = [
+  ...PLAN_TOOLS,
+  ...DISK_TOOLS,
+  ...WRITE_TOOLS,
+  ...WORKTREE_TOOLS,
+  ...TERMINAL_TOOLS,
+  ...WEB_TOOLS,
+  ...FETCH_TOOLS,
+];
 
 const isOffered = (ctx: ToolContext, t: ToolSpec) => !ctx.store.disabledTools.includes(t.name);
 

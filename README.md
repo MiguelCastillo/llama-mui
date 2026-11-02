@@ -22,6 +22,16 @@ served by a Vite plugin (`server/plugin.ts`) that runs under both
 can send requests to localhost, and without that check one could run the
 model's tools, commands included, on its own.
 
+**API keys: a rule for working on llama-mui.** A saved key lives in
+`settings.json` and in the headers of requests to its own server, and nowhere
+else: not in a response to the browser (it's only told whether a connector has
+one, `hasKey`), not in the model's prompt or tool results, not in a log, and not
+in `session.json`. Keeping it out of `session.json` is what makes a session
+exportable by copying that one file, so code that writes session data must
+never be handed a key. The app doesn't scrub anything for you: no tool can read
+or write `settings.json`, and a command that prints it (`cat`, `env`) is yours
+to refuse, since you see each command before it runs.
+
 **Connectors** are the model servers chat talks to. Each has a **provider**,
 chosen when it's added, which decides its client, how its key is sent, and
 what else it offers:
@@ -114,6 +124,20 @@ never saw; it's told to read the file again. The server keeps track of these
 reads in memory, so after a dev server restart the model reads files again
 before changing them. Files can't be deleted, and `settings.json` can't be
 written.
+
+The **Worktrees** group (`server/worktree.ts`) has `create_worktree` and
+`remove_worktree`. A worktree is a copy of a git repo's tracked files on a new
+branch (`llama/<name>`), made in the session's own folder,
+`~/.llama-mui/sessions/<id>/worktrees/<name>`. The repo has to be inside your
+home folder and not inside `~/.llama-mui`. You approve each one being made or
+removed, since that also changes the repo's own `.git`; after that the model
+reads, writes and runs commands (pass the worktree as `cwd`) in it with no
+more prompts. That `worktrees/` folder is the only place the model may change
+files unasked: the rest of a session's folder, `session.json` included, asks
+like any other path. A worktree holds only what git tracks, so `node_modules`
+and ignored files aren't there, and a committed secret is. Removing one is
+refused if it has uncommitted changes, and keeps the branch and its commits;
+deleting a session never removes its worktrees.
 
 The **Terminal** group (`server/terminal.ts`) has `run_command`, which runs a
 shell command the model suggests, in an attached folder (or one you allow).

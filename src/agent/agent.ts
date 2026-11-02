@@ -13,7 +13,7 @@ export const MAX_TOOL_ROUNDS = 50;
 
 // Tool names that mutate disk; a successful run of one resets the repeat
 // counter, because the same read/search may now find different content.
-export const CHANGES_DISK = new Set(["write_file", "edit_file", "run_command"]);
+export const CHANGES_DISK = new Set(["write_file", "edit_file", "run_command", "create_worktree", "remove_worktree"]);
 
 // ── repeat guard ────────────────────────────────────────────────────────────
 
@@ -298,7 +298,9 @@ export async function runTurn(
                   result:
                     approval.type === "change"
                       ? `Error: the user didn't approve this change to ${approval.path}; nothing was written`
-                      : "Error: the user didn't approve running this command; it didn't run",
+                      : approval.type === "worktree"
+                        ? `Error: the user didn't approve ${approval.action === "create" ? "creating" : "removing"} the worktree ${approval.path}; nothing changed`
+                        : "Error: the user didn't approve running this command; it didn't run",
                 };
                 break;
               }
