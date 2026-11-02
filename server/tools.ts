@@ -17,7 +17,7 @@ import {
 } from "./toolkit.ts";
 import { FETCH_TOOLS } from "./fetch.ts";
 import { PLAN_TOOLS, planInstructions } from "./plan.ts";
-import { TERMINAL_TOOLS } from "./terminal.ts";
+import { TERMINAL_TOOLS, exec } from "./terminal.ts";
 import { WEB_TOOLS } from "./web.ts";
 import { WRITE_TOOLS } from "./write.ts";
 
@@ -202,7 +202,36 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
       systemPrompt: toolsSystemPrompt(promptDir),
       offered: TOOLS.filter((t) => isOffered(ctx, t)).map((t) => t.name),
       update: await chatUpdate(ctx, promptDir),
+      checkCommands: Object.fromEntries(
+        ctx.attachments.filter((a) => ctx.store.checkCommands[a]).map((a) => [a, ctx.store.checkCommands[a]]),
+      ),
     });
+    return true;
+  }
+
+  // A folder's check command: set (empty clears it), or run. It runs without
+  // asking, unlike run_command: the user typed it, the model can't change it,
+  // and this only runs what's saved for an attached folder.
+  if (parts[1] === "check-command" && method === "PUT") {
+    const { folder, command } = await readJson(req);
+    const [real] = await checkAttachments([folder]);
+    if (!real) throw new HttpError(400, "No such folder");
+    const store = await load();
+    const text = String(command ?? "").trim();
+    if (text) store.checkCommands[real] = text;
+    else delete store.checkCommands[real];
+    await save(store);
+    sendJson(res, 200, { folder: real, command: text });
+    return true;
+  }
+  if (parts[1] === "check-command" && method === "POST") {
+    const body = await readJson(req);
+    const ctx = await contextFor(body);
+    const folder = String(body.folder ?? "");
+    const command = ctx.attachments.includes(folder) ? ctx.store.checkCommands[folder] : undefined;
+    if (!command) throw new HttpError(404, "No check command for that folder");
+    const output = await exec(command, folder);
+    sendJson(res, 200, { command, passed: output.endsWith("[exit code 0]"), output });
     return true;
   }
 

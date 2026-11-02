@@ -51,7 +51,7 @@ function loginEnv(): Promise<NodeJS.ProcessEnv> {
 
 // stdin is closed and git is told not to prompt, so a command waiting for
 // input fails instead of hanging until the timeout.
-async function exec(command: string, cwd: string): Promise<string> {
+export async function exec(command: string, cwd: string): Promise<string> {
   const env = { ...(await loginEnv()), GIT_TERMINAL_PROMPT: "0" };
   return new Promise((resolve, reject) => {
     const child = spawn(SHELL, ["-c", command], {

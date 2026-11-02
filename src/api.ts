@@ -319,10 +319,22 @@ export interface ToolContext {
   offered: string[];
   // What's attached and what's off, for a ChatMessage's `update`.
   update: string;
+  // The check commands of attached folders, by folder.
+  checkCommands: Record<string, string>;
 }
 
 // What to offer the model in a chat with these attachments. Tool definitions
 // come from the server so they match what it can run.
+// A folder's check command (a typecheck, tests), saved for that folder in
+// every session; an empty one clears it. Chat runs it after each plan step.
+export const setCheckCommand = (folder: string, command: string) =>
+  call<{ folder: string; command: string }>("PUT", "/api/tools/check-command", { folder, command });
+export const runCheckCommand = (attachments: string[], folder: string) =>
+  call<{ command: string; passed: boolean; output: string }>("POST", "/api/tools/check-command", {
+    attachments,
+    folder,
+  });
+
 // `promptDir`: the working directory the session's system prompt names.
 export const getToolContext = (attachments: string[], promptDir: string | null) =>
   call<ToolContext>("POST", "/api/tools/context", { attachments, promptDir });

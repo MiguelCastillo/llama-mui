@@ -199,6 +199,25 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
   waits for you, so there's no **Continue** until you mark it done or rerun it.
 - Each step is one turn: chat sends "Do step 2 of 4: …" with the plan so far,
   and the model works on that step only, with all its tools.
+- Then chat runs the **check command** of each attached folder that has one,
+  once the plan has changed files. It's set per folder in **Chat settings**,
+  under the folder (for this repo, `npx tsc --noEmit -p .`), and kept for
+  that folder in every session. It runs without asking, unlike
+  `run_command`: you typed it, and the model can't change it. It comes
+  first because a failing typecheck or test is a fact, where the check
+  below is a model's opinion, and its output says exactly what to fix:
+  - **Fails**: the model gets the output ("After step 2, the check command
+    `npx tsc --noEmit -p .` failed: … Fix what it reports") and one turn to
+    fix it, and the command runs again. Still failing, the step gets ✗ with
+    the first lines of the output, and the plan stops. In the first test,
+    after a step that changed a tooltip, a planted type error elsewhere
+    failed the command; the model fixed it from the output, and the step
+    passed in 33 seconds.
+  - **Passes**, or no folder has one: on to the check below. The command
+    runs again after the check's retry, if there is one, since that may
+    change files too.
+  - A command that can't be run at all (the server failed) shows as an
+    error and doesn't stop the step: it isn't the model's to fix.
 - Then chat **checks** the step: one more call to the model, with no tools,
   given the step, **every file any step of the plan wrote or edited, in any
   run, whole, as it is now**, the changes made during it (for each change you approved, the diff

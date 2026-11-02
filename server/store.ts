@@ -36,6 +36,10 @@ export interface Store {
   disabledTools: string[];
   preferences: Preferences;
   models: Record<string, ModelSettings>;
+  // A command that checks a folder's code (a typecheck, tests), by the
+  // folder's path; chat runs it after each plan step. See README, "Running a
+  // plan".
+  checkCommands: Record<string, string>;
 }
 
 // Exported so the file tools can refuse to read it: it holds API keys.
@@ -63,6 +67,7 @@ const empty = (): Store => ({
   disabledTools: [],
   preferences: { showContextMeter: true, showSteps: true, renderMarkdown: true },
   models: {},
+  checkCommands: {},
 });
 
 export async function load(): Promise<Store> {

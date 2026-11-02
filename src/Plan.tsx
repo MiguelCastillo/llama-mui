@@ -245,6 +245,15 @@ export function uncheckedPrompt(i: number, why: string, split: boolean): string 
         "update_plan call only if that would help.";
 }
 
+// After a step whose folder's check command failed. Unlike the model check,
+// the command isn't argued with: its output is the fix list.
+export function commandFailedPrompt(i: number, command: string, output: string): string {
+  return (
+    `After step ${i + 1}, the check command \`${command}\` failed:\n\n${clip(output, 6000)}\n\n` +
+    "Fix what it reports, then reply with one line saying what you changed."
+  );
+}
+
 export function disputePrompt(i: number, missing: string): string {
   return (
     `The check says step ${i + 1} isn't done: ${missing}\n\n` +

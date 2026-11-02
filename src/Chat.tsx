@@ -58,6 +58,7 @@ import {
   type ChatMessage,
   type StepStats,
   type ToolCall,
+  runCheckCommand,
   type ModelSettings,
   type Preferences,
   type Attachment,
@@ -67,6 +68,7 @@ import {
   type ToolContext,
   type PastPlan,
   type PlanStep,
+  setCheckCommand,
   type Session,
   type SessionSummary,
   type Usage,
@@ -98,6 +100,7 @@ import {
   PlanView,
   type WholeFile,
   checkRoom,
+  commandFailedPrompt,
   disputeHolds,
   disputeNote,
   disputePrompt,
@@ -203,6 +206,14 @@ function callKey(call: ToolCall): string {
 // What happened to a failed reply, in the user's terms. Our server answers 502
 // when it can't reach the llama server; a TypeError means the request never
 // got an answer at all.
+// The first lines of a check command's output, for a step's note: past its
+// "$ command" line, without the "[exit code N]" line.
+function commandSummary(output: string): string {
+  const lines = output.split("\n").slice(1, -1).filter((l) => l.trim());
+  const text = lines.slice(0, 2).join(" ").trim() || "(no output)";
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+}
+
 function failureLine(failed: string): string {
   if (failed === INTERRUPTED) return "The reply was cut off.";
   if (failed.startsWith("TypeError") || failed.includes(": 502 ")) return "Couldn't reach the llama server.";
@@ -257,6 +268,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     systemPrompt: null,
     offered: [],
     update: "",
+    checkCommands: {},
   });
   const [error, setError] = useState<string | null>(null);
   // Failure of the last reply only; see retry().
@@ -591,13 +603,15 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .catch((e) => setError(e.message));
   }, [visible]);
 
+  // Bumped to fetch the tool context again, after a check command changes.
+  const [contextVersion, setContextVersion] = useState(0);
   // Settings → Tools or the attachments may have changed what's available.
   useEffect(() => {
     if (!visible) return;
     getToolContext(attachedPaths(attachments), promptDir)
       .then(setToolContext)
       .catch((e) => setError(e.message));
-  }, [visible, attachments, promptDir]);
+  }, [visible, attachments, promptDir, contextVersion]);
 
   // On only when the user wants tools and some are ready in this chat.
   const toolsOn = toolsWanted && toolContext.offered.length > 0;
@@ -1006,9 +1020,29 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     }
   };
 
+  // Runs the check command of each attached folder that has one, once the plan
+  // has changed files; the first that fails, or null. They come before the
+  // model check: a failing typecheck or test is a fact, where the check is a
+  // model's opinion, and their output tells the model exactly what to fix.
+  const failedCommand = async (planMessages: ChatMessage[]) => {
+    if (filesChanged(planMessages).length === 0) return null;
+    for (const folder of Object.keys(toolContext.checkCommands)) {
+      try {
+        const r = await runCheckCommand(attachedPaths(attachments), folder);
+        if (!r.passed) return r;
+      } catch (e: any) {
+        // Not the model's fault, so not its to fix: shown, and the model check goes on.
+        setError(`Couldn't run the check command for ${folder}: ${e.message}`);
+      }
+    }
+    return null;
+  };
+
   // Runs the plan's open steps in order, one turn each, and checks every step
-  // before ticking it off: the model saying it's done isn't enough. A step that
-  // isn't done gets one retry with what's missing, then waits for the user.
+  // before ticking it off: the model saying it's done isn't enough. First the
+  // folders' check commands, then the model check. A step that isn't done gets
+  // one retry (to fix what a command reported, or to answer the check), then
+  // waits for the user.
   const runPlan = async () => {
     if (!connector || !model || abort || planRunningRef.current) return;
     planRunningRef.current = true;
@@ -1031,6 +1065,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         const took = () => performance.now() - startedAt;
         let r = await reply(stepPrompt(steps, i), msgs, { planStep: id });
         msgs = r.messages;
+        let failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep)) : null;
+        if (failed) {
+          r = await reply(commandFailedPrompt(i, failed.command, failed.output), msgs, { planStep: id });
+          msgs = r.messages;
+          failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep)) : null;
+          if (failed) {
+            setStep(i, { status: "failed", note: `\`${failed.command}\` still fails: ${commandSummary(failed.output)}`, ms: took() });
+            break;
+          }
+        }
         let check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
         if (check && !check.done && !check.unchecked) {
           const missing = check.missing ?? "";
@@ -1043,6 +1087,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           const d = r.ok ? weighDispute(msgs.slice(retryStart), msgs.slice(start)) : null;
           if (d?.verdict === "wrong" && !d.changed) {
             setStep(i, { status: disputeHolds(d) ? "disputed" : "failed", note: disputeNote(missing, d), ms: took() });
+            break;
+          }
+          // The retry may have changed files, so the commands run again first.
+          failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep)) : null;
+          if (failed) {
+            setStep(i, { status: "failed", note: `\`${failed.command}\` fails: ${commandSummary(failed.output)}`, ms: took() });
             break;
           }
           check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep)) : null;
@@ -1568,6 +1618,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               onDetach={(p) => setAttachments((as) => as.filter((x) => x.path !== p))}
               onMakeWorkingDir={(p) =>
                 setAttachments((as) => [...as.filter((x) => x.path === p), ...as.filter((x) => x.path !== p)])
+              }
+              checkCommands={toolContext.checkCommands}
+              onSetCheckCommand={(folder, command) =>
+                setCheckCommand(folder, command)
+                  .then(() => setContextVersion((v) => v + 1))
+                  .catch((e) => setError(e.message))
               }
             />
             <Composer

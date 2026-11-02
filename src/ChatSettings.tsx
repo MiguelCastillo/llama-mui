@@ -48,11 +48,15 @@ export default function ChatSettings({
   onAttach,
   onDetach,
   onMakeWorkingDir,
+  checkCommands,
+  onSetCheckCommand,
 }: {
   attachments: Attachment[];
   onAttach: (a: Attachment) => void;
   onDetach: (path: string) => void;
   onMakeWorkingDir: (path: string) => void;
+  checkCommands: Record<string, string>;
+  onSetCheckCommand: (folder: string, command: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [section, setSection] = useState<SectionId>("attachments");
@@ -113,6 +117,8 @@ export default function ChatSettings({
                 onAdd={onAttach}
                 onRemove={onDetach}
                 onMakeWorkingDir={onMakeWorkingDir}
+                checkCommands={checkCommands}
+                onSetCheckCommand={onSetCheckCommand}
               />
             )}
           </Box>
@@ -131,11 +137,15 @@ function AttachmentsSection({
   onAdd,
   onRemove,
   onMakeWorkingDir,
+  checkCommands,
+  onSetCheckCommand,
 }: {
   attachments: Attachment[];
   onAdd: (a: Attachment) => void;
   onRemove: (path: string) => void;
   onMakeWorkingDir: (path: string) => void;
+  checkCommands: Record<string, string>;
+  onSetCheckCommand: (folder: string, command: string) => void;
 }) {
   const workingDir = attachments.find((a) => a.kind === "folder")?.path;
   const [path, setPath] = useState("");
@@ -186,6 +196,14 @@ function AttachmentsSection({
                 <Typography variant="caption" color="text.secondary" component="div" sx={{ overflowWrap: "anywhere" }}>
                   {a.path}
                 </Typography>
+                {a.kind === "folder" && (
+                  <CheckCommandField
+                    // Starts over when the saved command arrives or changes.
+                    key={checkCommands[a.path] ?? ""}
+                    command={checkCommands[a.path] ?? ""}
+                    onSave={(c) => onSetCheckCommand(a.path, c)}
+                  />
+                )}
               </Box>
               {a.path === workingDir ? (
                 <Chip size="small" color="primary" label="Working directory" sx={{ flexShrink: 0 }} />
@@ -264,5 +282,26 @@ function AttachmentsSection({
         </Button>
       </Stack>
     </Stack>
+  );
+}
+
+// A folder's check command, saved on Enter or when the field loses focus.
+// Kept for the folder, so every session that attaches it runs the same one.
+function CheckCommandField({ command, onSave }: { command: string; onSave: (command: string) => void }) {
+  const [text, setText] = useState(command);
+  const save = () => text.trim() !== command && onSave(text.trim());
+  return (
+    <TextField
+      size="small"
+      variant="standard"
+      fullWidth
+      placeholder="Check command, run after each plan step (e.g. npx tsc --noEmit -p .)"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => e.key === "Enter" && save()}
+      slotProps={{ input: { sx: { fontFamily: "monospace", fontSize: 13 } } }}
+      sx={{ mt: 0.5 }}
+    />
   );
 }
