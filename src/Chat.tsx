@@ -977,22 +977,25 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     );
 
   // Checks a step's turn with reviewStep. Null if it couldn't be checked
-  // (stopped, or the server failed), which leaves the step open. The files
-  // are the ones any step of the plan changed, in any run: a step whose work
-  // is already done (by a rerun before, or by an earlier step) changes
-  // nothing, and the check then saw no file at all.
+  // (stopped, or the server failed), which leaves the step open. The check
+  // sees the files any step of the plan changed, in any run, the step's own
+  // first: a step whose work is already done (by a rerun before, or by an
+  // earlier step) changes nothing, and the check then saw no file at all.
   const checkStep = async (step: string, stepMessages: ChatMessage[], planMessages: ChatMessage[]) => {
     if (!connector || !(await modelLoaded())) return null;
     const controller = new AbortController();
     setAbort(controller);
     try {
-      const files = await readWhole(filesChanged(planMessages));
+      const mine = filesChanged(stepMessages);
+      const own = await readWhole(mine);
+      const others = await readWhole(filesChanged(planMessages).filter((p) => !mine.includes(p)));
       const room = checkRoom(models.find((m) => m.id === model)?.contextSize);
       return await reviewStep(
         { connectorId: connector.id, model, think: thinkOn, room },
         step,
         stepMessages,
-        files,
+        own,
+        others,
         controller.signal,
       );
     } catch (e: any) {
@@ -1012,7 +1015,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setPlanRunning(true);
     let msgs = messages;
     // A step the check couldn't judge; the model proposes a plan change after the run.
-    let unchecked: { i: number; why: string } | null = null;
+    let unchecked: { i: number; why: string; split: boolean } | null = null;
     try {
       for (;;) {
         const steps = planRef.current;
@@ -1050,7 +1053,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         }
         if (check.unchecked) {
           setStep(i, { status: "failed", note: check.unchecked, ms: took() });
-          unchecked = { i, why: check.unchecked };
+          unchecked = { i, why: check.unchecked, split: !!check.split };
           break;
         }
         setStep(i, check.done ? { status: "done", ms: took() } : { status: "failed", note: check.missing, ms: took() });
@@ -1061,7 +1064,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       setPlanRunning(false);
     }
     // Outside the run, so its update_plan becomes a proposal (see reply()).
-    if (unchecked) await reply(uncheckedPrompt(unchecked.i, unchecked.why), msgs, { planning: true });
+    if (unchecked) await reply(uncheckedPrompt(unchecked.i, unchecked.why, unchecked.split), msgs, { planning: true });
   };
 
   // Retries the last user message, dropping the failed reply.

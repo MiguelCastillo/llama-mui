@@ -213,12 +213,17 @@ code is in `src/Plan.tsx`, `server/plan.ts` and `runPlan` in `src/Chat.tsx`.
     the file was never created.
   - The files get half the model's context (its context size from the
     server, or 32,000 tokens if it's unknown, at about 4 characters a
-    token). Files that don't fit, or can't be read, aren't cut or swapped
-    for the diffs: a check that can't see the code guesses. Instead the step
-    gets ✗ with "Couldn't check this step: server/x.ts (~N tokens) is too big
-    for the check…", the plan stops, and the model gets a planning turn to
-    propose a plan change, such as splitting the step, which shows under the
-    plan for you to accept or not.
+    token). The step's own files go first; files other steps changed fill
+    what's left, and the check is told which didn't fit. (With all of them, a
+    step that had only changed the README overflowed: `Chat.tsx` and three
+    other files came to ~33,000 tokens.) If the step's own files don't fit,
+    or can't be read, they aren't cut or swapped for the diffs: a check that
+    can't see the code guesses. Instead the step gets ✗ with "Couldn't check
+    this step: server/x.ts (~N tokens) is too big for the check…", the plan
+    stops, and the model gets a planning turn to propose a plan change, which
+    shows under the plan for you to accept or not. It's asked to split the
+    step only when the step's own files were too big; a file it couldn't
+    read is something splitting doesn't fix.
   - chat reads the files with `read_file` under a chat id of its own
     (`<chat>:check`), so they don't count as read by the model for the
     read-before-edit rule. It answers

@@ -130,23 +130,45 @@ export type WholeFile = { path: string; text: string; cut?: boolean } | { path: 
 // undefined because its signature wasn't in the hunk), and a rerun's changes
 // are only its fixes, so what an earlier attempt wrote looked missing.
 // Room for the files: half the model's context, at about 4 characters a
-// token; the rest is for the diffs, the prompt and the answer. Files that
-// don't fit stop the step instead of being cut or swapped for the diffs: a
-// check that can't see the code guesses, and its guess looks like a verdict.
+// token; the rest is for the diffs, the prompt and the answer. The step's own
+// files go first; files other steps changed fill what's left, and the check
+// is told which didn't fit (with all of them, Chat.tsx and three others
+// overflowed a step that had only changed the README). If the step's own
+// files don't fit, the step stops instead of their being cut or swapped for
+// the diffs: a check that can't see the code guesses, and its guess looks
+// like a verdict.
 const tokens = (chars: number) => Math.ceil(chars / 4);
 export const checkRoom = (contextSize?: number) => Math.floor((contextSize ?? 32000) / 2) * 4;
+const chars = (f: WholeFile) => ("text" in f ? f.text.length : 0);
 
-// Why the check can't judge these files, or null if it can.
-function uncheckable(files: WholeFile[], room: number): string | null {
-  const unread = files.find((f) => "error" in f);
-  if (unread && "error" in unread) return `Couldn't check this step: couldn't read ${unread.path} (${unread.error}).`;
-  const size = files.reduce((n, f) => n + ("text" in f ? f.text.length : 0), 0);
-  if (size <= room && !files.some((f) => "cut" in f && f.cut)) return null;
-  const list = files.map((f) => `${f.path} (~${"text" in f ? tokens(f.text.length) : "?"} tokens)`).join(", ");
-  return (
-    `Couldn't check this step: ${list} ${files.length > 1 ? "are" : "is"} too big for the check, which has ` +
-    `room for ~${tokens(room)} tokens of files (half of the model's context).`
-  );
+// What the check is shown: the step's own files, then the others that fit.
+// `unchecked` if the step's own files can't be shown, with `split` when
+// splitting the step would help (they're too big, not unreadable).
+function pack(own: WholeFile[], others: WholeFile[], room: number) {
+  const unread = own.find((f) => "error" in f);
+  if (unread && "error" in unread) {
+    return { unchecked: `Couldn't check this step: couldn't read ${unread.path} (${unread.error}).`, split: false };
+  }
+  const size = own.reduce((n, f) => n + chars(f), 0);
+  if (size > room || own.some((f) => "cut" in f && f.cut)) {
+    const list = own.map((f) => `${f.path} (~${tokens(chars(f))} tokens)`).join(", ");
+    return {
+      unchecked:
+        `Couldn't check this step: ${list} ${own.length > 1 ? "are" : "is"} too big for the check, which has ` +
+        `room for ~${tokens(room)} tokens of files (half of the model's context).`,
+      split: true,
+    };
+  }
+  const shown = [...own];
+  const left: string[] = [];
+  let used = size;
+  for (const f of others) {
+    if ("text" in f && !f.cut && used + chars(f) <= room) {
+      shown.push(f);
+      used += chars(f);
+    } else left.push(f.path);
+  }
+  return { shown, left };
 }
 
 const REVIEW_PROMPT =
@@ -158,19 +180,23 @@ const REVIEW_PROMPT =
   "reports what it found.";
 
 // Asks the model, with no tools, whether the step's files do what the step
-// says. `messages` is the step's turn: from its "Do step" message on;
-// `files` are filesChanged(messages) read now. `unchecked` says why it
-// couldn't judge them; the model isn't asked then.
+// says. `messages` is the step's turn: from its "Do step" message on. `own`
+// are the files it changed, `others` the files other steps changed, all read
+// now (see pack). `unchecked` says why it couldn't judge; the model isn't
+// asked then, and `split` says whether splitting the step would help.
 export async function reviewStep(
   { connectorId, model, think, room }: { connectorId: string; model: string; think: boolean; room: number },
   step: string,
   messages: ChatMessage[],
-  files: WholeFile[],
+  own: WholeFile[],
+  others: WholeFile[],
   signal: AbortSignal,
-): Promise<{ done: boolean; missing?: string; unchecked?: string }> {
-  const unchecked = uncheckable(files, room);
-  if (unchecked) return { done: false, unchecked };
-  const whole = files.map((f) => ("text" in f ? `=== ${f.path}\n${f.text}` : "")).join("\n\n");
+): Promise<{ done: boolean; missing?: string; unchecked?: string; split?: boolean }> {
+  const packed = pack(own, others, room);
+  if ("unchecked" in packed) return { done: false, unchecked: packed.unchecked, split: packed.split };
+  const whole =
+    packed.shown.map((f) => ("text" in f ? `=== ${f.path}\n${f.text}` : "")).join("\n\n") +
+    (packed.left.length ? `\n\nNot shown, for lack of room (changed by other steps): ${packed.left.join(", ")}` : "");
   const replyText = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content ?? "";
   let answer = "";
   await streamChat(
@@ -206,14 +232,17 @@ export async function reviewStep(
 // against what it actually read. The verdict is about the step, not the
 // check: asked for CHECK RIGHT / CHECK WRONG, the model showed the step was
 // done and then wrote "CHECK RIGHT", meaning the step was right.
-// After a step the check couldn't judge (see checkRoom): the model proposes
-// a plan change, which the user accepts or not. It's sent as a planning turn,
-// so it can only read and call update_plan.
-export function uncheckedPrompt(i: number, why: string): string {
-  return (
-    `${why}\n\nPropose a change to the plan that makes step ${i + 1} checkable, for example by splitting ` +
-    "it so each step changes less, with one update_plan call. Say why in one or two lines."
-  );
+// After a step the check couldn't judge (see pack): the model proposes a plan
+// change, which the user accepts or not. It's sent as a planning turn, so it
+// can only read and call update_plan. Splitting is suggested only when the
+// step's own files were too big: told to split when other steps' files had
+// filled the room, the model split the step anyway, which couldn't help.
+export function uncheckedPrompt(i: number, why: string, split: boolean): string {
+  return split
+    ? `${why}\n\nPropose a change to the plan that makes step ${i + 1} checkable, for example by splitting ` +
+        "it so each step changes less, with one update_plan call. Say why in one or two lines."
+    : `${why}\n\nSay in one or two lines what would let step ${i + 1} be checked. Change the plan with one ` +
+        "update_plan call only if that would help.";
 }
 
 export function disputePrompt(i: number, missing: string): string {
