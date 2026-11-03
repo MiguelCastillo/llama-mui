@@ -1,7 +1,8 @@
 // Turn-loop helpers extracted from Chat.tsx.
 
-import { type Api, type Kind, type ChatMessage, type ToolCall, type Usage, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, streamChat, runTool } from "../api";
+import { type Api, type Kind, type ChatMessage, type ToolCall, type Usage, type Todo, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, streamChat, runTool } from "../api";
 import { callKey, shareTokens } from "./helpers";
+import { applyTodoCall, openTodos } from "./todos";
 import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext } from "./plan";
 
 // Maximum number of identical tool calls (same name + arguments) before the
@@ -85,6 +86,9 @@ export interface RunTurnCallbacks {
   setPlanAnchor: (a: string | null) => void;
   setPlanContext: (c: string | null) => void;
   changePlan: (s: any[]) => void;
+  // The session's todos; the ref is the latest, for calls within one reply.
+  todosRef: { current: Todo[] };
+  changeTodos: (t: Todo[]) => void;
   planRef: { current: any[] | null };
   planRunningRef: { current: boolean };
   planAnchor: string | null;
@@ -136,7 +140,7 @@ export async function runTurn(
     history: baseHistory, forgotten, attached: attachedBase,
     chatId, controller, started, text,
   } = config;
-  const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, changePlan, planRef, planRunningRef, planAnchor, planContext } = callbacks;
+  const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext } = callbacks;
 
   const tag = planStep ? { planStep } : {};
   let error: string | undefined;
@@ -241,6 +245,7 @@ export async function runTurn(
         const key = callKey(call);
         const times = ran.get(key) ?? 0;
         ran.set(key, times + 1);
+        const openList = () => openTodos(todosRef.current).map(({ id, summary }) => ({ id, summary }));
 
         try {
           if (planning && !PLANNING_TOOLS.has(call.name)) {
@@ -255,7 +260,7 @@ export async function runTurn(
             );
           }
 
-          let outcome = await runTool(call, { chatId, attachments: attached });
+          let outcome = await runTool(call, { chatId, attachments: attached, todos: openList() });
           while (!("result" in outcome)) {
             const answer = await askUser(outcome as any, controller.signal);
             if (controller.signal.aborted) return { ok, messages: [...forgotten, ...history], attached, error };
@@ -290,7 +295,7 @@ export async function runTurn(
               }
               attached = [...attached, target.path];
               attach({ path: target.path, kind: target.kind, source: "request" });
-              outcome = await runTool(call, { chatId, attachments: attached });
+              outcome = await runTool(call, { chatId, attachments: attached, todos: openList() });
             } else {
               const approval = (outcome as any).needsApproval;
               if (!answer) {
@@ -305,7 +310,7 @@ export async function runTurn(
                 break;
               }
               if (approval.type === "change") diff = approval.diff;
-              outcome = await runTool(call, { chatId, attachments: attached, approved: approval as Approval });
+              outcome = await runTool(call, { chatId, attachments: attached, todos: openList(), approved: approval as Approval });
             }
           }
           result = outcome.result;
@@ -314,6 +319,10 @@ export async function runTurn(
         }
 
         if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) ran.clear();
+
+        if ((call.name === "add_todo" || call.name === "complete_todo") && !result.startsWith("Error:")) {
+          changeTodos(applyTodoCall(todosRef.current, call, crypto.randomUUID().slice(0, 8), Date.now()));
+        }
 
         if (call.name === "update_plan" && !result.startsWith("Error:")) {
           const current = planRef.current ?? [];

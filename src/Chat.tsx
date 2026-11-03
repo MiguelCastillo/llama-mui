@@ -69,6 +69,7 @@ import {
   type ToolContext,
   type PastPlan,
   type PlanStep,
+  type Todo,
   setCheckCommand,
   type Session,
   type SessionSummary,
@@ -96,6 +97,7 @@ import ChatSettings, { AttachmentIcon } from "./ChatSettings";
 import SessionsPanel from "./SessionsPanel";
 import EmptyChatCreature from "./EmptyChatCreature";
 import EmptyChatSuggestions from "./EmptyChatSuggestions";
+import { settleStart, startAction, type Start, type StartAction } from "./todos";
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
@@ -116,6 +118,7 @@ import {
   weighDispute,
 } from "./agent/plan";
 import { runTurn, runPlan } from "./agent/agent";
+import { withSessionDefaults } from "./sessionDefaults";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
 // and whether the Tools switch is on. Storage can be unavailable (private
@@ -255,6 +258,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // with the session, cleared when the plan is cancelled, moved into pastPlans
   // when a plan is archived, and kept when a plan is cloned.
   const [planContext, setPlanContext] = useState<string | null>(null);
+  // Things to come back to (add_todo; see src/agent/todos.ts), saved with the
+  // session. The ref is the latest, for tool calls within one reply.
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const todosRef = useRef<Todo[]>([]);
+  const changeTodos = (next: Todo[]) => {
+    todosRef.current = next;
+    setTodos(next);
+  };
   // Where each plan shows: after the turn whose update_plan call wrote it, so
   // it stays in place in the history (see Session). A finished plan stays
   // there when a new one is written; the new one shows after its own turn.
@@ -351,6 +362,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [fill, setFill] = useState<{ text: string; n: number } | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // Whether the last loadSession read its session (false: it opened as a new chat).
+  const loadedOk = useRef(false);
   const [sessionsOpen, setSessionsOpenState] = useState(() => loadFlag(SESSIONS_OPEN_KEY, true));
   const setSessionsOpen = (open: boolean) => {
     setSessionsOpenState(open);
@@ -363,12 +376,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const savedKey = useRef("");
   // Not the title: it comes from the names and the first message, and a saved
   // one holds the user's name, which saves never send.
-  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planAnchor, s.pastPlans, s.promptDir, s.modelName]);
+  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos]);
 
   const applySession = (s: Session) => {
     // Saved before plans had a place: pinned after the chat's last message as
     // it opens, where they showed, so later messages go below them. Counted
     // as saved, so opening the chat doesn't save it (see savedKey).
+    // Shared or older sessions may lack fields; each gets a default.
+    s = withSessionDefaults(s);
     const end = `at:${s.messages.length}`;
     const planAnchor = s.plan ? (s.planAnchor ?? end) : null;
     const pastPlans = (s.pastPlans ?? []).map((p) => ({ ...p, anchor: p.anchor ?? end }));
@@ -392,14 +407,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setPlanContext(s.planContext ?? null);
     setPlanAnchor(planAnchor);
     setPastPlans(pastPlans);
+    changeTodos(s.todos ?? []);
     if (s.model) setModel(s.model);
   };
 
   // A session that was never saved (or was deleted) opens as a new chat.
   const loadSession = (id: string) => {
     setLoaded(false);
+    loadedOk.current = false;
     getSession(id)
-      .then(applySession)
+      .then((s) => {
+        applySession(s);
+        loadedOk.current = true;
+      })
       .catch(() => {})
       .finally(() => setLoaded(true));
   };
@@ -432,6 +452,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       pastPlans,
       promptDir: fixedPromptDir,
       modelName,
+      todos,
     };
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -448,7 +469,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return () => clearTimeout(timer);
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planAnchor, pastPlans, fixedPromptDir, modelName]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planAnchor, pastPlans, fixedPromptDir, modelName, todos]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -470,6 +491,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setPlanContext(null);
     setPlanAnchor(null);
     setPastPlans([]);
+    changeTodos([]);
     setDrawerOpen(false);
     loadSession(id);
   };
@@ -744,6 +766,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         setPlanAnchor,
         setPlanContext,
         changePlan,
+        todosRef,
+        changeTodos,
         planRef,
         planRunningRef,
         planAnchor,
@@ -930,6 +954,38 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // directory as it is now, and the next reply's update lists the attachments.
     setFixedPromptDir(undefined);
   };
+
+  // A click on the empty chat's suggestions: a starter is sent as the first
+  // message; a todo opens its session, starts a new thread there (the same
+  // context boundary as Clear) and sends "Let's work on this todo: <summary>"
+  // plus its description once the session has loaded. The session opens
+  // asynchronously, so the start waits as `pendingStart` and the effect below
+  // runs it once the right session has loaded: boundary first, then (in the
+  // next render, which has the new contextStart) the send. When it can't go
+  // (no model, busy, session didn't load), the text is put in the message box.
+  const [pendingStart, setPendingStart] = useState<StartAction | null>(null);
+  const startFromEmpty = (start: Start) => {
+    const action = startAction(start, { model: !!model && !!connector, busy: !!abort || planRunning });
+    if (action.sessionId && action.sessionId !== sessionId) openSession(action.sessionId);
+    if (action.kind === "fill") setFill({ text: action.text, n: Date.now() });
+    else setPendingStart(action);
+  };
+  useEffect(() => {
+    if (!pendingStart || !loaded || (pendingStart.sessionId && pendingStart.sessionId !== sessionId)) return;
+    const action = settleStart(pendingStart, loadedOk.current, todosRef.current);
+    if (action.kind === "fill") {
+      setPendingStart(null);
+      setFill({ text: action.text, n: Date.now() });
+    } else if (action.boundary) {
+      clearContext();
+      setPendingStart({ ...action, boundary: false });
+    } else {
+      setPendingStart(null);
+      send(action.text).then((sent) => {
+        if (!sent) setFill({ text: action.text, n: Date.now() });
+      });
+    }
+  }, [pendingStart, loaded, sessionId]);
 
   // Asks in a Dialog first, like deleting a chat: window.confirm is answered
   // "no" at once, without being shown, in some browsers.
@@ -1276,7 +1332,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                       How can I help you?
                     </Typography>
                     <EmptyChatCreature />
-                    <EmptyChatSuggestions onPick={(t) => setFill({ text: t, n: Date.now() })} />
+                    <EmptyChatSuggestions onStart={startFromEmpty} onOpenSession={openSession} />
                   </Box>
                 </>
               )

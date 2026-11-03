@@ -450,6 +450,9 @@ export interface ToolCallContext {
   // What the user allowed; the server goes ahead only if the call would
   // still do exactly that.
   approved?: Approval;
+  // The session's open todos, for list_todos and complete_todo (the server
+  // can't see the session; see server/todos.ts).
+  todos?: { id: string; summary: string }[];
 }
 export const runTool = (c: ToolCall, context: ToolCallContext) =>
   call<ToolOutcome>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments, ...context });
@@ -488,6 +491,21 @@ export interface Session {
   // else modelName, else title (first message). Never overwritten by save.
   modelName?: string | null;
   userName?: string | null;
+  // Things to come back to, from add_todo; see src/agent/todos.ts. Older saved chats don't have it.
+  todos?: Todo[];
+}
+
+export interface Todo {
+  id: string;
+  // One line the model wrote (under 80 characters).
+  summary: string;
+  // The detail, in the user's words; may be empty.
+  description: string;
+  // The model's notes from when it was added: what a new thread needs from
+  // the conversation. May be empty.
+  context: string;
+  status: "open" | "done";
+  createdAt: number;
 }
 
 export interface PastPlan {
@@ -522,6 +540,8 @@ export interface SessionSummary {
   updatedAt: number;
   modelName?: string | null;
   userName?: string | null;
+  // The session's open todos, without descriptions; see openTodoList in server/sessions.ts.
+  todos?: { id: string; summary: string }[];
 }
 
 // Saved sessions, newest first, and the calls to open, save and delete one.

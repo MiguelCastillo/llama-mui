@@ -72,6 +72,15 @@ The **Plan** group (`server/plan.ts`) has `update_plan`, which the model
 uses to write down the steps of a task that changes files. Chat runs those
 steps one at a time and checks each one; see [How plans work](#how-plans-work).
 
+The **Todos** group (`server/todos.ts`) is for things you want to come back
+to ("I'm thinking about changing X, can we add a todo for it?"), which are not
+plans: no order, no run. `add_todo` saves a one-line summary the model writes,
+a description in your words, and the model's own notes on the conversation so
+far (`context`, written in the same call, so a thread started later has it), `list_todos` answers "what's on my list?", and
+`complete_todo` marks one done. Todos are saved in the session's `session.json`
+(`todos`), so copying that file carries them; chat applies each call to the
+session, as it does for `update_plan`, since the server never writes that file.
+
 The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 `read_file`, `find_files` (names, with `*` wildcards) and `grep` (regular
 expressions over file contents). They read only what's attached to the chat.

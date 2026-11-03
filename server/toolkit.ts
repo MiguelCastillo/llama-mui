@@ -11,6 +11,8 @@ export interface ToolContext {
   chatId: string;
   attachments: string[];
   approved: string | null;
+  // The session's open todos, sent by chat with each call (see server/todos.ts).
+  todos: { id: string; summary: string }[];
 }
 
 export interface ToolSpec {

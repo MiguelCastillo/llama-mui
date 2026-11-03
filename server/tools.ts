@@ -19,6 +19,7 @@ import {
 } from "./toolkit.ts";
 import { FETCH_TOOLS } from "./fetch.ts";
 import { PLAN_TOOLS, planInstructions } from "./plan.ts";
+import { TODO_TOOLS, todoInstructions } from "./todos.ts";
 import { TERMINAL_TOOLS, exec } from "./terminal.ts";
 import { WEB_TOOLS } from "./web.ts";
 import { WORKTREE_TOOLS } from "./worktree.ts";
@@ -41,6 +42,14 @@ const GROUPS: Group[] = [
       "Before changing files, the model writes the steps as a checklist. Chat runs one step per turn and " +
       "checks each one, so a step that isn't really done shows up instead of a reply that says it is.",
     instructions: planInstructions,
+  },
+  {
+    id: "todos",
+    label: "Todos",
+    description:
+      "Things you want to come back to. When you ask, the model saves one in the session; My Todos, on the " +
+      "empty chat, lists them across sessions and starts one where it was saved.",
+    instructions: todoInstructions,
   },
   {
     id: "disk",
@@ -108,6 +117,7 @@ const GROUPS: Group[] = [
 
 const TOOLS: ToolSpec[] = [
   ...PLAN_TOOLS,
+  ...TODO_TOOLS,
   ...DISK_TOOLS,
   ...WRITE_TOOLS,
   ...WORKTREE_TOOLS,
@@ -167,6 +177,11 @@ const contextFor = async (body: any): Promise<ToolContext> => ({
   // Re-serialized here so the comparison in requireApproval doesn't depend on
   // how the client formatted its JSON.
   approved: body.approved && typeof body.approved === "object" ? JSON.stringify(body.approved) : null,
+  todos: Array.isArray(body.todos)
+    ? body.todos
+        .filter((t: any) => typeof t?.id === "string" && typeof t?.summary === "string")
+        .map((t: any) => ({ id: t.id, summary: t.summary }))
+    : [],
 });
 
 // Text for the model (errors included), a path the user must allow before

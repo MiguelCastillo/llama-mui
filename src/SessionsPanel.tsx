@@ -41,7 +41,7 @@ function saveWidth(width: number) {
 }
 
 // When a chat was last used: "just now", "5m ago", "3h ago", or a date.
-function ago(t: number): string {
+export function ago(t: number): string {
   const s = (Date.now() - t) / 1000;
   if (s < 60) return "just now";
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;

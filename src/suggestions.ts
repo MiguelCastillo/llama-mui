@@ -1,17 +1,3 @@
-import type { PlanStep } from "./api";
-
-export interface Suggestion {
-  text: string;
-  // The session an old todo came from; starters have none.
-  from?: string;
-}
-
-// What the picker needs of a saved session: its title and plan.
-export interface PastSession {
-  title: string;
-  plan: PlanStep[] | null | undefined;
-}
-
 export const STARTERS = [
   "Explain something I use every day",
   "Quiz me on a topic I pick",
@@ -27,21 +13,6 @@ export const STARTERS = [
   "Teach me a keyboard shortcut I probably don't know",
 ];
 
-// Steps left over in plans that never finished: not done, with text, and in
-// a plan that isn't wholly done or empty. A "failed" step counts as unfinished.
-export function oldTodos(sessions: PastSession[]): Suggestion[] {
-  const out: Suggestion[] = [];
-  for (const s of sessions) {
-    const steps = s.plan ?? [];
-    if (!steps.length || steps.every((p) => p.status === "done")) continue;
-    for (const p of steps) {
-      const text = typeof p.text === "string" ? p.text.trim() : "";
-      if (p.status !== "done" && text) out.push({ text: `Continue: ${text}`, from: s.title });
-    }
-  }
-  return out;
-}
-
 function shuffled<T>(items: T[], random: () => number): T[] {
   const a = [...items];
   for (let i = a.length - 1; i > 0; i--) {
@@ -51,19 +22,19 @@ function shuffled<T>(items: T[], random: () => number): T[] {
   return a;
 }
 
-// About `count` suggestions: up to two old todos, filled up with starters.
-// `random` is passed in so tests can fix it.
+// `count` random starters. `random` is passed in so tests can fix it.
 export function pickSuggestions(
-  todos: Suggestion[],
   random: () => number = Math.random,
   count = 3,
   starters: string[] = STARTERS,
-): Suggestion[] {
-  const picked = shuffled(todos, random).slice(0, Math.min(2, count));
-  const rest = shuffled(starters, random)
-    .slice(0, count - picked.length)
-    .map((text) => ({ text }));
-  return shuffled([...picked, ...rest], random);
+): string[] {
+  return shuffled(starters, random).slice(0, count);
+}
+
+// How many suggestions show above the composer: three, two on a short screen,
+// and one fewer when the My Todos button takes a place.
+export function visibleCount(hasTodosButton: boolean, shortScreen: boolean): number {
+  return (shortScreen ? 2 : 3) - (hasTodosButton ? 1 : 0);
 }
 
 // The creatures that can show above the empty chat's message, each in its

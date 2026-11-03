@@ -12,6 +12,10 @@ import { type Api, type Kind, type ChatMessage, type PlanStep, type ToolCall, st
 // chat. PLANNING_NOTE goes with the message, as its `note`, for the same reason.
 export const PLANNING_TOOLS = new Set([
   "update_plan",
+  // A todo is no change to files, and "add it to my list" is no plan.
+  "add_todo",
+  "list_todos",
+  "complete_todo",
   "list_directory",
   "read_file",
   "find_files",

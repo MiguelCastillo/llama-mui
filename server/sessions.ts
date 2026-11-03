@@ -62,10 +62,19 @@ async function migrateChats(): Promise<void> {
   await rmdir(OLD_CHATS_DIR).catch(() => {}); // only works once it's empty
 }
 
+// A session's open todos as the list carries them: id and summary, no
+// description, to keep the list light. Sessions saved before todos have none.
+export function openTodoList(todos: unknown): { id: string; summary: string }[] {
+  if (!Array.isArray(todos)) return [];
+  return todos
+    .filter((t) => t?.status === "open" && typeof t.id === "string" && typeof t.summary === "string")
+    .map((t) => ({ id: t.id, summary: t.summary }));
+}
+
 let migration: Promise<void> | undefined;
 
 // Handles /api/sessions; returns false for anything else.
-//   GET          → [{ id, title, updatedAt }], newest first
+//   GET          → [{ id, title, updatedAt, todos }], newest first
 //   GET /<id>    → the saved session
 //   PUT /<id>    → saves it; the server sets createdAt and updatedAt
 //   PATCH /<id>  → updates only the name fields, keeps updatedAt
@@ -86,6 +95,7 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
         updatedAt: Number(s.updatedAt),
         modelName: s.modelName ?? null,
         userName: s.userName ?? null,
+        todos: openTodoList(s.todos),
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
     sendJson(res, 200, list);
