@@ -94,6 +94,8 @@ import {
 import { pickModel } from "./modelChoice";
 import ChatSettings, { AttachmentIcon } from "./ChatSettings";
 import SessionsPanel from "./SessionsPanel";
+import EmptyChatCreature from "./EmptyChatCreature";
+import EmptyChatSuggestions from "./EmptyChatSuggestions";
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
@@ -345,6 +347,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // saved until the open session has loaded, so an empty screen can't
   // overwrite it.
   const [sessionId, setSessionId] = useState(loadSessionId);
+  // A suggestion clicked on the empty screen, for the message box to take.
+  const [fill, setFill] = useState<{ text: string; n: number } | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [sessionsOpen, setSessionsOpenState] = useState(() => loadFlag(SESSIONS_OPEN_KEY, true));
@@ -1247,23 +1251,34 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               </Stack>
             ) : (
               messages.length === 0 && (
-                // Three quarters of the way down the chat area, near the message box:
-                // placed against the scrolling box (position: relative), so it stays
-                // in proportion at any window size.
-                <Typography
-                  variant="h3"
-                  sx={{
-                    position: "absolute",
-                    top: "75%",
-                    left: 0,
-                    right: 0,
-                    transform: "translateY(-50%)",
-                    textAlign: "center",
-                    fontWeight: 500,
-                  }}
-                >
-                  How can I help you?
-                </Typography>
+                <>
+                  {/* Three quarters of the way down the chat area, near the message box:
+                      placed against the scrolling box (position: relative), so it stays
+                      in proportion at any window size. The creature and the suggestions
+                      hang off the heading, so a heading that wraps can't run into them. */}
+                  <Box
+                    sx={{
+                      position: "absolute",
+                      top: "75%",
+                      left: 0,
+                      right: 0,
+                      transform: "translateY(-50%)",
+                    }}
+                  >
+                    <Typography
+                      variant="h3"
+                      sx={{
+                        textAlign: "center",
+                        fontWeight: 500,
+                        fontSize: { xs: "2.25rem", sm: "3rem" },
+                      }}
+                    >
+                      How can I help you?
+                    </Typography>
+                    <EmptyChatCreature />
+                    <EmptyChatSuggestions onPick={(t) => setFill({ text: t, n: Date.now() })} />
+                  </Box>
+                </>
               )
             )}
             {turns.map(
@@ -1328,6 +1343,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             <Composer
               placeholder={narrow ? "Message" : "Message (Enter to send, Shift+Enter for a new line)"}
               onSend={send}
+              fill={fill}
               onStop={abort ? () => abort.abort() : undefined}
               disabled={!model}
               below={
@@ -1360,8 +1376,11 @@ function Composer({
   onStop,
   disabled,
   below,
+  fill,
 }: {
   placeholder: string;
+  // Text to put in the box and focus it (not sent); a new `n` is a new request.
+  fill?: { text: string; n: number } | null;
   // Resolves to whether the message went; the box clears only then.
   onSend: (text: string) => Promise<boolean>;
   onStop?: () => void;
@@ -1370,6 +1389,12 @@ function Composer({
   below: ReactNode;
 }) {
   const [text, setText] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!fill) return;
+    setText(fill.text);
+    inputRef.current?.focus();
+  }, [fill]);
   const send = async () => {
     const t = text.trim();
     if (t && (await onSend(t))) setText("");
@@ -1381,6 +1406,7 @@ function Composer({
         multiline
         maxRows={8}
         placeholder={placeholder}
+        inputRef={inputRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
