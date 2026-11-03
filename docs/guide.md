@@ -530,6 +530,35 @@ step that was running when the page closed comes back as pending.
   asks for the list. The **Sessions** panel on the
   left lists them newest first; click one to switch, **+** starts a new session,
   and the trash icon deletes one.
+  - **Two windows and the revision**: every time the server writes a session
+    it counts up a `revision` number in `session.json` (a session saved before
+    this has none, which counts as 0). A page remembers the revision it loaded
+    or last saved and sends it with each save. If the session has changed since
+    (another window saved it, or something else did), the server refuses the
+    save with a 409 and writes nothing, so a window that is behind can't
+    overwrite newer work. The page then loads the session again and says so:
+    "This session was changed in another window, so it was loaded again.
+    Changes made here since the last save were not kept." If a reply is still
+    streaming in that window, it loads again when the reply ends. A save with
+    no revision (an older client, or a new session's first save) is still
+    taken. A session with a plan running on the server is closed to saves from
+    the page: the server refuses every one with "A plan is running in this
+    session". (Plans still run in the page for now, so this can't come up yet.)
+  - **Live updates**: the server also streams what happens to its sessions as
+    server-sent events (an ordinary request that stays open; the browser
+    reconnects by itself). `GET /api/events` is for the list: it starts with
+    the runs live now, then sends a `saved` event (the list row and the new
+    revision) for each save or rename, `removed` for a delete, and `status`
+    when a run starts, pauses, asks something or ends. The Sessions panel
+    follows it, so a session saved or deleted in another window changes its
+    row without reloading, and the list is read again after a dropped
+    connection. `GET /api/sessions/<id>/events` is for the open session: it
+    starts with the session, its revision and its run, then sends `status`,
+    `step`, `ask`, `session` (only what changed: the changed fields and the
+    messages from the first one that differs, at most about ten a second),
+    `saved` and `removed`. A quiet connection gets a comment line every 15
+    seconds. The events hold no API keys: keys stay in `settings.json`, and the
+    server never hands one to a run.
   - **Nested sessions**: the button beside the trash icon on each row makes a
     new, empty session under that one. It keeps the same working folder
     (attachments) and model, but none of the messages. Nested sessions show

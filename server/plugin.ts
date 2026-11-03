@@ -5,6 +5,7 @@
 import type { Connect, Plugin } from "vite";
 import { connectorRoutes } from "./connectors.ts";
 import { attachmentRoutes } from "./disk.ts";
+import { eventRoutes } from "./events.ts";
 import { HttpError, type Route, sendJson } from "./http.ts";
 import { instructionRoutes } from "./instructions.ts";
 import { modelSettingRoutes } from "./models.ts";
@@ -14,6 +15,7 @@ import { toolRoutes } from "./tools.ts";
 import { modelAdminRoutes } from "./modelAdmin.ts";
 
 async function route(r: Route) {
+  if (await eventRoutes(r)) return;
   if (await connectorRoutes(r)) return;
   if (await modelAdminRoutes(r)) return;
   if (await toolRoutes(r)) return;
@@ -56,7 +58,7 @@ const handler: Connect.NextHandleFunction = (req, res) => {
   };
   route(r).catch((e) => {
     if (res.headersSent) return void res.end();
-    sendJson(res, e instanceof HttpError ? e.status : 500, { error: e.message });
+    sendJson(res, e instanceof HttpError ? e.status : 500, { ...(e instanceof HttpError ? e.extra : {}), error: e.message });
   });
 };
 

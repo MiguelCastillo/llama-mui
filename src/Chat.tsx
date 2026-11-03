@@ -92,7 +92,9 @@ import {
   renameSession,
   runTool,
   saveSession,
+  ApiError,
 } from "./api";
+import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { pickModel } from "./modelChoice";
 import ChatSettings, { AttachmentIcon } from "./ChatSettings";
 import SessionsPanel from "./SessionsPanel";
@@ -546,6 +548,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     [],
   );
 
+  // The list follows the server: a session saved, renamed or deleted from
+  // another window, or by a run, changes its row here without a reload. After
+  // a dropped connection the list is read again, since events were missed.
+  useEffect(
+    () =>
+      watchSessionList({
+        saved: (row) => setSessions((ss) => upsertRow(ss, row)),
+        removed: (id) => setSessions((ss) => removeRow(ss, id)),
+        reconnected: () => void listSessions().then(setSessions).catch(() => {}),
+      }),
+    [],
+  );
+
   // The sessions whose runner needs the user (an ask pending, or stopped with
   // a question waiting), for the dot in the sessions panel. Read again on
   // every status, ask, saved and dismissed event, never per streamed piece;
@@ -599,16 +614,46 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     };
   };
 
+  // The server refused a save because the session is no longer what this page
+  // loaded (another window saved it, or a plan is running in it). The server's
+  // copy is the one to show, so it is read again; what was changed here since
+  // the last save is dropped, and the message says so. A reply that is still
+  // streaming here can't be replaced under it: the reload waits for its end.
+  const reloadPending = useRef<string | null>(null);
+  const reloadFromServer = (message: string) => {
+    if (abort) {
+      reloadPending.current = message;
+      return;
+    }
+    reloadPending.current = null;
+    savedKey.current = "";
+    setError(message);
+    loadSession(sessionId);
+  };
+  // The answer arrives after this render is over, so it calls the latest one.
+  const reloadRef = useRef(reloadFromServer);
+  reloadRef.current = reloadFromServer;
+  const conflictMessage = (e: unknown) =>
+    e instanceof ApiError && e.data.reason === "run active"
+      ? "A plan is running in this session, so it is shown as it runs. Changes made here since the last save were not kept."
+      : "This session was changed in another window, so it was loaded again. Changes made here since the last save were not kept.";
+
   const saveNow = () => {
     // A session with a runner is saved by the runner, which holds the newer copy.
     if (!loaded || messages.length === 0 || runnerActive(sessionId)) return;
+    if (reloadPending.current && !abort) return reloadFromServer(reloadPending.current);
     const session = snapshot();
     const key = keyOf(session);
     if (key === savedKey.current) return;
     savedKey.current = key;
+    const savedId = sessionId;
     saveSession(session)
-      .then((summary) => setSessions((ss) => [summary, ...ss.filter((x) => x.id !== summary.id)]))
-      .catch((e) => setError(e.message));
+      .then((summary) => setSessions((ss) => upsertRow(ss, summary)))
+      .catch((e) => {
+        // A refusal about a session that has since been closed is not this screen's to show.
+        if (e instanceof ApiError && e.status === 409 && openId.current === savedId) reloadRef.current(conflictMessage(e));
+        else setError(e.message);
+      });
   };
 
   // Saves a moment after the chat stops changing, so a streaming reply is

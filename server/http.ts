@@ -6,6 +6,8 @@ export class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
+    // More fields for the JSON answer, next to `error` (a 409 carries the current revision).
+    public extra: Record<string, unknown> = {},
   ) {
     super(message);
   }

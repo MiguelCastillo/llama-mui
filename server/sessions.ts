@@ -5,42 +5,19 @@
 // model may change without asking (see inSessionWorktrees in disk.ts), so
 // session.json can't be rewritten by it.
 
-import { mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { readdir, readFile, rm, rmdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { sessionsDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
+import * as hub from "./runHub.ts";
+import { readSession, revisionOf, sessionFile, summaryOf, writeSession } from "./sessionFile.ts";
+
+// Other modules (and tests) have always got these from here.
+export { openTodoList, sessionFolder, summaryOf } from "./sessionFile.ts";
 
 // Sessions used to be single files here, named <id>.json.
 const OLD_CHATS_DIR = path.join(os.homedir(), ".llama-mui", "chats");
-
-// Ids come from the browser and become folder names, so only plain ones pass.
-export function sessionFolder(id: string): string {
-  if (!/^[a-z0-9-]{1,64}$/.test(id)) throw new HttpError(400, "Bad session id");
-  return path.join(sessionsDir, id);
-}
-
-function fileFor(id: string): string {
-  return path.join(sessionFolder(id), "session.json");
-}
-
-async function readSession(id: string): Promise<any | null> {
-  try {
-    return JSON.parse(await readFile(fileFor(id), "utf8"));
-  } catch (e: any) {
-    if (e.code === "ENOENT") return null;
-    throw e;
-  }
-}
-
-// Write-then-rename so a crash mid-write can't leave a truncated file.
-async function writeText(file: string, text: string) {
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await writeFile(`${file}.tmp`, text, { mode: 0o600 });
-  await rename(`${file}.tmp`, file);
-}
-
-const writeSession = (id: string, session: unknown) => writeText(fileFor(id), JSON.stringify(session));
 
 // Moves each old chat file into its session folder. A file is removed only
 // after the copy is read back and matches; one that doesn't parse, whose id
@@ -62,40 +39,22 @@ async function migrateChats(): Promise<void> {
   await rmdir(OLD_CHATS_DIR).catch(() => {}); // only works once it's empty
 }
 
-// A session's open todos as the list carries them: id and summary, no
-// description, to keep the list light. Sessions saved before todos have none.
-export function openTodoList(todos: unknown): { id: string; summary: string }[] {
-  if (!Array.isArray(todos)) return [];
-  return todos
-    .filter((t) => t?.status === "open" && typeof t.id === "string" && typeof t.summary === "string")
-    .map((t) => ({ id: t.id, summary: t.summary }));
-}
-
-// The row the sessions list shows for a saved session. The list, a save and a
-// rename all answer with it, so the client can swap a row for the answer
-// without losing a field (a nested session would jump to the top level
-// without its parentId).
-export function summaryOf(s: any) {
-  return {
-    id: String(s.id),
-    title: String(s.title),
-    updatedAt: Number(s.updatedAt),
-    modelName: s.modelName ?? null,
-    userName: s.userName ?? null,
-    todos: openTodoList(s.todos),
-    parentId: typeof s.parentId === "string" ? s.parentId : null,
-  };
-}
-
 let migration: Promise<void> | undefined;
 
 // Handles /api/sessions; returns false for anything else.
 //   GET          → [summary], newest first; a summary is { id, title, updatedAt,
 //                  modelName, userName, todos, parentId } (see summaryOf)
-//   GET /<id>    → the saved session
-//   PUT /<id>    → saves it; the server sets createdAt and updatedAt; answers with its summary
-//   PATCH /<id>  → updates only the name fields, keeps updatedAt; answers with its summary
-//   DELETE /<id> → deletes its session.json, and its folder if nothing else is in it
+//   GET /<id>    → the saved session, with its `revision` (0 if it never had one)
+//   PUT /<id>    → saves it; the server sets createdAt, updatedAt and revision;
+//                  answers with its summary plus the new `revision`. Send the
+//                  `revision` the page loaded: if the file has moved on it answers
+//                  409 { error, revision } and saves nothing. While a plan runs in
+//                  the session, every PUT is a 409 (the run owns the session).
+//   PATCH /<id>  → updates only the name fields, keeps updatedAt; answers with its
+//                  summary plus `revision`. While a plan runs it goes through the
+//                  run's live session.
+//   DELETE /<id> → deletes its session.json, and its folder if nothing else is in
+//                  it; a 409 while a plan runs in it
 export async function sessionRoutes({ req, res, parts, method }: Route): Promise<boolean> {
   if (parts[0] !== "sessions") return false;
   // Before the first request is answered, so a list never misses a session still in the old folder.
@@ -117,44 +76,47 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
   if (method === "GET") {
     const session = await readSession(id);
     if (!session) throw new HttpError(404, "No such session");
-    sendJson(res, 200, session);
+    sendJson(res, 200, { ...session, revision: revisionOf(session) });
     return true;
   }
   if (method === "PUT") {
     const body = await readJson(req);
     if (!Array.isArray(body.messages)) throw new HttpError(400, "messages must be a list");
-    const old = await readSession(id);
-    const now = Date.now();
-    // The names are PATCH's, never a save's: a save from a copy made before
-    // the model named the session wiped the name out. The title follows them.
-    const modelName = old?.modelName ?? body.modelName ?? null;
-    const userName = old ? (old.userName ?? null) : (body.userName ?? null);
-    const title = String(userName ?? modelName ?? body.title ?? "New session").slice(0, 100);
-    const session = { ...body, id, title, modelName, userName, createdAt: old?.createdAt ?? now, updatedAt: now };
-    await writeSession(id, session);
-    sendJson(res, 200, summaryOf(session));
+    const sent = body.revision;
+    if (sent !== undefined && !(Number.isInteger(sent) && sent >= 0)) throw new HttpError(400, "revision must be a whole number");
+    const { session, revision } = await hub.replace(
+      id,
+      (old) => {
+        const now = Date.now();
+        // The names are PATCH's, never a save's: a save from a copy made before
+        // the model named the session wiped the name out. The title follows them.
+        const modelName = old?.modelName ?? body.modelName ?? null;
+        const userName = old ? (old.userName ?? null) : (body.userName ?? null);
+        const title = String(userName ?? modelName ?? body.title ?? "New session").slice(0, 100);
+        return { ...body, id, title, modelName, userName, createdAt: old?.createdAt ?? now, updatedAt: now };
+      },
+      sent,
+    );
+    sendJson(res, 200, { ...summaryOf(session), revision });
     return true;
   }
   if (method === "PATCH") {
     const body = await readJson(req);
-    const old = await readSession(id);
-    if (!old) throw new HttpError(404, "No such session");
-    const title = body.title !== undefined ? String(body.title).slice(0, 100) : old.title;
-    const session = {
-      ...old,
-      title,
-      modelName: body.modelName !== undefined ? body.modelName : old.modelName,
-      userName: body.userName !== undefined ? body.userName : old.userName,
-    };
-    await writeSession(id, session);
-    sendJson(res, 200, summaryOf(session));
+    const { session, revision } = await hub.edit(id, (s) => {
+      if (body.title !== undefined) s.title = String(body.title).slice(0, 100);
+      if (body.modelName !== undefined) s.modelName = body.modelName;
+      if (body.userName !== undefined) s.userName = body.userName;
+    });
+    sendJson(res, 200, { ...summaryOf(session), revision });
     return true;
   }
   if (method === "DELETE") {
-    const file = fileFor(id);
-    await rm(file, { force: true });
-    // A worktree in the folder is the user's work: the folder only goes if it's empty.
-    await rmdir(path.dirname(file)).catch(() => {});
+    const file = sessionFile(id);
+    await hub.remove(id, async () => {
+      await rm(file, { force: true });
+      // A worktree in the folder is the user's work: the folder only goes if it's empty.
+      await rmdir(path.dirname(file)).catch(() => {});
+    });
     sendJson(res, 200, { id });
     return true;
   }

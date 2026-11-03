@@ -207,6 +207,19 @@ export interface ConnectorInput {
 
 export type TestResult = { ok: true; models: number } | { ok: false; error: string };
 
+// An answer that wasn't ok. `message` is the server's plain sentence; `status`
+// and `data` (the rest of its JSON, e.g. a 409's `reason` and `revision`) are
+// for the caller that has to tell one refusal from another.
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public data: Record<string, any> = {},
+  ) {
+    super(message);
+  }
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -214,7 +227,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error ?? `${method} ${path}: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ApiError(data.error ?? `${method} ${path}: ${res.status} ${res.statusText}`, res.status, data);
   return data;
 }
 
@@ -510,6 +523,13 @@ export interface Session {
   // The plan came from the parent session and has not run yet: Run runs it
   // here instead of moving it again. Cleared when the run starts.
   planMovedIn?: boolean;
+  // How many times the server has written this session. Only the server sets
+  // it: it is read with the session, and saveSession sends back the one this
+  // page loaded (see knownRevision). Older saved chats don't have it.
+  revision?: number;
+  // The server's record of a plan running in this session now. Read only: a
+  // save never sends it. Missing when nothing runs.
+  run?: { status: string; startedAt: number };
 }
 
 // A plan that runs in its own nested session; see planThread.ts.
@@ -588,11 +608,47 @@ export interface SessionSummary {
   parentId?: string | null;
 }
 
+// The revision of each session as this page last read or wrote it (the server
+// counts its writes, see server/runHub.ts). A save sends it back, and the
+// server refuses the save if the session has changed since, say in another
+// window, instead of overwriting that. It only moves with this page's own
+// calls: events from the server never touch it, or a stale page would pass
+// for a current one. A session this page hasn't read or saved has none, and
+// its first save is accepted as it always was.
+const knownRevision = new Map<string, number>();
+
+// For tests.
+export const forgetRevisions = () => knownRevision.clear();
+
+// A saved chat as the server answers it, with `revision` (and `run`, while a
+// plan is running in it, which the page doesn't save back).
+export const getSession = (id: string) =>
+  call<Session>("GET", `/api/sessions/${id}`).then((s) => {
+    if (typeof s.revision === "number") knownRevision.set(id, s.revision);
+    return s;
+  });
+
 // Saved sessions, newest first, and the calls to open, save and delete one.
 export const listSessions = () => call<SessionSummary[]>("GET", "/api/sessions");
-export const getSession = (id: string) => call<Session>("GET", `/api/sessions/${id}`);
-export const saveSession = (s: Session) => call<SessionSummary>("PUT", `/api/sessions/${s.id}`, s);
-export const deleteSession = (id: string) => call<{ id: string }>("DELETE", `/api/sessions/${id}`);
+
+// Answers with the session's list row. A 409 (ApiError) means the save was
+// refused: `data.reason` is "stale revision" (changed somewhere else) or
+// "run active" (a plan is running in it, so the run saves it).
+export const saveSession = (s: Session) => {
+  const revision = knownRevision.get(s.id);
+  return call<SessionSummary & { revision: number }>("PUT", `/api/sessions/${s.id}`, {
+    ...s,
+    ...(revision === undefined ? {} : { revision }),
+  }).then((row) => {
+    knownRevision.set(s.id, row.revision);
+    return row;
+  });
+};
+export const deleteSession = (id: string) =>
+  call<{ id: string }>("DELETE", `/api/sessions/${id}`).then((r) => {
+    knownRevision.delete(id);
+    return r;
+  });
 
 export interface RenameSessionParams {
   title?: string;
@@ -600,7 +656,12 @@ export interface RenameSessionParams {
   userName?: string | null;
 }
 export const renameSession = (id: string, params: RenameSessionParams) =>
-  call<SessionSummary>("PATCH", `/api/sessions/${id}`, params);
+  call<SessionSummary & { revision: number }>("PATCH", `/api/sessions/${id}`, params).then((row) => {
+    // A rename is one server write. If it is the next one after what this page
+    // knew, nothing else wrote in between, and the page is still current.
+    if (knownRevision.get(id) === row.revision - 1) knownRevision.set(id, row.revision);
+    return row;
+  });
 
 export interface Usage {
   // Everything now in the model's context: prompt, tools, history and reply.
