@@ -205,7 +205,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     defaults: ModelSettings;
     models: Record<string, ModelSettings>;
   } | null>(null);
-  const [toolsWanted, setToolsWantedState] = useState(() => loadFlag(TOOLS_KEY, false));
+  const [toolsWanted, setToolsWantedState] = useState(() => loadFlag(TOOLS_KEY, true));
   const setToolsWanted = (on: boolean) => {
     setToolsWantedState(on);
     saveFlag(TOOLS_KEY, on);

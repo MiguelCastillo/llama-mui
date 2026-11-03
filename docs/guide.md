@@ -60,7 +60,7 @@ browser (the SDK in the browser has a placeholder the proxy replaces).
 **Tools** are things the model can do while answering, grouped by what they
 reach and switched on or off one by one (`server/tools.ts`). With the
 **Tools** switch on in chat, the model can use every tool that's on.
-That switch starts off, and your browser remembers where you leave it. Tool
+That switch starts on, and your browser remembers where you leave it. Tool
 calls and their results show in the reply.
 
 **Models** lets you manage the models on the selected llama server. It shows
