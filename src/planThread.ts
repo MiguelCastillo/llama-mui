@@ -73,8 +73,9 @@ export function planToThread(parent: Session, childId: string): { parent: Sessio
 
 // How a thread stands, from the child's saved state. "missing": the child
 // can't be found (null). "done": all its steps are done. "failed": a step
-// failed or is disputed. Anything else is "unfinished": the parent is never
-// open while its child runs, so a plan that is not finished was stopped.
+// failed or is disputed. Anything else is "unfinished": a plan that is not
+// finished and has no runner was stopped. While a runner has it the child is
+// running, and the caller shows that (no status) rather than calling this.
 export type ThreadStatus = "missing" | "done" | "failed" | "unfinished";
 
 export function threadStatus(child: Pick<Session, "plan"> | null): ThreadStatus {

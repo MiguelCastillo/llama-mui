@@ -289,8 +289,9 @@ vitest (`npm test`).
 - **Continue**, **Resume**, **Restart** and **Answer and continue** on a
   plan that has started run it where it is. Only a first **Run** moves to a
   thread.
-- For now the thread runs in the open chat like any plan, so you can't chat
-  in the parent while it runs. Running a plan while you chat is a later change.
+- A plan keeps running when you leave its session. Switch to the parent or
+  any other session and chat there; the plan runs on in the page (a runner
+  in `src/runners.ts`, see [Running in the background](#running-in-the-background)).
 - **Run** (or **Continue**) runs the first step that's pending or not done,
   then the next, until every step is done or one stops. A disputed step (**?**)
   waits for you, so there's no **Continue** until you mark it done or rerun it.
@@ -406,10 +407,34 @@ vitest (`npm test`).
 - **Stopped or failed**: if you press **Stop**, or the reply fails, the step
   goes back to pending (with "The reply failed: …" if it did) and the plan
   stops. **Continue** picks it up again. A step's answer is kept.
-- While a plan runs, you can't send messages or switch sessions.
+- While a plan runs, you can't send messages in its own session, but you can
+  switch to any other session and chat there. Switching is blocked only
+  while a model turn you started in the open session is streaming.
 - What a step asks you while it runs (approve a change or a command, allow a
   folder) shows in the plan card, under that step, and scrolls into view.
   At the bottom of the chat, it meant scrolling between it and the plan.
+  If the plan's session isn't open, the plan waits instead: nothing pops up
+  elsewhere, and its row in the sessions panel gets a small dot ("Needs
+  you"). Open that session and the question shows as above.
+
+### Running in the background
+
+A plan runs in a runner, a small store in the page (`src/runners.ts`, no
+React), one per session. It holds the session as plain saved data, runs
+`runPlan` with callbacks that update it, and saves it (debounced) itself while
+it runs; the open chat shows the runner's live session and doesn't save it.
+Opening a session without a runner loads it from the server as before.
+
+- Two plans, or a plan and a chat turn in another session, can run at the
+  same time. The model server queues the requests.
+- **Pause** on the plan card shows only while the plan runs. It finishes the
+  step in flight and its check, then holds before the next step. The card
+  says "Pausing after this step", then "Paused", and the button becomes
+  **Resume**. **Stop** stays immediate: it aborts the request, and the step
+  goes back to pending with the note "Stopped".
+- Pause is a state of the runner, not of a step, and isn't saved. Closing or
+  reloading the page ends every runner, as it did before; a plan left
+  unfinished shows **Continue**.
 
 ### Who marks a step done
 
@@ -452,7 +477,9 @@ the step, not in the chat.
   one-line note takes its place in the chat: **Running in a thread**, then
   **Done in a thread**, **Failed in a thread** or **Not finished in a
   thread**, each followed by the plan summary. Click it to open the thread.
-  The result comes from the thread's saved state each time the chat opens. If
+  The result comes from the thread's live runner while it has one (no result
+yet means running), and from its saved state otherwise; the note updates as
+the runner changes. If
   the thread was deleted, the note says so.
 - A plan in a chat saved before plans had a place is pinned after the last
   message when the chat opens, so new messages go below it. A plan whose

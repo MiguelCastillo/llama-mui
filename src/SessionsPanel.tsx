@@ -68,6 +68,8 @@ type RowContext = {
   currentId: string;
   narrow: boolean;
   busy: boolean;
+  // Ids of sessions whose plan is waiting on the user (see needsYou).
+  attention: ReadonlySet<string>;
   // Which session is being renamed: { id, value }.
   editing: { id: string; value: string } | null;
   setEditing: (e: { id: string; value: string } | null) => void;
@@ -83,7 +85,7 @@ type RowContext = {
 // One session row, then (unless hidden) its nested sessions, one level deeper.
 // Works for any depth; how deep the tree goes is decided in sessionTree.ts.
 function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ctx: RowContext }) {
-  const { currentId, narrow, busy, editing, setEditing, saveEdit, collapsed } = ctx;
+  const { currentId, narrow, busy, attention, editing, setEditing, saveEdit, collapsed } = ctx;
   const s = node.session;
   const isEditing = editing?.id === s.id;
   const title = displayTitle(s);
@@ -205,7 +207,18 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
               }}
             />
           ) : (
-            <ListItemText primary={title} secondary={ago(s.updatedAt)} slotProps={{ primary: { noWrap: true } }} />
+            <>
+              <ListItemText primary={title} secondary={ago(s.updatedAt)} slotProps={{ primary: { noWrap: true } }} />
+              {/* A plan here is waiting on you; the open session shows its own prompt. */}
+              {s.id !== currentId && attention.has(s.id) && (
+                <Box
+                  role="img"
+                  aria-label="Needs you"
+                  title="Needs you"
+                  sx={{ width: 8, height: 8, ml: 1, borderRadius: "50%", bgcolor: "warning.main", flexShrink: 0 }}
+                />
+              )}
+            </>
           )}
         </ListItemButton>
       </ListItem>
@@ -224,6 +237,7 @@ export default function SessionsPanel({
   open,
   narrow,
   busy,
+  attention,
   onSelect,
   onNew,
   onNewNested,
@@ -238,6 +252,8 @@ export default function SessionsPanel({
   // A reply is running: switching chats would cut it off, so only the
   // current one stays clickable.
   busy: boolean;
+  // Sessions with a plan waiting on the user: they get a small dot.
+  attention: ReadonlySet<string>;
   onSelect: (id: string) => void;
   onNew: () => void;
   // Make an empty session under `parentId`.
@@ -281,6 +297,7 @@ export default function SessionsPanel({
     currentId,
     narrow,
     busy,
+    attention,
     editing,
     setEditing,
     saveEdit,

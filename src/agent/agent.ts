@@ -501,6 +501,9 @@ export interface RunPlanCallbacks {
   // (it gets the read-only ones; see CHECK_TOOLS).
   thinkOn: boolean;
   toolDefinitions: unknown[];
+  // Awaited before each step, once the previous step and its check are done.
+  // It may hold (Pause); false ends the plan, leaving later steps pending.
+  gate?: () => Promise<boolean>;
 }
 
 // Rounds a blocked step gets to fix itself after the dispute retry, before it
@@ -515,7 +518,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
   const {
     connector, model, abort, planRunningRef, setPlanRunning,
     messages, planRef, setStep, reply, setError, setAbort,
-    modelLoaded, models, attachments, checkCommands, attachedPaths, sessionId, thinkOn, toolDefinitions,
+    modelLoaded, models, attachments, checkCommands, attachedPaths, sessionId, thinkOn, toolDefinitions, gate,
   } = callbacks;
 
   if (!connector || !model || abort || planRunningRef.current) return;
@@ -524,9 +527,18 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
   let msgs = messages;
   try {
     for (;;) {
-      const steps = planRef.current;
-      const i = steps?.findIndex((st) => st.status !== "done") ?? -1;
+      let steps = planRef.current;
+      let i = steps?.findIndex((st) => st.status !== "done") ?? -1;
       if (!steps || i < 0 || steps[i].status === "disputed") break;
+      // Pause holds here, after the previous step and its check. The gate
+      // resolves false to end the plan (Stop). The plan may have changed while
+      // it held, so the next step is read again.
+      if (gate) {
+        if (!(await gate())) break;
+        steps = planRef.current;
+        i = steps?.findIndex((st) => st.status !== "done") ?? -1;
+        if (!steps || i < 0 || steps[i].status === "disputed") break;
+      }
       const { id, text } = steps[i];
       // The user's answer to this step's question (see stepPrompt). setStep
       // patches replace the rest, so a patch that leaves the step to run again

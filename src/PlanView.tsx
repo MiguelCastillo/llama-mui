@@ -68,6 +68,9 @@ export function PlanView({
   onCancel,
   onClone,
   prompt,
+  control,
+  onPause,
+  onResume,
 }: {
   steps: PlanStep[];
   // One short sentence the model wrote on what this plan does; shown at the top.
@@ -99,6 +102,12 @@ export function PlanView({
   // folder), shown under that step: at the bottom of the chat, it meant
   // scrolling between it and the plan's progress.
   prompt?: ReactNode;
+  // The Pause control while the plan runs (see pauseControl in runners.ts): a
+  // short caption, and the button, if any. `running` stays true while paused,
+  // so the steps stay uneditable.
+  control?: { text: string | null; button: "Pause" | "Resume" | null };
+  onPause?: () => void;
+  onResume?: () => void;
 }) {
   // Once every step is done, nothing in the plan runs again: no rerun, edit
   // or cancel. Redoing work is a new plan, from a new message.
@@ -179,7 +188,22 @@ export function PlanView({
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
           Plan · {done} of {steps.length} done
         </Typography>
+        {control?.text && (
+          <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
+            {control.text}
+          </Typography>
+        )}
         {since != null && counter && <Box sx={{ mr: 1 }}>{counter(since)}</Box>}
+        {control?.button === "Pause" && onPause && (
+          <Button size="small" onClick={onPause} sx={{ mr: 1 }}>
+            Pause
+          </Button>
+        )}
+        {control?.button === "Resume" && onResume && (
+          <Button size="small" onClick={onResume} sx={{ mr: 1 }}>
+            Resume
+          </Button>
+        )}
         {/* Also while it runs: chat stops it first, then removes the plan. */}
         {onClone && readOnly && (
           <Button size="small" onClick={onClone}>

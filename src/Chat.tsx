@@ -118,8 +118,24 @@ import {
   stepPrompt,
   weighDispute,
 } from "./agent/plan";
-import { runTurn, runPlan } from "./agent/agent";
-import { planRequestFor, planToThread, threadStatus, type ThreadStatus } from "./planThread";
+import { runTurn } from "./agent/agent";
+import { planToThread, threadStatus, type ThreadStatus } from "./planThread";
+import {
+  allViews,
+  dismiss,
+  edit as editRunner,
+  getView,
+  needsYou,
+  pause as pauseRunner,
+  pauseControl,
+  resume as resumeRunner,
+  startRunner,
+  stop as stopRunner,
+  subscribe,
+  subscribeAll,
+  type RunnerEnv,
+  type RunnerView,
+} from "./runners";
 import ThreadNote from "./ThreadNote";
 import { withSessionDefaults } from "./sessionDefaults";
 import { nestedHeldBy, nestedSessionFrom } from "./sessionTree";
@@ -310,9 +326,24 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (accept && planProposal) changePlan(planProposal.map(keep));
     setPlanProposal(null);
   };
-  // The ref is for code that runs inside the plan runner's own awaits, where
-  // the state would still be the value from before the run started.
-  const [planRunning, setPlanRunning] = useState(false);
+  // A plan runs in a runner (src/runners.ts), not here. `runnerView` is what
+  // this open session's runner last reported (null when it has none); the plan
+  // is running until that runner stops.
+  const [runnerView, setRunnerView] = useState<RunnerView | null>(null);
+  const planRunning = !!runnerView && runnerView.status !== "stopped";
+  // The last runner error put in `error` (see mirrorView).
+  const mirroredError = useRef<string | null>(null);
+  // What the runner of the open session is waiting on the user for, if
+  // anything: it shows here the way Chat's own prompt does (see `pending`).
+  const runnerAsk = runnerView?.ask ?? null;
+  // Whether the open session has a runner that hasn't stopped, read from the
+  // store, so a guard in a handler sees a run that started a moment ago.
+  const runnerActive = (id: string) => {
+    const v = getView(id);
+    return !!v && v.status !== "stopped";
+  };
+  // For runTurn's plan tool, which asks whether a plan is running. Only a
+  // runner's own turns run inside a plan now, so for Chat's turns it stays false.
   const planRunningRef = useRef(false);
   // When the current task started, for the counter beside the waiting dots
   // (and on the plan card while a plan runs): from sending
@@ -408,7 +439,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [titleHint, setTitleHint] = useState<string | null>(null);
   const [planMovedIn, setPlanMovedIn] = useState(false);
 
-  const applySession = (s: Session) => {
+  // `live`: the session is a runner's, as it is now (see mirrorView). A step
+  // that is running there really is, so it isn't reset to pending, and the
+  // model picker is left alone.
+  const applySession = (s: Session, live = false) => {
     // Saved before plans had a place: pinned after the chat's last message as
     // it opens, where they showed, so later messages go below them. Counted
     // as saved, so opening the chat doesn't save it (see savedKey).
@@ -430,7 +464,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       s.plan?.map((st) => ({
         ...st,
         id: st.id ?? crypto.randomUUID(),
-        status: st.status === "running" ? "pending" : st.status,
+        status: st.status === "running" && !live ? "pending" : st.status,
       })) ?? null,
     );
     setPlanProposal(s.planProposal ?? null);
@@ -443,11 +477,52 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setThreads(s.threads ?? []);
     setTitleHint(s.titleHint ?? null);
     setPlanMovedIn(s.planMovedIn ?? false);
-    if (s.model) setModel(s.model);
+    if (s.model && !live) setModel(s.model);
   };
 
-  // A session that was never saved (or was deleted) opens as a new chat.
+  // Shows a runner's view of the open session: its live Session goes into the
+  // state the way a loaded one does (applySession), and the view itself is
+  // kept for the status. A runner that has stopped hands the session back:
+  // Chat takes its final state (counted as saved, since the runner saved it)
+  // and the entry is dismissed, after which the open session is Chat's again.
+  const mirrorView = (v: RunnerView) => {
+    applySession(v.session, true);
+    // The runner's error shows as Chat's own, but only when it changes, so
+    // an error of Chat's (a server that can't be reached) isn't wiped by
+    // every streamed piece.
+    if (v.error !== mirroredError.current) {
+      mirroredError.current = v.error;
+      setError(v.error);
+    }
+    if (v.status !== "stopped") {
+      setRunnerView(v);
+      return;
+    }
+    setRunnerView(null);
+    dismiss(v.sessionId).then(() => listSessions().then(setSessions).catch(() => {}));
+  };
+  // The id of the session on screen, for the listener below: a view of any
+  // other session is not shown.
+  const openId = useRef(sessionId);
+  openId.current = sessionId;
+  // Follows the open session's runner for as long as the session is open.
+  useEffect(() => {
+    const unsubscribe = subscribe(sessionId, (v) => {
+      if (openId.current === v.sessionId) mirrorView(v);
+    });
+    return unsubscribe;
+  }, [sessionId]);
+
+  // A session that was never saved (or was deleted) opens as a new chat. One
+  // with a runner opens as the runner has it, which is newer than the saved one.
   const loadSession = (id: string) => {
+    const view = getView(id);
+    if (view) {
+      loadedOk.current = true;
+      mirrorView(view);
+      setLoaded(true);
+      return;
+    }
     setLoaded(false);
     loadedOk.current = false;
     getSession(id)
@@ -458,6 +533,34 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .catch(() => {})
       .finally(() => setLoaded(true));
   };
+
+  // A runner that saves a session (also one that isn't open) puts its row at
+  // the top of the list, with the title and time the server gave it.
+  useEffect(
+    () =>
+      subscribeAll((e) => {
+        const summary = e.summary;
+        if (e.kind !== "saved" || !summary) return;
+        setSessions((ss) => [summary, ...ss.filter((x) => x.id !== summary.id)]);
+      }),
+    [],
+  );
+
+  // The sessions whose runner needs the user (an ask pending, or stopped with
+  // a question waiting), for the dot in the sessions panel. Read again on
+  // every status, ask, saved and dismissed event, never per streamed piece;
+  // the set is only replaced when it changed.
+  const attentionNow = () => new Set(allViews().filter(needsYou).map((v) => v.sessionId));
+  const [attention, setAttention] = useState<ReadonlySet<string>>(attentionNow);
+  useEffect(() => {
+    const refresh = () =>
+      setAttention((prev) => {
+        const next = attentionNow();
+        return next.size === prev.size && [...next].every((id) => prev.has(id)) ? prev : next;
+      });
+    refresh();
+    return subscribeAll(refresh);
+  }, []);
 
   useEffect(() => {
     saveSessionId(sessionId);
@@ -497,7 +600,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
 
   const saveNow = () => {
-    if (!loaded || messages.length === 0) return;
+    // A session with a runner is saved by the runner, which holds the newer copy.
+    if (!loaded || messages.length === 0 || runnerActive(sessionId)) return;
     const session = snapshot();
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -517,13 +621,18 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planSummary, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId, threads, titleHint, planMovedIn]);
 
   // Switches to another chat, saving this one first unless it was deleted.
+  // Only Chat's own streaming turn blocks it: a plan keeps running in its
+  // runner while another session is open.
   const openSession = (id: string, saveFirst = true) => {
-    if (abort || planRunningRef.current) return;
+    if (abort) return;
     if (saveFirst) saveNow();
     setFollowing(true);
     setSessionId(id);
+    openId.current = id;
     saveSessionId(id);
     savedKey.current = "";
+    setRunnerView(null);
+    mirroredError.current = null;
     setMessages([]);
     setUsage(null);
     setContextStart(0);
@@ -549,7 +658,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // but none of its messages. It is saved right away (saveNow skips empty
   // sessions) so it shows in the list under its parent, then opened.
   const newNested = async (parentId: string) => {
-    if (abort || planRunningRef.current) return;
+    if (abort) return;
     try {
       const parent =
         parentId === sessionId
@@ -577,6 +686,20 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [confirmCancelPlan, setConfirmCancelPlan] = useState(false);
   const cancelPlanConfirmed = () => {
     setConfirmCancelPlan(false);
+    if (runnerActive(sessionId)) {
+      // The runner owns the session: the plan goes through it (which Chat
+      // then mirrors), and the stop ends the run.
+      editRunner(sessionId, (s) => ({
+        ...s,
+        plan: null,
+        planProposal: null,
+        planContext: null,
+        planSummary: null,
+        planAnchor: null,
+      }));
+      stopRunner(sessionId);
+      return;
+    }
     abort?.abort();
     changePlan(null);
     setPlanProposal(null);
@@ -607,7 +730,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const id = confirmDelete;
     setConfirmDelete(null);
     if (!id) return;
-    deleteSession(id)
+    // A runner of this session ends first, without saving it again; a save
+    // already under way finishes before the file is deleted.
+    stopRunner(id);
+    dismiss(id)
+      .catch(() => {})
+      .then(() => deleteSession(id))
       .then(() => {
         setSessions((ss) => ss.filter((x) => x.id !== id));
         if (id === sessionId) openSession(crypto.randomUUID(), false);
@@ -721,6 +849,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   useEffect(() => {
     setBusySince((since) => (busy ? (since ?? Date.now()) : null));
   }, [busy]);
+  // The counter's start: a plan's own (it may have started in another
+  // session's view, or before this one was opened), else this task's.
+  const taskSince = planRunning && runnerView ? runnerView.startedAt : busySince;
 
   const canPlan = toolsOn && toolContext.offered.includes("update_plan");
   const planOn = canPlan && planWanted;
@@ -739,14 +870,28 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // A prompt from a plan step shows in the plan card, under the step (see
   // PlanView); others show at the bottom of the chat.
-  const promptInPlan = !!pending && planRunning && !!plan;
+  // The prompt on screen: the open session's runner's ask (a plan runs there),
+  // or else the one of Chat's own reply. A runner of another session has no
+  // prompt here; it waits (see src/runners.ts).
+  const shownPending = runnerAsk ?? pending;
+  const promptInPlan = !!shownPending && planRunning && !!plan;
   // Not smooth: an animation per token never caught up, and fought the user.
   // A prompt in the plan card scrolls itself into view instead.
   useEffect(() => {
     if (followingRef.current && !promptInPlan) stickToBottom();
-  }, [messages, pending]);
+  }, [messages, shownPending]);
 
-  const attach = (a: Attachment) => setAttachments((as) => (as.some((x) => x.path === a.path) ? as : [...as, a]));
+  // Changes the open session's attachments. A session with a runner changes
+  // through it (the runner holds the session, and Chat mirrors it back).
+  const changeAttachments = (fn: (as: Attachment[]) => Attachment[]) => {
+    if (runnerActive(sessionId)) {
+      editRunner(sessionId, (s) => {
+        const next = fn(s.attachments);
+        return next === s.attachments ? s : { ...s, attachments: next };
+      });
+    } else setAttachments(fn);
+  };
+  const attach = (a: Attachment) => changeAttachments((as) => (as.some((x) => x.path === a.path) ? as : [...as, a]));
 
   // Shows the prompt and resolves with the user's answer; stopping the reply
   // counts as deny.
@@ -865,74 +1010,49 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return { ok: result.ok, messages: result.messages, error: result.error };
   };
 
-  // Changes one step, keeping its text and summary (unless the patch sets a
-  // summary). The patch replaces the rest, so a step that runs again loses its
-  // old note and "may need a rerun" mark. By id: a step that rewrites the plan
-  // moves steps, and its id goes with it.
-  const setStep = (id: string, patch: Omit<PlanStep, "id" | "text">) => {
-    const steps = planRef.current;
-    if (steps?.some((st) => st.id === id)) {
-      changePlan(
-        steps.map((st) =>
-          st.id === id ? { id: st.id, text: st.text, ...(st.summary ? { summary: st.summary } : {}), ...patch } : st,
-        ),
-      );
-    }
-  };
-
-  // Runs the plan's open steps in order, one turn each, and checks every step
-  // before ticking it off: the model saying it's done isn't enough. First the
-  // folders' check commands, then the model check. A step that isn't done gets
-  // one retry (to fix what a command reported, or to answer the check), then
-  // up to MAX_RECOVERY_ROUNDS recovery rounds. A round may end in a question
-  // (the step is "waiting" for the user's answer) or the step fails; a
-  // disputed step waits for the user.
-  // The message that asked for the plan: the last one you sent (not a step's)
-  // before the update_plan call that wrote it, or before "at:N" for a clone.
-  const planRequest = () => planRequestFor(messages, planAnchor);
-  const runPlanWrapper = () => runPlan({
-    request: planRequest(),
-    context: planContext,
-    freshSteps: prefs?.freshPlanSteps,
+  // What a runner needs from here to run a plan: the connector and the model
+  // and tools the plan is run with. It stays in the runner, out of the session
+  // (which is saved), so a session never holds anything secret.
+  const runnerEnv = (): RunnerEnv => ({
     connector: connector ?? null,
     model,
-    abort,
-    planRunningRef,
-    setPlanRunning,
-    messages,
-    planRef,
-    setStep,
-    reply,
-    setError,
-    setAbort,
-    modelLoaded,
     models,
-    attachments,
-    checkCommands: toolContext.checkCommands,
-    attachedPaths,
-    sessionId,
+    toolContext,
+    toolsOn,
     thinkOn,
-    toolDefinitions: toolContext.definitions,
+    freshSteps: prefs?.freshPlanSteps,
   });
+  // Hands this session to a runner, which runs the plan's open steps in order,
+  // one turn each, and checks every step before ticking it off (see runPlan in
+  // src/agent/agent.ts). From then on the runner owns the session; Chat shows
+  // what it reports (mirrorView). The plan and todos come from their refs: a
+  // change made a moment ago (an answer to a waiting step, see PlanView) is in
+  // the refs before the state has caught up with it.
+  const startRun = (session: Session = snapshot()) => {
+    const view = startRunner(
+      { ...session, plan: session.id === sessionId ? planRef.current : session.plan, planMovedIn: false },
+      runnerEnv(),
+    );
+    if (openId.current === view.sessionId) mirrorView(view);
+  };
 
   // The plan card's Run. A plan that hasn't started moves into its own nested
-  // session (a thread) and runs there; the child is saved first, then this
-  // session with a note where the plan was, then the child is opened. It runs
-  // once it has loaded (`pendingRun`). A plan that already started (Continue,
-  // Resume, Restart), or one that was just moved in, runs where it is.
-  const [pendingRun, setPendingRun] = useState<string | null>(null);
+  // session (a thread) and runs there: the child is saved first, then this
+  // session with a note where the plan was, then the runner starts on the
+  // child and the child is opened (as the runner has it, see loadSession). A
+  // plan that already started (Continue, Resume, Restart), or one that was
+  // just moved in, runs where it is.
   const runFromCard = async () => {
+    if (!connector || !model || abort || runnerActive(sessionId)) return;
     if (planMovedIn) {
-      setPlanMovedIn(false);
-      runPlanWrapper();
+      startRun();
       return;
     }
-    if (!connector || !model || abort || planRunningRef.current) return;
     try {
       if (!(await modelLoaded())) return;
       const moved = planToThread(snapshot(), crypto.randomUUID());
       if (!moved) {
-        runPlanWrapper();
+        startRun();
         return;
       }
       const childSummary = await saveSession(moved.child);
@@ -942,51 +1062,58 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         parentSummary,
         ...ss.filter((x) => x.id !== childSummary.id && x.id !== parentSummary.id),
       ]);
-      setPendingRun(moved.child.id);
+      startRun(moved.child);
       openSession(moved.child.id, false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  // Runs the moved plan once the child has loaded. The effect waits for that
-  // exact session (the load is asynchronous) and loaded without error; if the
-  // load failed there is nothing to run, so it only clears the wait. The plan
-  // card's Run is still there to start it by hand (planMovedIn is kept then).
-  useEffect(() => {
-    if (!pendingRun || !loaded || pendingRun !== sessionId) return;
-    setPendingRun(null);
-    if (!loadedOk.current) return;
-    setPlanMovedIn(false);
-    runPlanWrapper();
-  }, [pendingRun, loaded, sessionId]);
-
-  // How each thread this session started stands, read from the child's saved
-  // state once this session has loaded. Until then (or while it is read) a
-  // note says "Running in a thread"; a child that can't be read counts as
-  // deleted. An answer for a session that has since been closed is ignored.
+  // How each thread this session started stands. A child with a runner is
+  // read from it (no status while it runs, so the note says "Running in a
+  // thread"); otherwise from the child's saved state once this session has
+  // loaded. Until then (or while it is read) a note says "Running in a
+  // thread"; a child that can't be read counts as deleted. An answer for a
+  // session that has since been closed is ignored. Runner events (a child
+  // stopping or finishing) read the status again.
   const [threadStatuses, setThreadStatuses] = useState<Record<string, ThreadStatus>>({});
   useEffect(() => {
     setThreadStatuses({});
     if (!loaded || !loadedOk.current) return;
     let current = true;
+    const fromView = (id: string, v: RunnerView) =>
+      setThreadStatuses((m) => {
+        const { [id]: _old, ...rest } = m;
+        return v.status === "stopped" ? { ...rest, [id]: threadStatus(withSessionDefaults(v.session)) } : rest;
+      });
     for (const t of threads) {
+      const v = getView(t.sessionId);
+      if (v) {
+        fromView(t.sessionId, v);
+        continue;
+      }
       getSession(t.sessionId)
         .then((c) => threadStatus(withSessionDefaults(c)))
         .catch((): ThreadStatus => "missing")
         .then((status) => {
-          if (current) setThreadStatuses((m) => ({ ...m, [t.sessionId]: status }));
+          // A runner may have started for it while this was read.
+          if (current && !getView(t.sessionId)) setThreadStatuses((m) => ({ ...m, [t.sessionId]: status }));
         });
     }
+    const ids = new Set(threads.map((t) => t.sessionId));
+    const unsubscribe = subscribeAll((e) => {
+      if (current && e.view && ids.has(e.id)) fromView(e.id, e.view);
+    });
     return () => {
       current = false;
+      unsubscribe();
     };
   }, [loaded, sessionId]);
 
   // Retries the last user message, dropping the failed reply.
   const retry = () => {
     const userMsg = [...messages].reverse().find((m) => m.role === "user");
-    if (!userMsg || !!abort) return;
+    if (!userMsg || !!abort || planRunning) return;
     const index = messages.indexOf(userMsg);
     reply(userMsg.content, messages.slice(0, index));
   };
@@ -1009,8 +1136,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     <MessageBubble
       key={t.start}
       parts={t.parts}
-      streaming={!!abort && i === turns.length - 1}
-      since={busySince}
+      streaming={(!!abort || !!runnerView?.streaming) && i === turns.length - 1}
+      since={taskSince}
       rate={streamRate}
       toolResults={toolResults}
       forgotten={t.start < contextStart}
@@ -1019,7 +1146,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       failed={i === lastFailedTurnIndex ? failed : undefined}
       connectorName={connector ? connector.name || connector.kind : undefined}
       onResend={i === lastFailedTurnIndex ? retry : undefined}
-      resendDisabled={i === lastFailedTurnIndex ? !!abort : undefined}
+      resendDisabled={i === lastFailedTurnIndex ? !!abort || planRunning : undefined}
     />
   );
   // Each update_plan call's turn, to show the plan it wrote after that turn.
@@ -1085,7 +1212,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 summary={planSummary}
                 context={planContext}
                 running={planRunning || !!abort}
-                since={planRunning ? busySince : null}
+                since={planRunning && runnerView?.status !== "paused" ? taskSince : null}
+                control={planRunning ? pauseControl(runnerView?.status) : undefined}
+                onPause={() => pauseRunner(sessionId)}
+                onResume={() => resumeRunner(sessionId)}
                 counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
                 onRun={runFromCard}
                 onChange={changePlan}
@@ -1095,7 +1225,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 formatTime={formatSeconds}
                 onCancel={() => setConfirmCancelPlan(true)}
                 onClone={canClone ? () => clonePlan(plan, planContext, planSummary) : undefined}
-                prompt={promptInPlan && pending ? <PendingPrompt ask={pending.ask} onDecide={pending.decide} /> : undefined}
+                prompt={
+                  promptInPlan && shownPending ? (
+                    <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} />
+                  ) : undefined
+                }
               />
             ),
           },
@@ -1182,7 +1316,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         currentId={sessionId}
         open={narrow ? drawerOpen : sessionsOpen}
         narrow={narrow}
-        busy={!!abort || planRunning}
+        busy={!!abort}
+        attention={attention}
         onSelect={(id) => id !== sessionId && openSession(id)}
         onNew={newChat}
         onNewNested={newNested}
@@ -1523,7 +1658,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             {contextStart > 0 && contextStart === messages.length && <ContextDivider />}
             {cardsBefore("end", true)}
             {planCards.filter((c) => slot(c.anchor).lost).map((c) => c.card)}
-            {pending && !promptInPlan && <PendingPrompt ask={pending.ask} onDecide={pending.decide} />}
+            {shownPending && !promptInPlan && (
+              <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} />
+            )}
             {notLoaded && (
               <Alert severity="info">
                 {notLoaded} isn't loaded, so nothing was sent. Load it with ▶ in the model menu (it takes a moment and
@@ -1552,9 +1689,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             <ChatSettings
               attachments={attachments}
               onAttach={attach}
-              onDetach={(p) => setAttachments((as) => as.filter((x) => x.path !== p))}
+              onDetach={(p) => changeAttachments((as) => as.filter((x) => x.path !== p))}
               onMakeWorkingDir={(p) =>
-                setAttachments((as) => [...as.filter((x) => x.path === p), ...as.filter((x) => x.path !== p)])
+                changeAttachments((as) => [...as.filter((x) => x.path === p), ...as.filter((x) => x.path !== p)])
               }
               checkCommands={toolContext.checkCommands}
               onSetCheckCommand={(folder, command) =>
@@ -1567,7 +1704,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               placeholder={narrow ? "Message" : "Message (Enter to send, Shift+Enter for a new line)"}
               onSend={send}
               fill={fill}
-              onStop={abort ? () => abort.abort() : undefined}
+              onStop={
+                planRunning ? () => stopRunner(sessionId) : abort ? () => abort.abort() : undefined
+              }
               disabled={!model}
               below={
                 showIndicator && (
@@ -1577,7 +1716,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                     onClear={clearContext}
                     onCompact={compactSession}
                     canCompact={contextStart > 0}
-                    disabled={!!abort}
+                    disabled={!!abort || planRunning}
                   />
                 )
               }
