@@ -410,6 +410,16 @@ export const runCheckCommand = (attachments: string[], folder: string) =>
 // `promptDir`: the working directory the session's system prompt names.
 export const getToolContext = (attachments: string[], promptDir: string | null) =>
   call<ToolContext>("POST", "/api/tools/context", { attachments, promptDir });
+// The agent's own instructions (~/.llama-mui/instructions.md); Settings → Agent.
+export interface Instructions {
+  text: string;
+  // No file yet: this is the built-in default.
+  isDefault: boolean;
+}
+export const getInstructions = () => call<Instructions>("GET", "/api/instructions");
+export const saveInstructions = (text: string) => call<Instructions>("PUT", "/api/instructions", { text });
+export const resetInstructions = () => call<Instructions>("DELETE", "/api/instructions");
+
 // Something a tool wants to do that the user approves first: a change to a
 // file, a shell command, or a git worktree made or removed.
 export type Approval =

@@ -4,6 +4,7 @@
 import os from "node:os";
 import { DISK_TOOLS, checkAttachments, workingDirOf } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
+import { readInstructions } from "./instructions.ts";
 import { load, save } from "./store.ts";
 import {
   AccessNeeded,
@@ -124,15 +125,20 @@ const isOffered = (ctx: ToolContext, t: ToolSpec) => !ctx.store.disabledTools.in
 // when it's called (runTool). See docs/guide.md, "What the model is told".
 //
 // Everything but the last line is the same in every session, so a new one
-// reuses another's cached start (the tool list comes first, then this). Only
+// reuses another's cached start (the tool list comes first, then this). The
+// user's instructions (~/.llama-mui/instructions.md) are read each time the
+// prompt is built, not frozen per session like the working directory: freezing
+// them would mean saving their text in the session. An edit therefore makes the
+// next message reprocess the start once, and the same for every session. Only
 // the working directory differs, so it must stay last: anything per-session
 // earlier would make each new session reprocess the rest. The home folder is
 // the same in every session; without it a model with nothing attached guessed
 // Linux paths like /home/user.
-function toolsSystemPrompt(promptDir: string | null): string {
+function toolsSystemPrompt(promptDir: string | null, instructions: string): string {
   return [
     "You have tools. Use one when it helps answer the question; otherwise answer directly.",
     ...GROUPS.map((g) => g.instructions),
+    ...(instructions.trim() ? [instructions.trim()] : []),
     `The user's home folder is ${os.homedir()}.`,
     promptDir ? `Working directory: ${promptDir}` : "There's no working directory: use absolute paths.",
   ].join("\n\n");
@@ -246,7 +252,7 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
     const promptDir = typeof body.promptDir === "string" ? body.promptDir : null;
     sendJson(res, 200, {
       definitions: TOOLS.map((t) => t.definition),
-      systemPrompt: toolsSystemPrompt(promptDir),
+      systemPrompt: toolsSystemPrompt(promptDir, (await readInstructions()).text),
       offered: TOOLS.filter((t) => isOffered(ctx, t)).map((t) => t.name),
       update: await chatUpdate(ctx, promptDir),
       checkCommands: Object.fromEntries(

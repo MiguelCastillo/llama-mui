@@ -164,6 +164,14 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   if you pick another one later, a chat update says so. Clearing the context
   makes the model reprocess its history anyway, so that is when the prompt is
   brought up to date: it names the working directory as it is then.
+- **Your instructions** are a plain file, `~/.llama-mui/instructions.md`,
+  edited in Settings → Agent. Its text goes in the system prompt after the tool
+  instructions and before the home folder. Without the file the default
+  applies: after a commit the agent runs `git --no-pager show --stat --oneline
+  HEAD` and tells you which files went in. An empty file means no extra
+  instructions, and "Reset to default" deletes the file. Unlike the working
+  directory it isn't fixed per session, so a change applies from the next
+  message and makes the model reprocess the start of that chat once.
 - A path the model made up, where nothing exists, is answered with an error
   that tells it to use `locate_path` or ask you, for its first two such guesses
   in a session; only a model that keeps guessing is brought to you with the

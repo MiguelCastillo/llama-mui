@@ -6,6 +6,7 @@ import type { Connect, Plugin } from "vite";
 import { connectorRoutes } from "./connectors.ts";
 import { attachmentRoutes } from "./disk.ts";
 import { HttpError, type Route, sendJson } from "./http.ts";
+import { instructionRoutes } from "./instructions.ts";
 import { modelSettingRoutes } from "./models.ts";
 import { preferenceRoutes } from "./preferences.ts";
 import { sessionRoutes } from "./sessions.ts";
@@ -20,6 +21,7 @@ async function route(r: Route) {
   if (await preferenceRoutes(r)) return;
   if (await modelSettingRoutes(r)) return;
   if (await sessionRoutes(r)) return;
+  if (await instructionRoutes(r)) return;
   throw new HttpError(404, "Not found");
 }
 

@@ -35,6 +35,7 @@ import DnsOutlinedIcon from "@mui/icons-material/DnsOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
 import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
+import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
 import ChatOutlinedIcon from "@mui/icons-material/ChatOutlined";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import {
@@ -50,6 +51,7 @@ import {
   testConnector,
   updateConnector,
 } from "./api";
+import AgentSection from "./AgentSection";
 import ChatSection from "./ChatSection";
 import ModelsSection from "./ModelsSection";
 import ToolsSection from "./ToolsSection";
@@ -60,6 +62,7 @@ const SECTIONS = [
   { id: "connectors", label: "Connectors", icon: <DnsOutlinedIcon />, Component: ConnectorsSection },
   { id: "models", label: "Models", icon: <ViewInArOutlinedIcon />, Component: ModelsSection },
   { id: "tools", label: "Tools", icon: <BuildOutlinedIcon />, Component: ToolsSection },
+  { id: "agent", label: "Agent", icon: <SmartToyOutlinedIcon />, Component: AgentSection },
   { id: "chat", label: "Chat", icon: <ChatOutlinedIcon />, Component: ChatSection },
 ];
 
