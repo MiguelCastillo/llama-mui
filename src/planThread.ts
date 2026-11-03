@@ -7,7 +7,9 @@
 // - planToThread: builds the child session and the parent without the plan.
 // - threadStatus / threadLabel: what the parent's note says about the thread,
 //   from the child's saved plan.
-import type { ChatMessage, PlanStep, Session } from "./api.ts";
+// - noteView / applyThreadEvent: what a note shows (spinner, outcome, report),
+//   and a `thread` event from the server applied to the notes.
+import type { ChatMessage, PlanStep, PlanThread, Session, ThreadOutcome } from "./api.ts";
 import { stepLine } from "./agent/plan.ts";
 import { nestedSessionFrom } from "./sessionTree.ts";
 
@@ -38,8 +40,14 @@ const TITLE_MAX = 80;
 // instead of moving it again. It is titled from the plan's summary (or its
 // first step) until the model names it.
 // The parent comes back without the plan and with a note (threads) where the
-// plan was. Returns null when the plan is not fresh. Neither input changes.
-export function planToThread(parent: Session, childId: string): { parent: Session; child: Session } | null {
+// plan was. Plan and note share a planId (the plan's own if it has one, else
+// `planId`, a new one by default), so the note can point at the plan inside
+// the thread. Returns null when the plan is not fresh. Neither input changes.
+export function planToThread(
+  parent: Session,
+  childId: string,
+  planId: string = parent.planId ?? crypto.randomUUID(),
+): { parent: Session; child: Session } | null {
   if (!parent.plan || !isFreshPlan(parent.plan, parent.messages)) return null;
 
   const request =
@@ -56,6 +64,7 @@ export function planToThread(parent: Session, childId: string): { parent: Sessio
     planContext: parent.planContext ?? null,
     planSummary: parent.planSummary ?? null,
     planAnchor: "at:1",
+    planId,
     planMovedIn: true,
   };
 
@@ -66,7 +75,8 @@ export function planToThread(parent: Session, childId: string): { parent: Sessio
     planContext: null,
     planSummary: null,
     planAnchor: null,
-    threads: [...(parent.threads ?? []), { sessionId: childId, summary, anchor: parent.planAnchor ?? null }],
+    planId: null,
+    threads: [...(parent.threads ?? []), { sessionId: childId, summary, anchor: parent.planAnchor ?? null, planId }],
   };
   return { parent: moved, child };
 }
@@ -85,6 +95,48 @@ export function threadStatus(child: Pick<Session, "plan"> | null): ThreadStatus 
   if (steps.some((s) => s.status === "failed" || s.status === "disputed")) return "failed";
   if (steps.every((s) => s.status === "done")) return "done";
   return "unfinished";
+}
+
+// What a note shows. `seen` is what the page found out about the thread
+// itself: "running" (it has a run), or its saved state (threadStatus; "missing"
+// when it was deleted); undefined while that is being read.
+//  - A run going: a spinner, and no outcome, whatever the last run left.
+//  - A deleted thread: says so, whatever the note remembers.
+//  - Otherwise the note's own status and report, written by the server when the
+//    run ended (server/threadReport.ts). A note made before they existed has
+//    none, so it takes the thread's saved state, and has no report.
+export interface NoteView {
+  running: boolean;
+  status: ThreadStatus | undefined;
+  report?: string;
+}
+
+export function noteView(note: PlanThread, seen: ThreadStatus | "running" | undefined): NoteView {
+  if (seen === "running") return { running: true, status: undefined };
+  if (seen === "missing") return { running: false, status: "missing" };
+  if (note.status) return { running: false, status: note.status, ...(note.report ? { report: note.report.text } : {}) };
+  return { running: false, status: seen };
+}
+
+// The server's `thread` event: the parent's note for `sessionId` got a new
+// status, and a report (null while the report is still being written).
+export interface ThreadEvent {
+  sessionId: string;
+  planId?: string;
+  status: ThreadOutcome;
+  report: PlanThread["report"] | null;
+}
+
+// The notes with that event applied; the same array when no note is about
+// that thread (or, with a planId, that plan), so the page changes nothing.
+export function applyThreadEvent(threads: PlanThread[], e: ThreadEvent): PlanThread[] {
+  const hit = (t: PlanThread) => t.sessionId === e.sessionId && (!e.planId || !t.planId || t.planId === e.planId);
+  if (!threads.some(hit)) return threads;
+  return threads.map((t) => {
+    if (!hit(t)) return t;
+    const { report: _old, ...rest } = t;
+    return { ...rest, status: e.status, ...(e.report ? { report: e.report } : {}) };
+  });
 }
 
 // The note's line, in plain words. Before the status is known (undefined) the

@@ -347,12 +347,17 @@ const quiet = (p: Promise<unknown>) =>
 
 // Starts the plan of a saved session. Save the session first: the server runs
 // what is on disk. Throws an ApiError, a plain refusal ("already running" when
-// a second window started it first). Answers once the run shows, so a guard
-// that asks "is it running?" afterwards finds it so.
-export async function startRun(id: string, options: RunOptions): Promise<void> {
+// a second window started it first). Answers with the session the plan runs
+// in, once its run shows, so a guard that asks "is it running?" afterwards
+// finds it so. That is `id`, except for a plan that hadn't started: the
+// server moves it into a new thread and the answer is the thread's id.
+export async function startRun(id: string, options: RunOptions): Promise<string> {
   const before = generation.get(id) ?? 0;
-  await sendCommand(id, "run", { ...options });
-  await waitUntil(() => (generation.get(id) ?? 0) !== before, START_WAIT_MS);
+  const { sessionId = id } = await sendCommand(id, "run", { ...options });
+  // A thread is new, so no run of it has been seen before.
+  const seen = sessionId === id ? before : 0;
+  await waitUntil(() => (generation.get(sessionId) ?? 0) !== seen, START_WAIT_MS);
+  return sessionId;
 }
 
 // Pause: the step in flight and its check finish, then the run holds before

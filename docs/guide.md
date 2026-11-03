@@ -512,13 +512,31 @@ the step, not in the chat.
   or a change the model makes during a run. A plan that hasn't started yet,
   rewritten by the model, moves to the turn that rewrote it.
 - When a plan runs in a thread (see [Running a plan](#running-a-plan)), a
-  one-line note takes its place in the chat: **Running in a thread**, then
-  **Done in a thread**, **Failed in a thread** or **Not finished in a
-  thread**, each followed by the plan summary. Click it to open the thread.
-  The result comes from the thread's saved state once its run has ended (no
-  result yet means running, which the server reports with the session), and
-  the note updates when the run ends. If the thread was deleted, the note says
-  so.
+  note takes its place in the chat, one note for each thread. While the
+  thread's run is going it shows a spinner and **Running in a thread**, then
+  the plan summary. When the run ends, the spinner goes away and the note
+  says how it ended: **Done in a thread** (every step done), **Failed in a
+  thread** (a step failed, or one didn't pass its check) or **Not finished in
+  a thread** (stopped, or waiting for you). Under it is a report of one or
+  two sentences about what happened. Click the note to open the thread, with
+  the chat scrolled to the plan.
+- The thread reports back by itself, even if you aren't looking at the chat or
+  the page was closed when the run ended; the note is up to date when you
+  open it. Only the outcome and the report are sent to the chat that started
+  the thread; the thread's messages stay in the thread.
+- The report is written by the model that ran the plan, in one more request
+  with no tools, once the run has ended. It says what the plan did, or what
+  went wrong and what it needs from you. If that request fails, or you
+  stopped the run yourself, the report is a plain sentence made from the
+  steps instead (for example "Step 2 failed. Open the thread to see what
+  happened."). The note shows the outcome as soon as the run ends, and the
+  report a moment later. Running the plan again (Continue, Resume or
+  Restart) puts the spinner back and hides the old report until the new run
+  ends.
+- The note is not kept up to date if you change the thread yourself later
+  (say you mark a failed step done): it shows how the last run ended. A note
+  made before notes had a report shows the thread's saved state, with no
+  report. If the thread was deleted, the note says so.
 - A plan in a chat saved before plans had a place is pinned after the last
   message when the chat opens, so new messages go below it. A plan whose
   turn is compacted away moves to the top, where that turn was.
@@ -587,8 +605,10 @@ step that was running when the page closed comes back as pending.
     server-sent events (an ordinary request that stays open; the browser
     reconnects by itself). `GET /api/events` is for the list: it starts with
     the runs live now, then sends a `saved` event (the list row and the new
-    revision) for each save or rename, `removed` for a delete, and `status`
-    when a run starts, pauses, asks something or ends. The Sessions panel
+    revision) for each save or rename, `removed` for a delete, `status`
+    when a run starts, pauses, asks something or ends, and `thread` when a
+    thread's run ends and its note in the chat that started it changes (see
+    [Where plans show](#where-plans-show)). The Sessions panel
     follows it, so a session saved or deleted in another window changes its
     row without reloading, and the list is read again after a dropped
     connection. `GET /api/sessions/<id>/events` is for the open session: it

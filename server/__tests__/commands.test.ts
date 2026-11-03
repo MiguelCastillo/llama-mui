@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunnerEnv } from "../../src/runnerTypes.ts";
+import type { CommandDeps } from "../commands.ts";
 import { askOn, askedAnswer, fakeRun, finish, handles, makeSession, resetFakes, started } from "./fakeRun.ts";
 import { fileOf, files, putFile } from "./memorySessions.ts";
 
@@ -25,7 +26,7 @@ const runners = await import("../runners.ts");
 
 // No model: a run starts from a fake, the way the real `run` command will start one from a real run.
 const env = { connector: null, model: "m", models: [], toolContext: { definitions: [], checkCommands: {} }, toolsOn: false, thinkOn: false } as unknown as RunnerEnv;
-const deps = {
+const deps: CommandDeps = {
   start: async (id: string) => {
     await runners.startRunner(id, env, {
       run: (cb) => fakeRun(id, cb),
@@ -39,7 +40,7 @@ const deps = {
 };
 
 // Answers the way the plugin does: an HttpError's extra fields sit next to `error`.
-async function command(id: string, name: string, body: unknown = {}, method = "POST", withDeps: typeof deps | null = deps) {
+async function command(id: string, name: string, body: unknown = {}, method = "POST", withDeps: CommandDeps | null = deps) {
   const req = Readable.from([Buffer.from(JSON.stringify(body))]) as unknown as IncomingMessage;
   let text = "";
   const res = { statusCode: 200, setHeader() {}, end: (t: string) => void (text = t) } as unknown as ServerResponse;
@@ -68,8 +69,18 @@ describe("run", () => {
     saved("a");
     const r = await command("a", "run", options);
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({ ok: true, revision: fileOf("a").revision });
+    expect(r.body).toEqual({ ok: true, revision: fileOf("a").revision, sessionId: "a" });
     expect(hub.liveRun("a")).toMatchObject({ status: "running" });
+  });
+
+  it("says which session the plan runs in when the starter moved it to a thread", async () => {
+    saved("a");
+    saved("t");
+    const start = vi.fn(async () => ({ sessionId: "t" }));
+    const r = await command("a", "run", options, "POST", { start });
+    expect(r.status).toBe(200);
+    // The revision is the thread's, the session the page goes on to show.
+    expect(r.body).toEqual({ ok: true, revision: fileOf("t").revision, sessionId: "t" });
   });
 
   it("hands the starter exactly what the page chose", async () => {

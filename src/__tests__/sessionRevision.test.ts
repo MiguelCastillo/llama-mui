@@ -118,9 +118,11 @@ describe("the sessions list", () => {
     const sources: FakeSource[] = [];
     vi.stubGlobal("EventSource", FakeSource);
     const seen = { saved: [] as string[], removed: [] as string[], reconnected: 0 };
+    const threads: unknown[] = [];
     const stop = watchSessionList({
       saved: (r) => seen.saved.push(r.id),
       removed: (id) => seen.removed.push(id),
+      thread: (e) => threads.push(e),
       reconnected: () => void seen.reconnected++,
     });
     expect(sources[0].url).toBe("/api/events");
@@ -129,8 +131,11 @@ describe("the sessions list", () => {
     handlers.saved({ data: JSON.stringify({ id: "a", summary: row("a", 1), revision: 2 }) });
     handlers.saved({ data: "not json" });
     handlers.removed({ data: JSON.stringify({ id: "b" }) });
+    handlers.thread({ data: JSON.stringify({ id: "p", sessionId: "kid", status: "done", report: null, revision: 3 }) });
+    handlers.thread({ data: JSON.stringify({ id: "p" }) }); // not a thread event
     handlers.snapshot({ data: "{}" });
     expect(seen).toEqual({ saved: ["a"], removed: ["b"], reconnected: 1 });
+    expect(threads).toEqual([{ id: "p", sessionId: "kid", status: "done", report: null, revision: 3 }]);
     stop();
     expect(close).toHaveBeenCalled();
   });

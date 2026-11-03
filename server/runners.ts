@@ -26,6 +26,8 @@
 // record with it: the session is the page's again, and the page learns how it
 // ended from the `status` event (run null, and `error` if it went wrong).
 // Pause is only a run status: it is not saved, and no step has it.
+// A run in a thread (a session with a parent that has a note for it) ends with
+// a report to that parent: how it ended and a sentence or two (threadReport.ts).
 //
 // Each function that a command calls answers once the hub has the new state,
 // and throws an HttpError (409, with a `reason`) for what can't be done.
@@ -39,6 +41,7 @@ import type { Answer, Ask, RunnerEnv, RunnerHandle } from "../src/runnerTypes.ts
 import { HttpError } from "./http.ts";
 import * as hub from "./runHub.ts";
 import { readSession, revisionOf } from "./sessionFile.ts";
+import { type AskReport, askModel, reportToParent } from "./threadReport.ts";
 
 export interface RunnerDeps {
   // Runs the plan; runPlan unless a test passes a fake.
@@ -51,6 +54,9 @@ export interface RunnerDeps {
   reply?: (handle: RunnerHandle) => RunPlanCallbacks["reply"];
   // Whether the model is loaded; modelLoaded in src/runnerReply.ts by default.
   modelLoaded?: (handle: RunnerHandle) => Promise<boolean>;
+  // Asks the model for the report a thread sends its parent when its run ends
+  // (see threadReport.ts); one request to the run's own model by default.
+  report?: AskReport;
 }
 
 // A save comes this long after the last change, and at the latest this long
@@ -77,6 +83,8 @@ interface Entry {
   release: ((go: boolean) => void) | null;
   stopRequested: boolean;
   ended: boolean;
+  // Dropped by resetRunners (tests): nothing is reported for it.
+  discarded: boolean;
   // The step in flight, and the one that was when Stop came.
   runningStep: string | null;
   stepAtStop: string | null;
@@ -243,11 +251,14 @@ function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
 // once the hub has marked the session as running. `env` is what the run needs
 // besides the session: the connector (without its key), the model, the tools.
 // Refused (409) if the session already has a run, or has no open step.
+// `done` settles when the run is over; `finished` after that, once a thread has
+// told its parent how it went (see threadReport.ts), which can take a model
+// request, so nothing but a test waits for it.
 export async function startRunner(
   id: string,
   env: RunnerEnv,
   deps: RunnerDeps = {},
-): Promise<{ revision: number; done: Promise<void> }> {
+): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
   if (store.has(id)) throw alreadyRunning();
   const disk = await readSession(id);
   if (!disk) throw new HttpError(404, "No such session");
@@ -264,6 +275,7 @@ export async function startRunner(
     save: deps.save ?? ((s) => hub.save(id, s)),
     reply: deps.reply ?? makeReply,
     modelLoaded: deps.modelLoaded ?? modelLoaded,
+    report: deps.report ?? askModel,
   };
   const e = {
     id,
@@ -277,6 +289,7 @@ export async function startRunner(
     release: null,
     stopRequested: false,
     ended: false,
+    discarded: false,
     runningStep: null,
     stepAtStop: null,
     dirty: false,
@@ -371,7 +384,15 @@ export async function startRunner(
       if (!e.stopRequested) e.handle.setError(String(err?.message ?? err));
     })
     .finally(() => end(e));
-  return { revision: await hub.currentRevision(id), done: e.done };
+  // After the run is over, a thread tells the session it came from how it
+  // went. This is not part of `done`: Stop and the next Run don't wait for a
+  // model's report.
+  const finished = e.done.then(() =>
+    e.discarded
+      ? undefined
+      : reportToParent({ id, session: e.session, env, error: e.error, stopped: e.stopRequested }, resolved.report),
+  );
+  return { revision: await hub.currentRevision(id), done: e.done, finished };
 }
 
 // The run is over, whatever the reason: the step Stop interrupted is put back
@@ -467,6 +488,7 @@ export async function resetRunners() {
   for (const e of entries) {
     e.stopRequested = true;
     e.ended = true;
+    e.discarded = true;
     clearSaveTimers(e);
     e.controller?.abort();
     e.release?.(false);

@@ -2,7 +2,7 @@
 // and the run hub. Nothing here knows about runs: it is files and the shape of
 // the sessions list row.
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { sessionsDir } from "./disk.ts";
 import { HttpError } from "./http.ts";
@@ -34,6 +34,15 @@ async function writeText(file: string, text: string) {
 }
 
 export const writeSession = (id: string, session: unknown) => writeText(sessionFile(id), JSON.stringify(session));
+
+// Deletes a session's session.json. A worktree in its folder is the user's
+// work, so the folder only goes if it is empty. Callers go through the hub
+// (remove), which refuses while a run is live.
+export async function deleteSession(id: string): Promise<void> {
+  const file = sessionFile(id);
+  await rm(file, { force: true });
+  await rmdir(path.dirname(file)).catch(() => {});
+}
 
 // The number of times the server has written this session. A session saved
 // before revisions existed has none, which counts as 0.

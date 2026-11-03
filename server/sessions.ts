@@ -11,7 +11,7 @@ import path from "node:path";
 import { sessionsDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
-import { readSession, revisionOf, sessionFile, summaryOf, writeSession } from "./sessionFile.ts";
+import { deleteSession, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
 
 // Other modules (and tests) have always got these from here.
 export { openTodoList, sessionFolder, summaryOf } from "./sessionFile.ts";
@@ -115,12 +115,8 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
     return true;
   }
   if (method === "DELETE") {
-    const file = sessionFile(id);
-    await hub.remove(id, async () => {
-      await rm(file, { force: true });
-      // A worktree in the folder is the user's work: the folder only goes if it's empty.
-      await rmdir(path.dirname(file)).catch(() => {});
-    });
+    sessionFolder(id); // a bad id is a 400
+    await hub.remove(id, () => deleteSession(id));
     sendJson(res, 200, { id });
     return true;
   }

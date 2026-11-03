@@ -80,7 +80,9 @@ const fakes = {
   },
 };
 const start = (id: string, o = options) => startFromOptions(id, o, { run: fakes.run(id), reply: fakes.reply });
-const saved = (id: string, extra: object = {}) => putFile(id, { ...makeSession(id, 2), revision: 1, ...extra });
+// A plan that was moved in already, so a run starts it where it is (a plan that
+// hasn't started moves to a thread: see the tests of that below).
+const saved = (id: string, extra: object = {}) => putFile(id, { ...makeSession(id, 2), revision: 1, planMovedIn: true, ...extra });
 const refusal = async (p: Promise<unknown>) => {
   const e = await p.then(
     () => null,
@@ -212,5 +214,147 @@ describe("the run command's starter", () => {
     putFile("done", { ...makeSession("done", 1), plan: [{ id: "s1", text: "x", status: "done" }] });
     expect(await refusal(start("done"))).toMatchObject({ status: 409, extra: { reason: "nothing to run" } });
     expect(hub.liveRun("done")).toBeNull();
+  });
+
+  it("answers with the session it runs in: the one it was sent to", async () => {
+    saved("a");
+    expect(await start("a")).toEqual({ sessionId: "a" });
+  });
+});
+
+describe("a plan that hasn't started", () => {
+  const request = { role: "user", content: "Please do two things" };
+  const fresh = (id: string, extra: object = {}) =>
+    saved(id, {
+      planMovedIn: false,
+      messages: [request, { role: "assistant", content: "Here is a plan." }],
+      planSummary: "Do two things",
+      planAnchor: "call-1",
+      attachments: [{ path: "/work/app", kind: "folder", source: "manual" }],
+      ...extra,
+    });
+  // The run is the fake's, bound to the thread the test expects.
+  const startThread = (id: string, childId = "child-1", o = options) =>
+    startFromOptions(id, o, { run: fakes.run(childId), reply: fakes.reply, newId: () => childId });
+
+  it("moves into a new thread, which is saved first and runs; the session keeps a note", async () => {
+    fresh("p");
+    expect(await startThread("p")).toEqual({ sessionId: "child-1" });
+
+    // The thread runs, not the session it came from.
+    expect(hub.liveRun("child-1")).toMatchObject({ status: "running" });
+    expect(hub.liveRun("p")).toBeNull();
+    const child = fileOf("child-1");
+    expect(child).toMatchObject({ id: "child-1", parentId: "p", title: "Do two things", planSummary: "Do two things", planMovedIn: false });
+    expect(child.messages).toEqual([request]);
+    expect(child.attachments).toEqual([{ path: "/work/app", kind: "folder", source: "manual" }]);
+    expect(child.plan.map((s: any) => s.id)).toEqual(["s1", "s2"]);
+    expect(child.planId).toEqual(expect.any(String));
+    expect(child.run).toMatchObject({ status: "running" });
+
+    // The session has no plan, and a note that names the thread and its plan.
+    const parent = fileOf("p");
+    expect(parent.plan).toBeNull();
+    expect(parent.threads).toEqual([{ sessionId: "child-1", summary: "Do two things", anchor: "call-1", planId: child.planId }]);
+    expect(parent.messages).toHaveLength(2);
+    expect(parent.revision).toBe(2);
+    expect(parent.run).toBeUndefined();
+
+    // The thread was saved before the session; both reached the list.
+    const savedIds = events.filter((e) => e.type === "saved").map((e) => e.id);
+    expect(savedIds.slice(0, 2)).toEqual(["child-1", "p"]);
+    expect((events.find((e) => e.type === "saved" && e.id === "child-1")!.data as any).summary.parentId).toBe("p");
+  });
+
+  it("builds the run from the thread: its own folders and prompt folder", async () => {
+    fresh("p", { promptDir: null });
+    await startThread("p");
+    const context = calls.find((c) => c.url === "/api/tools/context")!;
+    // A thread fixes its prompt folder at its own first reply, not the session's.
+    expect(JSON.parse(context.body)).toEqual({ attachments: ["/work/app"], promptDir: "/work/app" });
+    expect(envs[0]!.connector!.hasKey).toBe(true);
+  });
+
+  it("the thread's steps run to the end, and the thread keeps the plan's id", async () => {
+    fresh("p");
+    await startThread("p");
+    await vi.waitFor(() => expect(hub.liveRun("child-1")?.streaming).toBe(true));
+    finish("child-1", "s1");
+    await vi.waitFor(() => expect(fileOf("child-1").plan[0].status).toBe("done"));
+    finish("child-1", "s2");
+    await vi.waitFor(() => expect(hub.liveRun("child-1")).toBeNull());
+    expect(fileOf("child-1").plan.map((s: any) => s.status)).toEqual(["done", "done"]);
+    expect(fileOf("child-1").planId).toBe(fileOf("p").threads[0].planId);
+  });
+
+  it("holds no key in the thread, the note or the events", async () => {
+    fresh("p");
+    await startThread("p");
+    expect(JSON.stringify(events)).not.toContain(KEY);
+    expect(JSON.stringify(fileOf("child-1"))).not.toContain(KEY);
+    expect(JSON.stringify(fileOf("p"))).not.toContain(KEY);
+  });
+
+  it("runs in place when the plan was moved in already", async () => {
+    fresh("c", { planMovedIn: true, parentId: "p" });
+    expect(await startThread("c", "never")).toEqual({ sessionId: "c" });
+    expect(hub.liveRun("c")).toMatchObject({ status: "running" });
+    expect([...files.keys()]).toEqual(["c"]);
+    expect(fileOf("c").threads ?? []).toEqual([]);
+  });
+
+  it("runs in place when the plan has started, even a little", async () => {
+    fresh("p", { plan: [{ id: "s1", text: "One", status: "done" }, { id: "s2", text: "Two", status: "pending" }] });
+    expect(await startThread("p", "never")).toEqual({ sessionId: "p" });
+    expect(hub.liveRun("p")).toMatchObject({ status: "running" });
+    expect([...files.keys()]).toEqual(["p"]);
+  });
+
+  it("makes no thread when the server isn't in the list or can't be reached", async () => {
+    fresh("p");
+    const before = JSON.stringify(fileOf("p"));
+    expect((await refusal(startThread("p", "child-1", { ...options, connectorId: "gone" }))).extra.reason).toBe("no connector");
+    modelsStatus = 502;
+    expect((await refusal(startThread("p"))).extra.reason).toBe("unreachable");
+    expect([...files.keys()]).toEqual(["p"]);
+    expect(JSON.stringify(fileOf("p"))).toBe(before);
+    expect(events.filter((e) => e.type === "saved")).toEqual([]);
+  });
+
+  it("is refused while the session itself runs", async () => {
+    fresh("p", { planMovedIn: true });
+    await start("p");
+    const e = await refusal(startThread("p", "never"));
+    expect(e).toMatchObject({ status: 409, extra: { reason: "already running" } });
+    expect([...files.keys()]).toEqual(["p"]);
+  });
+
+  it("two windows starting the same plan make one thread, not two", async () => {
+    fresh("p");
+    const run = (childId: string) => startFromOptions("p", options, { run: fakes.run(childId), reply: fakes.reply, newId: () => childId });
+    const results = await Promise.allSettled([run("c1"), run("c2")]);
+    const ok = results.filter((r) => r.status === "fulfilled");
+    const refused = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(ok).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.reason).toBeInstanceOf(HttpError);
+    expect(refused[0]!.reason.status).toBe(409);
+    expect(refused[0]!.reason.message).toMatch(/changed just now/);
+    // The thread that lost was deleted again: one thread, one note.
+    const winner = (ok[0] as PromiseFulfilledResult<{ sessionId: string }>).value.sessionId;
+    expect([...files.keys()].sort()).toEqual([winner, "p"].sort());
+    expect(fileOf("p").threads.map((t: any) => t.sessionId)).toEqual([winner]);
+    expect(hub.liveRun(winner)).not.toBeNull();
+  });
+
+  it("a save of the session from a page that hasn't seen the move is refused", async () => {
+    fresh("p");
+    await startThread("p");
+    const stale = await hub.replace("p", () => ({ ...makeSession("p", 2) }), 1).then(
+      () => null,
+      (e) => e,
+    );
+    expect(stale).toMatchObject({ status: 409, extra: { reason: "stale revision", revision: 2 } });
+    expect(fileOf("p").plan).toBeNull();
   });
 });

@@ -7,6 +7,9 @@
 //            plan's open steps. The session must be saved first: the run reads
 //            it from the server, not from the page, and looks up the server
 //            (connector), its models and the tools itself (see runStart.ts).
+//            A plan that hasn't started moves into a new thread and runs
+//            there; the answer says which session it runs in (`sessionId`)
+//            and the page opens it.
 //   pause    after the step in flight and its check, hold before the next step
 //   resume   go on
 //   stop     end the run now; answers once it is over
@@ -16,7 +19,7 @@
 //            for a question that asks for a path
 //
 // An answer is { ok: true, revision }: the session's revision once the command
-// is done. A command that can't be done is a 409 with a plain `error` and a
+// is done (for `run`, also { sessionId }, and the revision is that session's). A command that can't be done is a 409 with a plain `error` and a
 // `reason`: "already running" (a second window starting the same plan),
 // "not running", "stale ask" (that question was answered already: the first
 // answer wins), "nothing to run", "wrong answer", "stale revision",
@@ -38,8 +41,9 @@ export interface RunOptions {
 }
 
 export interface CommandDeps {
-  // Starts the run of a saved session from what the page chose.
-  start: (id: string, options: RunOptions) => Promise<void>;
+  // Starts the run of a saved session from what the page chose. Says which
+  // session the plan runs in; nothing means the one it was sent to.
+  start: (id: string, options: RunOptions) => Promise<{ sessionId: string } | void>;
 }
 
 // The real starter builds the run from the page's choices (see runStart.ts);
@@ -80,11 +84,18 @@ export async function commandRoutes({ req, res, parts, method }: Route, deps: Co
   const id = parts[1];
   sessionFolder(id); // a bad id is a 400
   const body = await readJson(req);
+  // The session the command ended up acting on: the one it was sent to, except
+  // for a `run` that moved a new plan into a thread.
+  let target = id;
+  let extra: { sessionId?: string } = {};
 
   switch (parts[3]) {
-    case "run":
-      await deps.start(id, parseRunOptions(body));
+    case "run": {
+      const started = await deps.start(id, parseRunOptions(body));
+      target = started?.sessionId ?? id;
+      extra = { sessionId: target };
       break;
+    }
     case "pause":
       await runners.pauseRun(id);
       break;
@@ -120,6 +131,6 @@ export async function commandRoutes({ req, res, parts, method }: Route, deps: Co
     default:
       throw new HttpError(404, "Unknown command");
   }
-  sendJson(res, 200, { ok: true, revision: await hub.currentRevision(id) });
+  sendJson(res, 200, { ok: true, revision: await hub.currentRevision(target), ...extra });
   return true;
 }

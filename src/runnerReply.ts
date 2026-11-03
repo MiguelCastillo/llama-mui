@@ -96,6 +96,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
       setPlanAnchor: (planAnchor) => h.edit((s) => ({ ...s, planAnchor })),
       setPlanContext: (planContext) => h.edit((s) => ({ ...s, planContext })),
       setPlanSummary: (planSummary) => h.edit((s) => ({ ...s, planSummary })),
+      setPlanId: (planId) => h.edit((s) => ({ ...s, planId })),
       changePlan: (plan) => {
         h.planRef.current = plan;
       },
@@ -114,6 +115,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
       planAnchor: now.planAnchor ?? null,
       planContext: now.planContext ?? null,
       planSummary: now.planSummary ?? null,
+      planId: now.planId ?? null,
     };
 
     const result = await runTurn(

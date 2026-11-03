@@ -15,5 +15,6 @@ export function withMemory<T extends object>(actual: T): T {
     ...actual,
     readSession: async (id: string) => fileOf(id),
     writeSession: async (id: string, session: unknown) => void putFile(id, session),
+    deleteSession: async (id: string) => void files.delete(id),
   };
 }

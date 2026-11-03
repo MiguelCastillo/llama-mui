@@ -512,6 +512,10 @@ export interface Session {
   // "at:N", after the chat's first N messages: a clone, a plan from a chat
   // saved before this field, or one whose turn was compacted away ("at:0").
   planAnchor?: string | null;
+  // Names the plan, so a thread note in another session can point at it (see
+  // PlanThread). Set when the plan moves into a thread; a plan written in a
+  // chat has none. Archived with the plan (PastPlan), and gone from here then.
+  planId?: string | null;
   // Finished plans, each left where it was written when a new one came.
   pastPlans?: PastPlan[];
   // The working directory the system prompt names, fixed at the session's
@@ -554,7 +558,21 @@ export interface PlanThread {
   summary: string;
   // Where the note shows: the plan's anchor in the parent (see planAnchor).
   anchor: string | null;
+  // The plan the note is about, inside that session (its planId). Today a
+  // thread holds one plan; this lets a thread hold several later, with each
+  // note pointing at its own. Missing on notes made before it.
+  planId?: string;
+  // How the thread's last run ended, written by the server when the run ends
+  // (see server/threadReport.ts). Missing until a run has ended, and on notes
+  // made before it; then the note works it out from the thread's saved plan.
+  status?: ThreadOutcome;
+  // What the model that ran the plan said about it, one or two sentences, and
+  // when. Missing until it has written one (or while the next run is going).
+  report?: { text: string; at: number };
 }
+
+// How a thread's run ended: every step done, a step failed, or neither.
+export type ThreadOutcome = "done" | "failed" | "unfinished";
 
 export interface Todo {
   id: string;
@@ -576,6 +594,8 @@ export interface PastPlan {
   context?: string | null;
   // The plan's one-sentence summary, kept when archived.
   summary?: string | null;
+  // The plan's id (Session.planId), kept when archived, so a note can still find it.
+  planId?: string;
 }
 
 // One step of a plan. The model writes the text and a summary; chat sets the
@@ -660,9 +680,19 @@ export const saveSession = (s: Session) => {
 };
 // A command to a session's run (see server/commands.ts): run, pause, resume,
 // stop, approve, answer. Answers { ok, revision }; a command that can't be done
-// is an ApiError, a 409 with a plain message and `data.reason`.
+// is an ApiError, a 409 with a plain message and `data.reason`. `run` also says
+// which session the plan runs in (`sessionId`): the session itself, or the new
+// thread it moved to. `revision` is that session's.
 export const sendCommand = (id: string, name: string, body: Record<string, unknown> = {}) =>
-  call<{ ok: true; revision: number }>("POST", `/api/sessions/${id}/commands/${name}`, body);
+  call<{ ok: true; revision: number; sessionId?: string }>("POST", `/api/sessions/${id}/commands/${name}`, body);
+
+// The server wrote this session once (not a save from this page): `revision` is
+// the new count. If it is the next one after what this page knew, nothing else
+// wrote in between, so the page is still current and its next save may carry
+// the new number; otherwise it is left as it was, and that save is refused.
+export function noteRevision(id: string, revision: number) {
+  if (knownRevision.get(id) === revision - 1) knownRevision.set(id, revision);
+}
 
 export const deleteSession = (id: string) =>
   call<{ id: string }>("DELETE", `/api/sessions/${id}`).then((r) => {

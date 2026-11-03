@@ -369,7 +369,25 @@ describe("commands", () => {
     const p = startRun("a", { connectorId: "c1", model: "m", toolsOn: false, thinkOn: false });
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(START_WAIT_MS);
-    await expect(p).resolves.toBeUndefined();
+    await expect(p).resolves.toBe("a");
+  });
+
+  it("startRun answers with the thread a new plan moved to, and waits for that run", async () => {
+    serve((method) => (method === "GET" ? { body: session("a") } : { body: { ok: true, revision: 1, sessionId: "thread-1" } }));
+    const p = startRun("a", { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false });
+    let ranIn: string | undefined;
+    void p.then((id) => (ranIn = id));
+    subscribeAll(() => {});
+    await vi.waitFor(() => expect(commands()).toHaveLength(1));
+    expect(commands()[0]!.path).toBe("/api/sessions/a/commands/run");
+    // A run of the session it was sent to is not the run it asked for.
+    global().emit("status", { id: "a", run: run() });
+    await flush();
+    expect(ranIn).toBeUndefined();
+    global().emit("status", { id: "thread-1", run: run() });
+    await p;
+    expect(ranIn).toBe("thread-1");
+    expect(getView("thread-1")).toBeDefined();
   });
 
   it("startRun throws the server's plain refusal", async () => {

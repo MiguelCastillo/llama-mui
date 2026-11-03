@@ -96,6 +96,11 @@ export interface RunTurnCallbacks {
   planAnchor: string | null;
   planContext: string | null;
   planSummary: string | null;
+  // The plan's id, if it has one (it moved into a thread; see Session.planId).
+  // A finished plan that a new one replaces is archived with it, and the new
+  // plan starts without one.
+  planId?: string | null;
+  setPlanId?: (id: string | null) => void;
 }
 
 // Configuration needed for a single reply turn.
@@ -341,7 +346,13 @@ export async function runTurn(
             setPlanProposal(steps);
             result = "Proposed, not made: the user sees your change next to the plan and decides. Tell them what you changed and why.";
           } else if (steps) {
-            if (finished) setPastPlans((p: any[]) => [...p, { steps: current, anchor: planAnchor, context: planContext, summary: planSummary ?? undefined }]);
+            if (finished) {
+              setPastPlans((p: any[]) => [
+                ...p,
+                { steps: current, anchor: planAnchor, context: planContext, summary: planSummary ?? undefined, ...(callbacks.planId ? { planId: callbacks.planId } : {}) },
+              ]);
+              callbacks.setPlanId?.(null);
+            }
             if (!planRunningRef.current) setPlanAnchor(call.id);
             changePlan(steps);
             // A step revising the plan mid-run usually leaves context out; the

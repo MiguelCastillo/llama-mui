@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Attachment, ChatMessage, PlanStep, Session } from "../api";
-import { isFreshPlan, planRequestFor, planToThread, threadLabel, threadStatus } from "../planThread";
+import type { Attachment, ChatMessage, PlanStep, PlanThread, Session } from "../api";
+import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus } from "../planThread";
 
 const step = (id: string, status: PlanStep["status"] = "pending", extra: Partial<PlanStep> = {}): PlanStep => ({
   id,
@@ -126,13 +126,32 @@ describe("planToThread: the child", () => {
 
 describe("planToThread: the parent", () => {
   it("loses the plan and keeps a note where it was", () => {
-    const { parent } = planToThread(parentSession({ planProposal: [step("9")] }), "child")!;
+    const { parent } = planToThread(parentSession({ planProposal: [step("9")] }), "child", "plan-1")!;
     expect(parent.plan).toBeNull();
     expect(parent.planProposal).toBeNull();
     expect(parent.planContext).toBeNull();
     expect(parent.planSummary).toBeNull();
     expect(parent.planAnchor).toBeNull();
-    expect(parent.threads).toEqual([{ sessionId: "child", summary: "Build the thing in two steps", anchor: "call-1" }]);
+    expect(parent.threads).toEqual([
+      { sessionId: "child", summary: "Build the thing in two steps", anchor: "call-1", planId: "plan-1" },
+    ]);
+  });
+
+  it("names the plan, in the thread and on the note, so the note can point at it", () => {
+    const { parent, child } = planToThread(parentSession(), "child", "plan-1")!;
+    expect(child.planId).toBe("plan-1");
+    expect(parent.threads![0].planId).toBe("plan-1");
+    // The session no longer has the plan, so no id for it.
+    expect(parent.planId).toBeNull();
+  });
+
+  it("makes up an id when none is given, and keeps one the plan already had", () => {
+    const made = planToThread(parentSession(), "child")!;
+    expect(made.child.planId).toEqual(expect.any(String));
+    expect(made.parent.threads![0].planId).toBe(made.child.planId);
+    const kept = planToThread(parentSession({ planId: "mine" }), "child")!;
+    expect(kept.child.planId).toBe("mine");
+    expect(kept.parent.threads![0].planId).toBe("mine");
   });
 
   it("keeps everything else, and adds to earlier notes", () => {
@@ -225,6 +244,52 @@ describe("threadLabel", () => {
 
   it("says running while the status is not known yet", () => {
     expect(threadLabel(undefined, "Build it")).toBe("Running in a thread: Build it");
+  });
+});
+
+describe("noteView", () => {
+  const note: PlanThread = { sessionId: "kid", summary: "Build it", anchor: null };
+  const reported: PlanThread = { ...note, status: "failed", report: { text: "Step 2 failed. Open the thread.", at: 5 } };
+
+  it("spins while the thread has a run, whatever the last run left", () => {
+    expect(noteView(reported, "running")).toEqual({ running: true, status: undefined });
+  });
+
+  it("shows the note's own outcome and report once the run has ended", () => {
+    expect(noteView(reported, undefined)).toEqual({ running: false, status: "failed", report: "Step 2 failed. Open the thread." });
+    expect(noteView({ ...note, status: "done" }, "unfinished")).toEqual({ running: false, status: "done" });
+  });
+
+  it("says a deleted thread is deleted", () => {
+    expect(noteView(reported, "missing")).toEqual({ running: false, status: "missing" });
+  });
+
+  it("falls back to the thread's saved state for a note without a status", () => {
+    expect(noteView(note, "done")).toEqual({ running: false, status: "done" });
+    expect(noteView(note, undefined)).toEqual({ running: false, status: undefined });
+  });
+});
+
+describe("applyThreadEvent", () => {
+  const notes: PlanThread[] = [
+    { sessionId: "kid", summary: "A", anchor: null, planId: "p1", status: "failed", report: { text: "Old.", at: 1 } },
+    { sessionId: "other", summary: "B", anchor: null },
+  ];
+
+  it("sets the status and report of the note for that thread, and nothing else", () => {
+    const next = applyThreadEvent(notes, { sessionId: "kid", planId: "p1", status: "done", report: { text: "Fine.", at: 9 } });
+    expect(next[0]).toEqual({ sessionId: "kid", summary: "A", anchor: null, planId: "p1", status: "done", report: { text: "Fine.", at: 9 } });
+    expect(next[1]).toBe(notes[1]);
+  });
+
+  it("drops the old report when the event has none yet", () => {
+    const next = applyThreadEvent(notes, { sessionId: "kid", status: "unfinished", report: null });
+    expect(next[0]).toEqual({ sessionId: "kid", summary: "A", anchor: null, planId: "p1", status: "unfinished" });
+  });
+
+  it("changes nothing for a thread or plan it has no note for", () => {
+    expect(applyThreadEvent(notes, { sessionId: "nope", status: "done", report: null })).toBe(notes);
+    expect(applyThreadEvent(notes, { sessionId: "kid", planId: "p2", status: "done", report: null })).toBe(notes);
   });
 });
 

@@ -1,16 +1,18 @@
-import { Button, Paper } from "@mui/material";
-import { threadLabel, type ThreadStatus } from "./planThread";
+import { Box, Button, CircularProgress, Paper, Typography } from "@mui/material";
+import { threadLabel, type NoteView } from "./planThread";
 
-// The one-line note where a plan moved out to its own session (a thread):
-// "Running in a thread: <summary>", or Done / Failed / Not finished once the
-// thread's saved state is known. A click opens the thread.
+// The note where a plan moved out to its own session (a thread): one line,
+// "Running in a thread: <summary>" with a spinner while the thread's run is
+// going, then "Done / Failed / Not finished in a thread: <summary>" and the
+// thread's short report under it once the run has ended (see noteView). A click
+// opens the thread.
 export default function ThreadNote({
   summary,
-  status,
+  view,
   onOpen,
 }: {
   summary: string;
-  status: ThreadStatus | undefined;
+  view: NoteView;
   onOpen: () => void;
 }) {
   return (
@@ -18,10 +20,20 @@ export default function ThreadNote({
       <Button
         size="small"
         onClick={onOpen}
-        disabled={status === "missing"}
+        disabled={view.status === "missing"}
         sx={{ textTransform: "none", justifyContent: "flex-start", textAlign: "left", width: "100%" }}
       >
-        {threadLabel(status, summary)}
+        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            {view.running && <CircularProgress size={14} sx={{ flexShrink: 0 }} aria-label="Running" />}
+            <span>{threadLabel(view.status, summary)}</span>
+          </Box>
+          {view.report && (
+            <Typography variant="caption" color="text.secondary" sx={{ textAlign: "left" }}>
+              {view.report}
+            </Typography>
+          )}
+        </Box>
       </Button>
     </Paper>
   );
