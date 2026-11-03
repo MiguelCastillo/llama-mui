@@ -2,9 +2,10 @@
 // checkout: create_worktree makes a git worktree on a new branch inside the
 // session's folder, remove_worktree takes it away. A session's worktrees/ folder
 // is the one place the model may change files without asking (see
-// inSessionWorktrees in disk.ts), so the user is asked once, here, when one is
-// made or removed: that also changes the repo's own .git (a branch, and the
-// worktree's entry).
+// inSessionWorktrees in disk.ts). Turning the Worktrees tool group on is the
+// user's consent to create one there without being asked each time; it also
+// changes the repo's own .git (a branch, and the worktree's entry). Removing
+// one still asks, because that deletes a folder.
 //
 // A worktree holds exactly the files git tracks at the commit it starts from.
 // Ignored and untracked files (node_modules, usually .env) aren't in it, and a
@@ -47,22 +48,44 @@ const exists = (p: string) =>
     () => false,
   );
 
-// Becomes a folder name and a branch name, so only plain ones pass.
-function checkName(name: string): string {
+// Becomes a folder name and a branch name, so only plain ones pass: no path
+// separators, no "..", never absolute, and the first character is a letter or
+// digit, so it can't start with "-" (git would read it as an option) or ".".
+export function checkName(name: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(name) || name.includes("..") || name.endsWith(".lock")) {
     throw new ToolError(`"${name}" isn't a usable worktree name: use letters, digits, ".", "_" and "-", up to 48`);
   }
   return name;
 }
 
-// The session's worktrees folder. The session has to have an id, which chat
-// sends with every call.
-function worktreesFolder(ctx: ToolContext): string {
+// The session's worktrees folder: ~/.llama-mui/sessions/<session id>/worktrees.
+// It's built from the open session's id and from nothing else. Without a valid
+// id there is no folder, and no other place is used instead.
+export function worktreesFolder(ctx: ToolContext): string {
+  if (!ctx.chatId) {
+    throw new ToolError(
+      "This session has no folder for worktrees: no session id came with this call. Worktrees can only be made " +
+        "inside the open session's own folder, so open or start a chat session and try again.",
+    );
+  }
   try {
     return path.join(sessionFolder(ctx.chatId), "worktrees");
   } catch {
-    throw new ToolError("This session has no folder for worktrees");
+    throw new ToolError("This session has no folder for worktrees: its session id isn't valid. Reopen the chat session and try again.");
   }
+}
+
+// Where the worktree called `name` goes: always a direct child of the session's
+// worktrees folder. checkName already rules out anything else; the check on the
+// resulting path is a second line of defence, so a change to one can't open a
+// way out.
+export function worktreeTarget(ctx: ToolContext, name: string): string {
+  const folder = worktreesFolder(ctx);
+  const target = path.join(folder, checkName(name));
+  if (target === folder || !isInside(target, folder) || path.dirname(target) !== folder) {
+    throw new ToolError(`"${name}" would put the worktree outside this session's folder`);
+  }
+  return target;
 }
 
 // Only repos inside the user's home, and never anything inside ~/.llama-mui
@@ -76,12 +99,13 @@ async function checkRepoLocation(repo: string, given: string) {
 const createWorktree: ToolSpec = {
   name: "create_worktree",
   group: "worktree",
-  label: "Create worktrees",
-  summary: "Make a git worktree of a repo on a new branch, to work in without prompts.",
+  label: "Create worktrees without asking",
+  summary:
+    "Turning this on lets the model create git worktrees in this session's own folder without asking, which also adds a branch to the repo.",
   definition: fn(
     "create_worktree",
-    "Make a git worktree of a repo in your home folder, on a new branch, in this session's own folder. The user " +
-      "approves it once; after that you can read, write and run commands in it without being asked. " +
+    "Make a git worktree of a repo in your home folder, on a new branch, in this session's own folder. It is " +
+      "made without asking the user, and you can read, write and run commands in it without being asked. " +
       "It holds only the files git tracks, so install dependencies before running tests. " +
       "Returns its path: use it as cwd for run_command.",
     {
@@ -110,7 +134,7 @@ const createWorktree: ToolSpec = {
 
     const name = checkName(String(args.name ?? path.basename(top)));
     const branch = `llama/${name}`;
-    const target = path.join(worktreesFolder(ctx), name);
+    const target = worktreeTarget(ctx, name);
     if (await exists(target)) throw new ToolError(`${target} already exists; pick another name`);
     if (await gitOk(top, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`)) {
       throw new ToolError(`The branch ${branch} already exists in ${top}; pick another name`);
@@ -120,13 +144,12 @@ const createWorktree: ToolSpec = {
       throw new ToolError(`${base} isn't a commit in ${top}`);
     }
 
-    requireApproval(ctx, { type: "worktree", action: "create", repo: top, branch, path: target });
     await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     await git(top, "worktree", "add", "-b", branch, target, base);
     return (
       `Created a worktree of ${top} at ${target} on a new branch ${branch}, from ${base}. ` +
       "It holds only the files git tracks, so install dependencies before running tests. " +
-      `Use ${target} as cwd for run_command; files there need no approval.`
+      `Use ${target} as cwd for run_command; you can change files there without asking.`
     );
   },
 };

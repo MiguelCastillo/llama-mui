@@ -20,7 +20,7 @@ works, and this file says how to change it.
   - the path checks and access prompts in `server/disk.ts` and `server/write.ts`,
     including the `sessions/<id>/worktrees` exception;
   - the `settings.json` block (`isSettingsFile`);
-  - the home-folder rule in `create_worktree`, and the approval that tool asks for.
+  - the home-folder rule in `create_worktree`, and the approval `remove_worktree` asks for.
 
   Don't add to this list without saying so here.
 

@@ -304,7 +304,7 @@ export async function runTurn(
                     approval.type === "change"
                       ? `Error: the user didn't approve this change to ${approval.path}; nothing was written`
                       : approval.type === "worktree"
-                        ? `Error: the user didn't approve ${approval.action === "create" ? "creating" : "removing"} the worktree ${approval.path}; nothing changed`
+                        ? `Error: the user didn't approve removing the worktree ${approval.path}; nothing changed`
                         : "Error: the user didn't approve running this command; it didn't run",
                 };
                 break;

@@ -421,7 +421,8 @@ export const saveInstructions = (text: string) => call<Instructions>("PUT", "/ap
 export const resetInstructions = () => call<Instructions>("DELETE", "/api/instructions");
 
 // Something a tool wants to do that the user approves first: a change to a
-// file, a shell command, or a git worktree made or removed.
+// file, a shell command, or a git worktree being removed (making one needs no
+// approval).
 export type Approval =
   | {
       type: "change";
@@ -431,7 +432,7 @@ export type Approval =
       diff: string;
     }
   | { type: "command"; command: string; cwd: string }
-  | { type: "worktree"; action: "create" | "remove"; repo: string; branch: string; path: string };
+  | { type: "worktree"; action: "remove"; repo: string; branch: string; path: string };
 
 // Text for the model, a path outside the attachments that the user must allow
 // before the call can run, or something the user must approve.

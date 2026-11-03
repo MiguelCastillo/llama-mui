@@ -120,10 +120,12 @@ The **Worktrees** group (`server/worktree.ts`) has `create_worktree` and
 `remove_worktree`. A worktree is a copy of a git repo's tracked files on a new
 branch (`llama/<name>`), made in the session's own folder,
 `~/.llama-mui/sessions/<id>/worktrees/<name>`. The repo has to be inside your
-home folder and not inside `~/.llama-mui`. You approve each one being made or
-removed, since that also changes the repo's own `.git`; after that the model
-reads, writes and runs commands (pass the worktree as `cwd`) in it with no
-more prompts. That `worktrees/` folder is the only place the model may change
+home folder and not inside `~/.llama-mui`. Turning the group on lets the model
+create worktrees in that folder without asking, which also adds a branch to the
+repo's own `.git`; it can only ever make them inside the open session's folder,
+and with no open session it fails instead. You approve a worktree being removed,
+not made. The model reads, writes and runs commands (pass the worktree as
+`cwd`) in it with no prompts. That `worktrees/` folder is the only place the model may change
 files unasked: the rest of a session's folder, `session.json` included, asks
 like any other path. A worktree holds only what git tracks, so `node_modules`
 and ignored files aren't there, and a committed secret is. Removing one is

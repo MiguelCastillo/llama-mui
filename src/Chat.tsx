@@ -1989,16 +1989,12 @@ function ApprovalPrompt({ approval, onDecide }: { approval: Approval; onDecide: 
         </>
       ) : approval.type === "worktree" ? (
         <>
-          <Typography variant="body2">
-            The model wants to {approval.action === "create" ? "create" : "remove"} a git worktree:
-          </Typography>
+          <Typography variant="body2">The model wants to remove a git worktree:</Typography>
           <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere", my: 0.5 }}>
             {approval.path}
           </Typography>
           <Typography variant="caption" color="text.secondary" component="div">
-            {approval.action === "create"
-              ? `A copy of the files ${approval.repo} tracks, on a new branch ${approval.branch}. It also adds that branch to the repo. After this, the model works in the copy without being asked.`
-              : `Of ${approval.repo}. The branch ${approval.branch} stays, with its commits.`}
+            Of {approval.repo}. The branch {approval.branch} stays, with its commits.
           </Typography>
         </>
       ) : (

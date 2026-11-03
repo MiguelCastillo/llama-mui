@@ -18,6 +18,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { toolRoutes } = await import("../tools.ts");
 const { sessionsDir } = await import("../disk.ts");
+const { worktreeTarget, worktreesFolder } = await import("../worktree.ts");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -47,12 +48,6 @@ const call = async (name: string, args: object, chatId = "sess-1", approved?: ob
   return JSON.parse(text);
 };
 
-// Asks, then answers yes to what was shown.
-const approve = async (name: string, args: object, chatId = "sess-1") => {
-  const first = await call(name, args, chatId);
-  return first.needsApproval ? call(name, args, chatId, first.needsApproval) : first;
-};
-
 const worktree = (name: string, chatId = "sess-1") => path.join(sessionsDir, chatId, "worktrees", name);
 const exists = (p: string) => stat(p).then(() => true, () => false);
 
@@ -60,21 +55,18 @@ await makeRepo(repo);
 git(repo, "branch", "llama/ask-branch-taken");
 
 describe("create_worktree", () => {
-  it("shows the repo, branch and path first, and changes nothing until approved", async () => {
-    const first = await call("create_worktree", { repo, name: "ask" });
-    expect(first.needsApproval).toEqual({
-      type: "worktree",
-      action: "create",
-      repo,
-      branch: "llama/ask",
-      path: worktree("ask"),
-    });
-    expect(await exists(worktree("ask"))).toBe(false);
-    expect(git(repo, "branch", "--list", "llama/ask")).toBe("");
+  it("makes the worktree at once, without asking, and says where", async () => {
+    const out = await call("create_worktree", { repo, name: "ask" });
+    expect(out.needsApproval).toBeUndefined();
+    expect(out.needsAccess).toBeUndefined();
+    expect(out.result).toContain(`at ${worktree("ask")}`);
+    expect(out.result).not.toMatch(/approv/i);
+    expect(await exists(worktree("ask"))).toBe(true);
+    expect(git(repo, "branch", "--list", "llama/ask")).toContain("llama/ask");
   });
 
-  it("makes the worktree on a new branch after approval, holding only tracked files", async () => {
-    const { result } = await approve("create_worktree", { repo, name: "made" });
+  it("makes the worktree on a new branch, holding only tracked files", async () => {
+    const { result } = await call("create_worktree", { repo, name: "made" });
     expect(result).toContain("Created a worktree");
     expect(await readFile(path.join(worktree("made"), "README.md"), "utf8")).toBe("hello\n");
     expect(await exists(path.join(worktree("made"), ".env"))).toBe(false);
@@ -82,7 +74,7 @@ describe("create_worktree", () => {
   });
 
   it("lets the model write in it with no approval", async () => {
-    await approve("create_worktree", { repo, name: "free" });
+    await call("create_worktree", { repo, name: "free" });
     const out = await call("write_file", { path: path.join(worktree("free"), "src", "a.ts"), content: "x\n" });
     expect(out.result).toContain("Created");
     expect(out.needsApproval).toBeUndefined();
@@ -91,8 +83,8 @@ describe("create_worktree", () => {
 
   it("uses the repo's root when pointed at a folder inside it", async () => {
     await mkdir(path.join(repo, "src"), { recursive: true });
-    const first = await call("create_worktree", { repo: path.join(repo, "src"), name: "from-src" });
-    expect(first.needsApproval.repo).toBe(repo);
+    const out = await call("create_worktree", { repo: path.join(repo, "src"), name: "from-src" });
+    expect(out.result).toContain(`worktree of ${repo} at ${worktree("from-src")}`);
   });
 
   it("starts from the base it is given", async () => {
@@ -100,7 +92,7 @@ describe("create_worktree", () => {
     await writeFile(path.join(repo, "later.txt"), "later\n");
     git(repo, "add", "later.txt");
     git(repo, "commit", "-q", "-m", "later");
-    await approve("create_worktree", { repo, name: "based", base: before });
+    await call("create_worktree", { repo, name: "based", base: before });
     expect(git(worktree("based"), "rev-parse", "HEAD")).toBe(before);
   });
 
@@ -113,7 +105,10 @@ describe("create_worktree", () => {
     ["a branch that already exists", async () => ({ repo, name: "ask-branch-taken" }), "already exists"],
     ["a name with ..", async () => ({ repo, name: "a..b" }), "isn't a usable worktree name"],
     ["a name that starts with a dash", async () => ({ repo, name: "-x" }), "isn't a usable worktree name"],
-    ["a name with a path in it", async () => ({ repo, name: "../x" }), "isn't a usable worktree name"],
+    ["a name that climbs out with ../", async () => ({ repo, name: "../x" }), "isn't a usable worktree name"],
+    ["an absolute path as the name", async () => ({ repo, name: "/tmp/x" }), "isn't a usable worktree name"],
+    ["a name with a separator", async () => ({ repo, name: "a/b" }), "isn't a usable worktree name"],
+    ["a name with a backslash", async () => ({ repo, name: "a\\b" }), "isn't a usable worktree name"],
     ["a base that is not a commit", async () => ({ repo, name: "badbase", base: "nope" }), "isn't a commit"],
     ["a base that looks like an option", async () => ({ repo, name: "optbase", base: "--help" }), "isn't a commit"],
   ])("refuses %s, without asking", async (_label, args, message) => {
@@ -127,11 +122,53 @@ describe("create_worktree", () => {
     const out = await call("create_worktree", { repo, name: "badsession" }, "Bad_Id");
     expect(out.result).toContain("no folder for worktrees");
   });
+
+  it("refuses with no session id, and makes nothing anywhere else", async () => {
+    const out = await call("create_worktree", { repo, name: "nosession" }, "");
+    expect(out.needsApproval).toBeUndefined();
+    expect(out.result).toContain("Error:");
+    expect(out.result).toContain("no session id");
+    expect(git(repo, "branch", "--list", "llama/nosession")).toBe("");
+    for (const stray of [
+      path.join(sessionsDir, "worktrees", "nosession"),
+      path.join(sessionsDir, "nosession"),
+      path.join(home.dir, "worktrees", "nosession"),
+      path.join(process.cwd(), "worktrees", "nosession"),
+    ]) {
+      expect(await exists(stray)).toBe(false);
+    }
+  });
+});
+
+describe("where a worktree goes", () => {
+  const ctx = (chatId: string) => ({ chatId, attachments: [] }) as unknown as Parameters<typeof worktreesFolder>[0];
+
+  it("is the open session's own folder, built from its id", () => {
+    expect(worktreesFolder(ctx("sess-1"))).toBe(path.join(home.dir, ".llama-mui", "sessions", "sess-1", "worktrees"));
+    expect(worktreesFolder(ctx("sess-2"))).toBe(path.join(home.dir, ".llama-mui", "sessions", "sess-2", "worktrees"));
+  });
+
+  it.each(["a", "my-app", "app.v2", "A_b-1"])("puts %s directly inside that folder", (name) => {
+    const folder = worktreesFolder(ctx("sess-1"));
+    expect(worktreeTarget(ctx("sess-1"), name)).toBe(path.join(folder, name));
+  });
+
+  it.each(["../x", "/tmp/x", "a/b", "-x", "..", ".", "", ".hidden", "a/../../x", "x\\..\\y"])(
+    "never makes a target from %j",
+    (name) => {
+      expect(() => worktreeTarget(ctx("sess-1"), name)).toThrow(/isn't a usable worktree name/);
+    },
+  );
+
+  it.each(["", "Bad_Id", "../other", "a/b"])("has no folder for the session id %j, and no other place instead", (chatId) => {
+    expect(() => worktreesFolder(ctx(chatId))).toThrow(/no folder for worktrees/);
+    expect(() => worktreeTarget(ctx(chatId), "fine")).toThrow(/no folder for worktrees/);
+  });
 });
 
 describe("remove_worktree", () => {
   it("refuses a worktree with uncommitted changes", async () => {
-    await approve("create_worktree", { repo, name: "dirty" });
+    await call("create_worktree", { repo, name: "dirty" });
     await writeFile(path.join(worktree("dirty"), "new.txt"), "unsaved\n");
     const out = await call("remove_worktree", { name: "dirty" });
     expect(out.needsApproval).toBeUndefined();
@@ -140,7 +177,7 @@ describe("remove_worktree", () => {
   });
 
   it("shows what goes, then removes the worktree and keeps its branch", async () => {
-    await approve("create_worktree", { repo, name: "clean" });
+    await call("create_worktree", { repo, name: "clean" });
     const first = await call("remove_worktree", { name: "clean" });
     expect(first.needsApproval).toEqual({
       type: "worktree",

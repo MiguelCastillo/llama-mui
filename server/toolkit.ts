@@ -63,8 +63,9 @@ export class LocateNeeded extends Error {
 }
 
 // What a tool wants to do that the user must approve first, as they see it:
-// a change to a file, a shell command, or a git worktree made or removed
-// (which also changes the repo's own .git).
+// a change to a file, a shell command, or a git worktree being removed
+// (which also changes the repo's own .git). Making a worktree needs no
+// approval: turning the Worktrees tools on allows it.
 export type Approval =
   | {
       type: "change";
@@ -74,7 +75,7 @@ export type Approval =
       diff: string;
     }
   | { type: "command"; command: string; cwd: string }
-  | { type: "worktree"; action: "create" | "remove"; repo: string; branch: string; path: string };
+  | { type: "worktree"; action: "remove"; repo: string; branch: string; path: string };
 
 // Thrown until the user approves. Chat runs the call again with the approval
 // it showed, serialized, in ToolContext.approved.

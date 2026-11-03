@@ -80,15 +80,16 @@ const GROUPS: Group[] = [
     id: "worktree",
     label: "Worktrees",
     description:
-      "Make a git worktree of a repo in your home folder, on a new branch, in the session's own folder. You " +
-      "approve each one being made or removed; after that the model works in it without being asked. It holds " +
-      "only the files git tracks.",
+      "Turning this on lets the model create git worktrees of a repo in your home folder, in this session's own " +
+      "folder, without asking you; that also adds a branch to the repo. You approve a worktree being removed, " +
+      "not made. A worktree holds only the files git tracks.",
     instructions:
       "To change a repo without touching the user's own checkout, call create_worktree with the repo's path " +
-      "(it must be in their home folder): the user approves it once, and then you can read, write and run " +
-      "commands in the worktree with no further approval, using its path as cwd. It holds only the files git " +
-      "tracks, so install dependencies before running tests. Remove it with remove_worktree when done; the " +
-      "branch and its commits stay.",
+      "(it must be in their home folder). It makes the worktree on a new branch in this session's own folder " +
+      "without asking the user, and you can then read, write and run commands in it with no further approval, " +
+      "using its path as cwd. It holds only the files git tracks, so install dependencies before running " +
+      "tests. Remove it with remove_worktree when done: that is the one step the user is asked to approve. " +
+      "The branch and its commits stay.",
   },
   {
     id: "terminal",
