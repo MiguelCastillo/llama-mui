@@ -803,7 +803,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // before ticking it off: the model saying it's done isn't enough. First the
   // folders' check commands, then the model check. A step that isn't done gets
   // one retry (to fix what a command reported, or to answer the check), then
-  // waits for the user.
+  // up to MAX_RECOVERY_ROUNDS recovery rounds. A round may end in a question
+  // (the step is "waiting" for the user's answer) or the step fails; a
+  // disputed step waits for the user.
   // The message that asked for the plan: the last one you sent (not a step's)
   // before the update_plan call that wrote it, or before "at:N" for a clone.
   const planRequest = () => {

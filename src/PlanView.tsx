@@ -38,6 +38,7 @@ const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
   done: <CheckCircleIcon fontSize="small" color="success" />,
   failed: <CancelIcon fontSize="small" color="error" />,
   disputed: <HelpOutlineIcon fontSize="small" color="warning" />,
+  waiting: <HelpOutlineIcon fontSize="small" color="warning" />,
 };
 
 export function PlanView({
@@ -98,8 +99,10 @@ export function PlanView({
     });
   const done = steps.filter((s) => s.status === "done").length;
   // A disputed step waits for the user, so Run would only stop on it again.
+  // A waiting step (a question for the user) reruns without an answer on
+  // Continue; "Answer and continue" on the step passes one.
   const next = steps.find((s) => s.status !== "done");
-  const unfinished = next?.status === "pending" || next?.status === "failed";
+  const unfinished = next?.status === "pending" || next?.status === "failed" || next?.status === "waiting";
   const started = steps.some((s) => s.status !== "pending");
 
   // Rerunning a step leaves the ones after it done, but built on the old version.
@@ -207,6 +210,24 @@ export function PlanView({
                       {s.note}
                     </Typography>
                   )}
+                  {s.status === "waiting" && s.note && (
+                    <Typography variant="caption" color="warning.main" component="div" sx={{ whiteSpace: "pre-wrap" }}>
+                      {s.note}
+                    </Typography>
+                  )}
+                  {s.status === "waiting" && !running && !readOnly && (
+                    <AnswerForm
+                      onAnswer={(answer) => {
+                        onChange?.(
+                          steps.map((st, j) =>
+                            j === i ? { id: st.id, text: st.text, status: "pending", answer, asked: st.note } : st,
+                          ),
+                        );
+                        // changePlan updates the plan synchronously, so the run sees the answer.
+                        onRun?.();
+                      }}
+                    />
+                  )}
                   {s.status === "pending" && s.note && (
                     <Typography variant="caption" color="text.secondary" component="div">
                       {s.note}
@@ -231,7 +252,7 @@ export function PlanView({
                         </IconButton>
                       </Tooltip>
                     )}
-                    {(s.status === "done" || s.status === "failed" || s.status === "disputed") && (
+                    {(s.status === "done" || s.status === "failed" || s.status === "disputed" || s.status === "waiting") && (
                       <Tooltip title="Rerun this step">
                         <IconButton size="small" onClick={() => rerun(i)}>
                           <ReplayOutlinedIcon fontSize="small" />
@@ -275,6 +296,35 @@ export function PlanView({
       )}
       {proposal && onProposal && <ProposalView steps={steps} proposal={proposal} onAnswer={onProposal} />}
     </Paper>
+  );
+}
+
+// The user's answer to a waiting step's question. The text is local state, so
+// typing doesn't change the plan until "Answer and continue".
+function AnswerForm({ onAnswer }: { onAnswer: (answer: string) => void }) {
+  const [text, setText] = useState("");
+  const answer = text.trim();
+  return (
+    <Stack direction="row" spacing={1} sx={{ mt: 0.75, alignItems: "flex-start" }}>
+      <TextField
+        size="small"
+        fullWidth
+        multiline
+        maxRows={4}
+        label="Your answer"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <Button
+        size="small"
+        variant="contained"
+        disabled={!answer}
+        onClick={() => onAnswer(answer)}
+        sx={{ flexShrink: 0, whiteSpace: "nowrap", mt: 0.5 }}
+      >
+        Answer and continue
+      </Button>
+    </Stack>
   );
 }
 

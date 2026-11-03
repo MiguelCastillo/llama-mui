@@ -270,6 +270,9 @@ vitest (`npm test`).
 - **Run** (or **Continue**) runs the first step that's pending or not done,
   then the next, until every step is done or one stops. A disputed step (**?**)
   waits for you, so there's no **Continue** until you mark it done or rerun it.
+  A step that asked you something (**waiting**, shown with a help icon) also
+  stops the plan, but it counts as unfinished: answer it (below) or press
+  **Continue**, which reruns it without an answer.
 - Each step is one turn: chat sends "Do step 2 of 4: …" with the plan so far,
   and the model works on that step only, with all its tools.
 - Each step starts with a **fresh context**: the model gets the step, the
@@ -343,8 +346,8 @@ vitest (`npm test`).
   asked for "CHECK RIGHT" or "CHECK WRONG", the model showed the step was done
   and then wrote "CHECK RIGHT".
   - **Check right** (or no answer): it fixes the step, and the step is
-    checked again. Still not done, and the step gets ✗ with "Not done: …"
-    under it, and the plan stops.
+    checked again. Still not done, and the step gets up to **2 recovery
+    rounds** (below) instead of stopping the plan.
   - **Check wrong**, with evidence: it read files during the step (in the
     step's turn or the retry), quoted lines,
     and every quoted line is in what it read (`weighDispute`; inline code
@@ -356,9 +359,29 @@ vitest (`npm test`).
     missing. It's the model's word against the check's, so it doesn't count.
   - **Check wrong**, but it changed files anyway: the step is checked again,
     as if it had agreed.
+- **Recovery rounds**: a step that's still not done after the retry may be
+  blocked by something outside it (a merge stopped by an uncommitted edit, a
+  wrong branch), so the model gets up to 2 more turns (`MAX_RECOVERY_ROUNDS`;
+  `recoveryPrompt` in `src/agent/plan.ts`). The prompt says what the check
+  found missing and gives the last ~3,000 characters of what the step's
+  commands printed, and asks it to work out why from that and fix it with safe,
+  reversible actions (stash, switch branch, rerun). After each round the
+  check command and the check run again. Not after a disputed step (**?**),
+  which still waits for you as above.
+  - **Fixed**: the step is done and the plan goes on.
+  - **A question**: if the fix would discard someone's work or needs a choice,
+    the model must not act and ends its reply with a line `QUESTION: …`
+    (`parseQuestion`). The step becomes **waiting**, with the question as its
+    note, and the plan stops. Type an answer under the step and press
+    **Answer and continue**: the step reruns, and its prompt says "You asked: …
+    The user answered your question: …", since a step doesn't see its earlier
+    turns.
+  - **Rounds used up**: the step gets ✗ with a short note (about 160
+    characters) and the plan stops.
+  - No round starts if the reply failed or you pressed **Stop**.
 - **Stopped or failed**: if you press **Stop**, or the reply fails, the step
   goes back to pending (with "The reply failed: …" if it did) and the plan
-  stops. **Continue** picks it up again.
+  stops. **Continue** picks it up again. A step's answer is kept.
 - While a plan runs, you can't send messages or switch sessions.
 - What a step asks you while it runs (approve a change or a command, allow a
   folder) shows in the plan card, under that step, and scrolls into view.

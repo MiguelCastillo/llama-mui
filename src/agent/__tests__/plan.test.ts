@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { type ChatMessage, type PlanStep } from "../../api";
-import { planFromCall, stepPrompt, filesChanged, weighDispute, extractContext } from "../plan";
+import {
+  planFromCall,
+  stepPrompt,
+  filesChanged,
+  weighDispute,
+  extractContext,
+  parseQuestion,
+  recoveryPrompt,
+  stepOutput,
+} from "../plan";
 
 // ── planFromCall ────────────────────────────────────────────────────────────
 
@@ -213,6 +222,186 @@ describe("stepPrompt", () => {
     ];
     const prompt = stepPrompt(steps, 0, undefined, undefined, null);
     expect(prompt).not.toContain("What the steps need from the conversation:");
+  });
+
+  it("passes on the user's answer and the question it answers, before the Do step line", () => {
+    const steps: PlanStep[] = [
+      { id: "1", text: "Merge x into main", status: "done" },
+      {
+        id: "2",
+        text: "Merge y into main",
+        status: "pending",
+        asked: "Discard or stash your edit?",
+        answer: "stash it",
+      },
+    ];
+    const prompt = stepPrompt(steps, 1);
+    expect(prompt).toContain("You asked: Discard or stash your edit?");
+    expect(prompt).toContain("The user answered your question: stash it");
+    expect(prompt.indexOf("You asked:")).toBeLessThan(prompt.indexOf("The user answered"));
+    expect(prompt.indexOf("The user answered")).toBeLessThan(prompt.indexOf("Do step 2 of 2"));
+    expect(prompt.split("\n").pop()?.trim()).toBe("Do step 2 of 2: Merge y into main");
+  });
+
+  it("gives the answer of the step being run only, not of other steps", () => {
+    const steps: PlanStep[] = [
+      { id: "1", text: "A", status: "pending", asked: "Q?", answer: "yes" },
+      { id: "2", text: "B", status: "pending" },
+    ];
+    const prompt = stepPrompt(steps, 1);
+    expect(prompt).not.toContain("The user answered");
+    expect(prompt).not.toContain("You asked");
+  });
+
+  it("gives the answer without 'You asked' when the question is unknown", () => {
+    const steps: PlanStep[] = [{ id: "1", text: "A", status: "pending", answer: "yes" }];
+    const prompt = stepPrompt(steps, 0);
+    expect(prompt).toContain("The user answered your question: yes");
+    expect(prompt).not.toContain("You asked");
+  });
+
+  it("leaves out the answer lines when the step has no answer", () => {
+    const steps: PlanStep[] = [{ id: "1", text: "A", status: "waiting", asked: "Q?" }];
+    const prompt = stepPrompt(steps, 0);
+    expect(prompt).not.toContain("The user answered");
+    expect(prompt).not.toContain("You asked");
+  });
+});
+
+// ── parseQuestion ───────────────────────────────────────────────────────────
+
+describe("parseQuestion", () => {
+  it("finds a question on the last line", () => {
+    expect(parseQuestion("It is blocked.\nQUESTION: Discard or stash your edit?")).toBe(
+      "Discard or stash your edit?",
+    );
+  });
+
+  it("returns null when there is no QUESTION line", () => {
+    expect(parseQuestion("I stashed the edit and reran the merge.")).toBeNull();
+    expect(parseQuestion("")).toBeNull();
+  });
+
+  it("is case-insensitive and allows leading spaces", () => {
+    expect(parseQuestion("  question:   Which branch?  ")).toBe("Which branch?");
+  });
+
+  it("uses the last QUESTION line when there are several", () => {
+    expect(parseQuestion("QUESTION: first?\nmore text\nQUESTION: second?")).toBe("second?");
+  });
+
+  it("only takes the question from its own line", () => {
+    expect(parseQuestion("QUESTION: Discard or stash?\nThanks")).toBe("Discard or stash?");
+  });
+
+  it("ignores QUESTION in the middle of a line", () => {
+    expect(parseQuestion("The QUESTION: is open")).toBeNull();
+  });
+
+  it("returns null for QUESTION with nothing after it", () => {
+    expect(parseQuestion("QUESTION:   ")).toBeNull();
+    // Not the next line either.
+    expect(parseQuestion("QUESTION:\nDiscard or stash?")).toBeNull();
+  });
+});
+
+// ── stepOutput ──────────────────────────────────────────────────────────────
+
+describe("stepOutput", () => {
+  const call = (id: string, name: string, args: object): ChatMessage => ({
+    role: "assistant",
+    content: "",
+    toolCalls: [{ id, name, arguments: JSON.stringify(args) }],
+  });
+  const result = (id: string, content: string): ChatMessage => ({ role: "tool", toolCallId: id, content });
+
+  it("is empty when the step called no tools", () => {
+    expect(stepOutput([{ role: "assistant", content: "done" }])).toBe("");
+  });
+
+  it("puts each result under the command that made it", () => {
+    const out = stepOutput([
+      call("c1", "run_command", { command: "git merge --ff-only llama/x" }),
+      result("c1", "error: Your local changes would be overwritten"),
+    ]);
+    expect(out).toBe("$ run_command git merge --ff-only llama/x\nerror: Your local changes would be overwritten");
+  });
+
+  it("names the path for file tools and keeps the order of the results", () => {
+    const out = stepOutput([
+      call("c1", "read_file", { path: "src/a.ts" }),
+      result("c1", "contents"),
+      call("c2", "run_command", { command: "ls" }),
+      result("c2", "a.ts"),
+    ]);
+    expect(out).toBe("$ read_file src/a.ts\ncontents\n\n$ run_command ls\na.ts");
+  });
+
+  it("ignores assistant and user text", () => {
+    const out = stepOutput([
+      { role: "user", content: "Do step 1" },
+      call("c1", "run_command", { command: "pwd" }),
+      result("c1", "/tmp"),
+      { role: "assistant", content: "All done" },
+    ]);
+    expect(out).not.toContain("Do step 1");
+    expect(out).not.toContain("All done");
+    expect(out).toContain("/tmp");
+  });
+
+  it("copes with bad arguments and a result without a call", () => {
+    const bad: ChatMessage = {
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "c1", name: "run_command", arguments: "not json" }],
+    };
+    expect(stepOutput([bad, result("c1", "Error: bad arguments"), result("zz", "orphan")])).toBe(
+      "$ run_command\nError: bad arguments\n\n$ tool\norphan",
+    );
+  });
+});
+
+// ── recoveryPrompt ──────────────────────────────────────────────────────────
+
+describe("recoveryPrompt", () => {
+  it("names the step by its number and says what the check says is missing", () => {
+    const p = recoveryPrompt(2, "main still lacks the commit", "some output");
+    expect(p).toContain("Step 3 is blocked");
+    expect(p).toContain("main still lacks the commit");
+    expect(p).toContain("some output");
+  });
+
+  it("tells the model how to fix it and how to ask", () => {
+    const p = recoveryPrompt(0, "x", "out");
+    expect(p).toMatch(/safe, reversible/);
+    expect(p).toContain("stash");
+    expect(p).toContain("do NOT act");
+    expect(p).toContain("QUESTION: <your question and the options>");
+    expect(p).toContain("one line saying what you changed");
+  });
+
+  it("says so when the step printed nothing", () => {
+    expect(recoveryPrompt(0, "x", "")).toContain("(nothing)");
+  });
+
+  it("keeps all of a short output and does not mark it cut", () => {
+    const p = recoveryPrompt(0, "x", "short output");
+    expect(p).toContain("short output");
+    expect(p).not.toContain("(earlier output cut)");
+  });
+
+  it("keeps the end of a long output, not the start, and marks the cut", () => {
+    const output = "START-MARK" + "a".repeat(5000) + "END-MARK";
+    const p = recoveryPrompt(0, "x", output);
+    expect(p).toContain("(earlier output cut)");
+    expect(p).toContain("END-MARK");
+    expect(p).not.toContain("START-MARK");
+    // About 3000 chars of output, not all 5000.
+    expect(p.length).toBeLessThan(3000 + 1000);
+  });
+
+  it("round-trips: a QUESTION the prompt asks for is found by parseQuestion", () => {
+    expect(parseQuestion("QUESTION: Discard or stash?")).toBe("Discard or stash?");
   });
 });
 

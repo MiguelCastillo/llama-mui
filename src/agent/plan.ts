@@ -99,6 +99,13 @@ export function stepPrompt(
   if (request) parts.push(`The task the plan is for:\n${request}`);
   parts.push(`The plan:\n${list}`);
   if (changed.length) parts.push(`Files earlier steps changed; read what this step builds on:\n${changed.join("\n")}`);
+  // A step the model asked about (status waiting) reruns with a fresh context,
+  // so the question and the user's answer have to come with it.
+  const { asked, answer } = steps[i];
+  if (answer) {
+    if (asked) parts.push(`You asked: ${asked}`);
+    parts.push(`The user answered your question: ${answer}`);
+  }
   parts.push(`Do step ${i + 1} of ${steps.length}: ${steps[i].text}`);
   return parts.join("\n\n");
 }
@@ -297,6 +304,57 @@ export function disputePrompt(i: number, missing: string): string {
     "end with one line: STEP NOT DONE if the check is right, or STEP DONE if the check is wrong. If the " +
     "step isn't done, fix it first. If it is, change nothing."
   );
+}
+
+// What the commands and reads of one step printed, each result under the call
+// that made it (its name and command or path). `messages` is the step's turn.
+export function stepOutput(messages: ChatMessage[]): string {
+  const calls = new Map(messages.flatMap((m) => m.toolCalls ?? []).map((c) => [c.id, c]));
+  return messages
+    .filter((m) => m.role === "tool")
+    .map((m) => {
+      const c = calls.get(m.toolCallId!);
+      let a: any = {};
+      try {
+        a = JSON.parse(c?.arguments ?? "{}");
+      } catch {
+        // The result says the arguments were bad.
+      }
+      const what = c ? `${c.name} ${a?.command ?? a?.path ?? ""}`.trim() : "tool";
+      return `$ ${what}\n${m.content}`;
+    })
+    .join("\n\n");
+}
+
+// How much of a step's output a recovery round sees. The end: what a failed
+// command printed last is what blocks the step (clip keeps the start).
+const MAX_RECOVERY_OUTPUT = 3000;
+
+// After the dispute retry the check still says the step isn't done: the step
+// is blocked, and the model works out why from what its commands printed.
+// A fix that would discard someone's work, or needs a choice, is a question
+// for the user: parseQuestion finds it.
+export function recoveryPrompt(i: number, missing: string, output: string): string {
+  const shown =
+    output.length > MAX_RECOVERY_OUTPUT ? `(earlier output cut)\n${output.slice(-MAX_RECOVERY_OUTPUT)}` : output;
+  return (
+    `Step ${i + 1} is blocked: the check says it isn't done: ${missing}\n\n` +
+    `What the commands of this step printed:\n${shown || "(nothing)"}\n\n` +
+    "Work out why it's blocked from what the commands printed. Fix it with safe, reversible actions " +
+    "(stash, switch branch, rerun the command). If the fix would discard someone's work or needs a " +
+    "choice, do NOT act: end with one line, `QUESTION: <your question and the options>`. Otherwise, " +
+    "fix it and end with one line saying what you changed."
+  );
+}
+
+// The question a recovery reply ends with: its last line starting with
+// "QUESTION:", or null. Parsed like MISSING in reviewStep.
+export function parseQuestion(text: string): string | null {
+  // [ \t], not \s: \s would run over the line break and take the next line (or
+  // nothing, for an empty "QUESTION:") as the question.
+  const found = [...text.matchAll(/^[ \t]*QUESTION:[ \t]*(\S.*)$/gim)];
+  const last = found[found.length - 1];
+  return last ? last[1].trim() : null;
 }
 
 export interface Dispute {

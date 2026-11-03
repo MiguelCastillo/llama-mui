@@ -523,9 +523,16 @@ export interface PlanStep {
   text: string;
   // "disputed": the check said it isn't done, the model showed it is (see
   // Plan.tsx, weighDispute), and the user decides.
-  status: "pending" | "running" | "done" | "failed" | "disputed";
-  // Why a check failed or the step stopped, shown under the step.
+  // "waiting": the step is blocked and the model asked the user a question
+  // (the note); the user's answer goes in `answer` and the step reruns.
+  status: "pending" | "running" | "done" | "failed" | "disputed" | "waiting";
+  // Why a check failed or the step stopped, shown under the step. While
+  // waiting, it is the question.
   note?: string;
+  // The user's answer to a waiting step's question, and the question it
+  // answers. stepPrompt passes both on when the step reruns.
+  answer?: string;
+  asked?: string;
   // An earlier step was rerun after this one was done, so it may be out of date.
   stale?: boolean;
   // How long the step took, from its "Do step" message until its check finished,

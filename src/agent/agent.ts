@@ -410,6 +410,9 @@ import {
   weighDispute,
   disputeHolds,
   disputeNote,
+  recoveryPrompt,
+  parseQuestion,
+  stepOutput,
   type WholeFile,
   type Dispute,
 } from "./plan";
@@ -493,8 +496,17 @@ export interface RunPlanCallbacks {
   toolDefinitions: unknown[];
 }
 
+// Rounds a blocked step gets to fix itself after the dispute retry, before it
+// fails. A round may end in a question for the user instead (status waiting).
+export const MAX_RECOVERY_ROUNDS = 2;
+// Room for the note of a step that ran out of rounds: the check's words can be long.
+const MAX_FAILED_NOTE = 160;
+const shorten = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+
 // Runs the plan's open steps in order, one turn each, and checks every step
-// before ticking it off.
+// before ticking it off. A step the check still calls unfinished after the
+// dispute retry gets recovery rounds (see recoveryPrompt) rather than ending
+// the plan: it either gets fixed, asks the user a question and waits, or fails.
 export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
   const {
     connector, model, abort, planRunningRef, setPlanRunning,
@@ -512,7 +524,11 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       const i = steps?.findIndex((st) => st.status !== "done") ?? -1;
       if (!steps || i < 0 || steps[i].status === "disputed") break;
       const { id, text } = steps[i];
-      setStep(id, { status: "running" });
+      // The user's answer to this step's question (see stepPrompt). setStep
+      // patches replace the rest, so a patch that leaves the step to run again
+      // carries them, or a rerun would lose the answer.
+      const keep = steps[i].answer ? { answer: steps[i].answer, asked: steps[i].asked } : {};
+      setStep(id, { status: "running", ...keep });
       const start = msgs.length;
       const startedAt = performance.now();
       const took = () => performance.now() - startedAt;
@@ -562,11 +578,46 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
           models, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
         }) : null;
       }
+      // Still not done after the dispute retry: the step is blocked. Recovery
+      // rounds, never after a failed reply or an aborted run (check null).
+      let asking = false;
+      for (let round = 0; check && !check.done && round < MAX_RECOVERY_ROUNDS; round++) {
+        const roundStart = msgs.length;
+        r = await reply(recoveryPrompt(i, check.missing ?? "", stepOutput(msgs.slice(start))), msgs, { planStep: id, from });
+        msgs = r.messages;
+        if (!r.ok) {
+          check = null;
+          break;
+        }
+        const said = [...msgs.slice(roundStart)].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content ?? "";
+        const question = parseQuestion(said);
+        if (question) {
+          setStep(id, { status: "waiting", note: question, ms: took() });
+          asking = true;
+          break;
+        }
+        failed = await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError);
+        if (failed) {
+          setStep(id, { status: "failed", note: `\`${failed.command}\` fails: ${commandSummary(failed.output)}`, ms: took() });
+          asking = true;
+          break;
+        }
+        check = await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep), {
+          connector, model, setAbort, setError, modelLoaded,
+          models, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
+        });
+      }
+      // The step waits for an answer, or failed on a command: the plan stops.
+      if (asking) break;
       if (!check) {
-        setStep(id, r.error ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}` } : { status: "pending" });
+        setStep(id, r.error
+          ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}`, ...keep }
+          : { status: "pending", ...keep });
         break;
       }
-      setStep(id, check.done ? { status: "done", ms: took() } : { status: "failed", note: check.missing, ms: took() });
+      setStep(id, check.done
+        ? { status: "done", ms: took() }
+        : { status: "failed", note: shorten(check.missing ?? "", MAX_FAILED_NOTE), ms: took() });
       if (!check.done) break;
     }
   } finally {
