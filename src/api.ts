@@ -109,6 +109,11 @@ export interface ChatMessage {
   // server/tools.ts), sent before `note` when it changed since the last one.
   // Saved for the same reason as `note`; shown only on request.
   update?: string;
+  // On a user message sent while a plan ran: the step that saw it (counting
+  // from 1), or notSeen if the plan ended before another step started. Shown
+  // under the message; never sent to the model.
+  seenByStep?: number;
+  notSeen?: boolean;
 }
 
 export interface StepStats {
@@ -684,7 +689,7 @@ export const saveSession = (s: Session) => {
 // which session the plan runs in (`sessionId`): the session itself, or the new
 // thread it moved to. `revision` is that session's.
 export const sendCommand = (id: string, name: string, body: Record<string, unknown> = {}) =>
-  call<{ ok: true; revision: number; sessionId?: string }>("POST", `/api/sessions/${id}/commands/${name}`, body);
+  call<{ ok: true; revision: number; sessionId?: string; step?: number; stepId?: string; messageId?: string }>("POST", `/api/sessions/${id}/commands/${name}`, body);
 
 // The server wrote this session once (not a save from this page): `revision` is
 // the new count. If it is the next one after what this page knew, nothing else

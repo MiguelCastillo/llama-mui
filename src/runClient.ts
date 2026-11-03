@@ -1,7 +1,7 @@
 // The page's side of a plan's run. The run is on the server (server/runners.ts);
 // this module is a view of it: it listens to the server's events, keeps one view
 // per session with a run, and sends the user's commands (run, pause, resume,
-// stop, approve, answer) as ordinary requests. No React in this file.
+// stop, approve, answer, message) as ordinary requests. No React in this file.
 //
 // Two streams, both opened by the browser's EventSource, which opens them again
 // by itself if the connection drops (every open starts with a `snapshot` that
@@ -56,9 +56,12 @@ export interface RunnerEvent {
 interface WireRun {
   status: Exclude<RunnerView["status"], "stopped">;
   startedAt: number;
+  // Missing: a plan.
+  kind?: "turn";
   ask?: { id: string; kind: "access" | "location" | "approval"; details: any };
   streaming?: boolean;
   error?: string;
+  notes?: { id: string; text: string; step: number; stepId: string }[];
 }
 
 interface Live {
@@ -131,12 +134,14 @@ function askOf(l: Live): RunnerView["ask"] {
 function viewOf(l: Live): RunnerView {
   return {
     sessionId: l.id,
+    kind: l.run.kind ?? "plan",
     session: l.session,
     status: l.run.status,
     ask: askOf(l),
     error: l.commandError ?? l.run.error ?? null,
     streaming: !!l.run.streaming,
     startedAt: l.run.startedAt,
+    notes: (l.run.notes ?? []).map(({ id, text, step }) => ({ id, text, step })),
   };
 }
 
@@ -211,12 +216,14 @@ function endRun(id: string, error?: string | null): Promise<void> {
     if (lives.has(id)) return;
     const view: RunnerView = {
       sessionId: id,
+      kind: l.run.kind ?? "plan",
       session,
       status: "stopped",
       ask: null,
       error: error ?? null,
       streaming: false,
       startedAt: l.run.startedAt,
+      notes: [],
     };
     const heard = [...(listeners.get(id) ?? [])];
     for (const fn of heard) fn(view);
@@ -370,6 +377,28 @@ export const resume = (id: string) => quiet(sendCommand(id, "resume"));
 export async function stop(id: string): Promise<void> {
   await quiet(sendCommand(id, "stop"));
   await waitUntil(() => !lives.has(id) && !ending.has(id), STOP_WAIT_MS);
+}
+
+// A message for the running plan. The server folds it in before the next step
+// and answers with which step that is (the run's view lists it as a note until
+// then); with no step left it refuses, an ApiError with the reason in plain
+// words, and the caller keeps the text where the user typed it.
+export async function sendMessage(id: string, text: string): Promise<{ step: number; messageId: string }> {
+  const r = await sendCommand(id, "message", { text });
+  return { step: r.step!, messageId: r.messageId! };
+}
+
+// A message to a session with no run: the server runs one chat reply (a turn)
+// and streams it as events, so the view shows kind "turn" until it ends. The
+// session must be saved first, as for a plan: the history is what is saved
+// (Resend saves it cut short), and `text` is the new message. `planning`: the
+// reply only writes a plan. Throws an ApiError (a plain refusal: a reply is
+// already streaming, the server isn't in the list any more); the caller keeps
+// the text where the user typed it. Answers once the run shows.
+export async function sendChat(id: string, text: string, options: RunOptions & { planning: boolean }): Promise<void> {
+  const before = generation.get(id) ?? 0;
+  await sendCommand(id, "message", { text, ...options });
+  await waitUntil(() => (generation.get(id) ?? 0) !== before, START_WAIT_MS);
 }
 
 // Yes or no to an access or approval question (a no also turns down a

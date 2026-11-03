@@ -33,10 +33,24 @@ export interface RunAsk {
   details: unknown;
 }
 
+// A message the user sent to the running plan that no step has seen yet: what
+// they typed (their own words, nothing secret), and the step that will see it.
+export interface RunNote {
+  id: string;
+  text: string;
+  step: number; // counting from 1
+  stepId: string;
+}
+
 export interface RunState {
   status: RunStatus;
   startedAt: number;
+  // "turn": the run is one chat reply (a message sent to a session with no
+  // plan running), not a plan. Missing means a plan, as in older records.
+  kind?: "turn";
   ask?: RunAsk;
+  // Messages waiting for the next step (see runners.ts, sendNote).
+  notes?: RunNote[];
   // A request is in flight (a step's reply or its check).
   streaming?: boolean;
   // What went wrong, in the run's plain words (never a key: the run doesn't have one).
@@ -231,7 +245,7 @@ export function save(id: string, session: any): Promise<Saved> {
 // than writing its older copy over it.
 export function beginRun(
   id: string,
-  opts: { status?: RunStatus; session?: () => any; expectRevision?: number } = {},
+  opts: { status?: RunStatus; session?: () => any; expectRevision?: number; kind?: "plan" | "turn" } = {},
 ): Promise<RunState> {
   return locked(id, async () => {
     if (runs.has(id)) throw new HttpError(409, "This plan is already running.", { reason: "already running" });
@@ -243,7 +257,10 @@ export function beginRun(
         revision: revisionOf(prev),
       });
     }
-    const live: Live = { state: { status: opts.status ?? "running", startedAt: Date.now() }, session: opts.session };
+    const live: Live = {
+      state: { status: opts.status ?? "running", startedAt: Date.now(), ...(opts.kind === "turn" ? { kind: "turn" as const } : {}) },
+      session: opts.session,
+    };
     if (live.session) live.sent = copyForEvents(live.session());
     runs.set(id, live);
     try {
@@ -261,12 +278,16 @@ export function beginRun(
 // whether a request is in flight and the error shown (`error: null` clears it).
 export function updateRun(
   id: string,
-  patch: { status?: RunStatus; ask?: RunAsk | null; streaming?: boolean; error?: string | null },
+  patch: { status?: RunStatus; ask?: RunAsk | null; streaming?: boolean; error?: string | null; notes?: RunNote[] },
 ): Promise<RunState> {
   return locked(id, async () => {
     const live = runs.get(id);
     if (!live) throw new Error(`No run is live for session ${id}`);
     if (patch.status) live.state.status = patch.status;
+    if (patch.notes) {
+      if (patch.notes.length) live.state.notes = JSON.parse(JSON.stringify(patch.notes));
+      else delete live.state.notes;
+    }
     if (patch.streaming !== undefined) {
       if (patch.streaming) live.state.streaming = true;
       else delete live.state.streaming;
@@ -300,6 +321,21 @@ export function endRun(id: string, opts: { error?: string | null } = {}): Promis
     const prev = await readSession(id);
     if (prev) await commit(id, live.session?.() ?? prev, prev, true);
     publish({ type: "status", id, data: opts.error ? { run: null, error: opts.error } : { run: null } });
+  });
+}
+
+// For a restart: a session whose file still has a run record from a process
+// that is gone. `fix` gets a copy of the session and that record and returns the
+// session to save, which is written as the next revision without the record.
+// Nothing happens (false) if the session has no such record, or has a run in
+// this process (a run that began since the server started is not stale).
+export function settleStale(id: string, fix: (session: any, run: RunState) => any): Promise<boolean> {
+  return locked(id, async () => {
+    if (runs.has(id)) return false;
+    const prev = await readSession(id);
+    if (!prev?.run) return false;
+    await commit(id, fix(JSON.parse(JSON.stringify(prev)), prev.run), prev, true);
+    return true;
   });
 }
 

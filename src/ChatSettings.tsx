@@ -41,8 +41,8 @@ export const AttachmentIcon = ({ kind }: { kind: Attachment["kind"] }) =>
 
 type SectionId = "attachments";
 
-// Shown, and used as the error, when attachments are changed while a plan runs.
-export const ATTACHMENTS_LOCKED_NOTE = "Folders can't change while a plan runs. Stop it or wait until it finishes.";
+// Shown, and used as the error, when attachments are changed while a plan or a reply runs.
+export const ATTACHMENTS_LOCKED_NOTE = "Folders can't change while a plan or a reply is running. Stop it or wait until it finishes.";
 
 // Button next to the message box that opens this chat's settings (for now,
 // what's attached). Laid out like Settings, but everything here belongs to

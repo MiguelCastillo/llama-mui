@@ -1,6 +1,10 @@
 // Plan runners, on the server: a plan runs here, not in a page, so it keeps
 // going when the page is closed, reloaded or showing another session. This is
-// the browser's old store of runners moved over, with the hub as its owner:
+// the browser's old store of runners moved over, with the hub as its owner.
+// A chat reply runs here too (startTurn): a message to a session with no plan
+// running is one reply, run as a one-reply run, so every session has one owner
+// whether it is being chatted with or running a plan. The run record says
+// which (`kind`: "turn"). Below, "the run" means either.
 //
 //  - One entry per session with a run. The entry holds the live Session (the
 //    hub reads it through `session`, so a rename during the run goes into it
@@ -22,6 +26,9 @@
 //   pausing  Pause was pressed; the step in flight and its check finish first
 //   paused   the gate holds, before the next step
 //   running
+// A message from the user to the run (sendNote) is folded in before the next
+// step, never queued silently: it is acknowledged with the step that will see
+// it, or refused.
 // When the run is over (for any reason) its entry is gone and the hub's run
 // record with it: the session is the page's again, and the page learns how it
 // ended from the `status` event (run null, and `error` if it went wrong).
@@ -34,7 +41,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type RunPlanCallbacks, runPlan } from "../src/agent/agent.ts";
-import type { PlanStep, Session } from "../src/api.ts";
+import type { ChatMessage, PlanStep, Session } from "../src/api.ts";
 import { planRequestFor } from "../src/planThread.ts";
 import { attachedPaths, makeReply, modelLoaded } from "../src/runnerReply.ts";
 import type { Answer, Ask, RunnerEnv, RunnerHandle } from "../src/runnerTypes.ts";
@@ -69,6 +76,8 @@ export const STOP_WAIT_MS = 10_000;
 
 interface Entry {
   id: string;
+  // A plan, or one chat reply (see startTurn).
+  kind: "plan" | "turn";
   session: Session;
   env: RunnerEnv;
   deps: Required<RunnerDeps>;
@@ -77,6 +86,9 @@ interface Entry {
   // way to resolve it. Only {id, kind, details} reaches the hub.
   ask: { id: string; ask: Ask; decide: (answer: Answer) => void } | null;
   error: string | null;
+  // Messages from the user that no step has seen yet (see sendNote). They are
+  // part of the run record, so a page that connects later shows them.
+  notes: hub.RunNote[];
   controller: AbortController | null;
   // Pause was pressed; `release` is set while the gate holds.
   pauseRequested: boolean;
@@ -107,6 +119,10 @@ export const isRunning = (id: string) => store.has(id);
 
 const notRunning = () => new HttpError(409, "No plan is running in this session.", { reason: "not running" });
 const alreadyRunning = () => new HttpError(409, "This plan is already running.", { reason: "already running" });
+const busy = () =>
+  new HttpError(409, "This session is busy: a reply or a plan is already running in it. Your text is still in the box.", {
+    reason: "already running",
+  });
 
 function liveEntry(id: string): Entry {
   const e = store.get(id);
@@ -139,6 +155,7 @@ function sync(e: Entry): Promise<void> {
       ask: e.ask ? askToPlain(e.ask.id, e.ask.ask) : null,
       streaming: e.controller !== null,
       error: e.error,
+      notes: e.notes,
     };
     const key = JSON.stringify(next);
     if (key === e.pushed) return;
@@ -245,6 +262,93 @@ function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
   });
 }
 
+// ── messages to the run ──────────────────────────────────────────────────────
+
+// The step that starts next: after the one in flight, or the first open one if
+// none is (Pause holds, or a step just ended). The way runPlan picks: the first
+// step that isn't done, and none at all if that one is disputed.
+function nextStep(e: Entry): { id: string; number: number } | null {
+  const plan = e.session.plan ?? [];
+  const from = e.runningStep ? plan.findIndex((st) => st.id === e.runningStep) + 1 : 0;
+  const i = plan.findIndex((st, j) => j >= from && st.status !== "done");
+  if (i < 0 || plan[i].status === "disputed") return null;
+  return { id: plan[i].id, number: i + 1 };
+}
+
+// Tells pages which step will see a note, or (step null) that none did.
+function ack(e: Entry, note: hub.RunNote, seen: { step: number; stepId: string } | { step: null; reason: string }) {
+  hub.publish({ type: "ack", id: e.id, data: { messageId: note.id, text: note.text, ...seen } });
+}
+
+// A message from the user to the running plan. It is folded in at the next step
+// boundary, after the pause gate: the step that starts next gets it in its
+// prompt (a step starts with a fresh context, so it would not see it
+// otherwise), and so does every step after it. The answer, and an `ack` event,
+// say which step that is, at once. Nothing is queued silently: with no step
+// left to start (the last one is running, the plan is stopping) the message is
+// refused (409, reason "no step left") and the page keeps the text. A message
+// that was accepted but whose run ended before another step started is put in
+// the chat marked as not seen (see end).
+export async function sendNote(id: string, text: string): Promise<{ messageId: string; step: number; stepId: string }> {
+  const e = liveEntry(id);
+  const clean = text.trim();
+  if (!clean) throw new HttpError(400, "text must be given");
+  // A reply that is streaming takes no second message: the page asks again
+  // when it is over (or after Stop), as it always did.
+  if (e.kind === "turn") {
+    throw new HttpError(
+      409,
+      "A reply is still streaming in this session. Wait for it to finish, or stop it, then send your message. Your text is still in the box.",
+      { reason: "reply running" },
+    );
+  }
+  const next = e.stopRequested ? null : nextStep(e);
+  if (!next) {
+    throw new HttpError(
+      409,
+      e.stopRequested
+        ? "The plan is stopping, so no step is left to see this message. Your text is still in the box."
+        : "No step is left to see this message: the last one is already running. Your text is still in the box; send it when the plan has finished.",
+      { reason: "no step left" },
+    );
+  }
+  const note: hub.RunNote = { id: randomUUID(), text: clean, step: next.number, stepId: next.id };
+  e.notes = [...e.notes, note];
+  ack(e, note, { step: next.number, stepId: next.id });
+  await sync(e);
+  return { messageId: note.id, step: next.number, stepId: next.id };
+}
+
+// What runPlan calls before each step (RunPlanCallbacks.userNotes): the waiting
+// messages become user messages in the session, marked with the step that saw
+// them, and runPlan puts them in its history and prompts. A note that meant to
+// reach a different step than the one that starts (the plan changed) is
+// acknowledged again with the right one.
+function takeNotes(e: Entry, step: { id: string; number: number }): ChatMessage[] {
+  if (!e.notes.length) return [];
+  const taken = e.notes;
+  e.notes = [];
+  const messages: ChatMessage[] = taken.map((n) => ({ role: "user", content: n.text, seenByStep: step.number }));
+  change(e, (s) => ({ ...s, messages: [...s.messages, ...messages] }));
+  for (const n of taken) if (n.stepId !== step.id) ack(e, n, { step: step.number, stepId: step.id });
+  sync(e);
+  return messages;
+}
+
+// The run is over with messages no step saw: they go into the chat, marked as
+// not seen, so the text is never lost, and pages are told.
+function dropNotes(e: Entry) {
+  if (!e.notes.length) return;
+  const left = e.notes;
+  e.notes = [];
+  const reason = e.stopRequested
+    ? "The plan was stopped before another step started, so no step saw this message."
+    : "The plan ended before another step started, so no step saw this message.";
+  const messages: ChatMessage[] = left.map((n) => ({ role: "user", content: n.text, notSeen: true }));
+  change(e, (s) => ({ ...s, messages: [...s.messages, ...messages] }));
+  for (const n of left) ack(e, n, { step: null, reason });
+}
+
 // ── the run ──────────────────────────────────────────────────────────────────
 
 // Starts the plan of a saved session (its open steps, in order) and answers
@@ -254,18 +358,44 @@ function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
 // `done` settles when the run is over; `finished` after that, once a thread has
 // told its parent how it went (see threadReport.ts), which can take a model
 // request, so nothing but a test waits for it.
-export async function startRunner(
+export function startRunner(
   id: string,
   env: RunnerEnv,
   deps: RunnerDeps = {},
 ): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
-  if (store.has(id)) throw alreadyRunning();
+  return launch(id, env, deps, null);
+}
+
+// One chat reply, run here: the message a page sends to a session with no plan
+// running. The session's saved messages are the history (the page saves before
+// it sends, so a Resend has already cut the failed reply off); `text` is the
+// new message, and `planning` is the page's planning switch (the turn only
+// writes a plan, see PLANNING_NOTE). It is a run like a plan's, with the same
+// owner, status, asks, Stop and events, but one reply long: no steps, so no
+// Pause and no messages to it (see sendNote), and nothing is reported to a
+// parent. Refused (409) if the session has a run already.
+export function startTurn(
+  id: string,
+  env: RunnerEnv,
+  turn: { text: string; planning: boolean },
+  deps: RunnerDeps = {},
+): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
+  return launch(id, env, deps, turn);
+}
+
+async function launch(
+  id: string,
+  env: RunnerEnv,
+  deps: RunnerDeps,
+  turn: { text: string; planning: boolean } | null,
+): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
+  if (store.has(id)) throw turn ? busy() : alreadyRunning();
   const disk = await readSession(id);
   if (!disk) throw new HttpError(404, "No such session");
   // The revision and the run record are the hub's, not part of the session.
   const { revision: _revision, run: _run, ...saved } = disk;
-  const session = { ...saved, planMovedIn: false } as Session;
-  if (!session.plan?.some((st) => st.status === "pending")) {
+  const session = (turn ? { ...saved, messages: Array.isArray(saved.messages) ? saved.messages : [] } : { ...saved, planMovedIn: false }) as Session;
+  if (!turn && !session.plan?.some((st) => st.status === "pending")) {
     throw new HttpError(409, "There's no step left to run in this plan.", { reason: "nothing to run" });
   }
 
@@ -279,11 +409,13 @@ export async function startRunner(
   };
   const e = {
     id,
+    kind: turn ? "turn" : "plan",
     session,
     env,
     deps: resolved,
     ask: null,
     error: null,
+    notes: [],
     controller: null,
     pauseRequested: false,
     release: null,
@@ -297,13 +429,13 @@ export async function startRunner(
     saveAgain: false,
     debounce: null,
     maxWait: null,
-    pushed: JSON.stringify({ status: "running", ask: null, streaming: false, error: null }),
+    pushed: JSON.stringify({ status: "running", ask: null, streaming: false, error: null, notes: [] }),
     chain: Promise.resolve(),
   } as unknown as Entry;
 
   // The hub refuses a second run, or one whose copy of the session is already
   // out of date; either way nothing has started.
-  await hub.beginRun(id, { session: () => e.session, expectRevision: revisionOf(disk) });
+  await hub.beginRun(id, { session: () => e.session, expectRevision: revisionOf(disk), kind: e.kind });
   store.set(id, e);
 
   const planRef = {
@@ -326,6 +458,9 @@ export async function startRunner(
     },
     setAbort: (c) => {
       e.controller = c;
+      // Stop came while this request was being set up (the model check, say):
+      // it ends as soon as it starts.
+      if (c && e.stopRequested) c.abort();
       sync(e);
     },
     askUser: (ask, signal) => askUser(e, ask, signal),
@@ -334,6 +469,21 @@ export async function startRunner(
   };
 
   const reply = resolved.reply(e.handle);
+
+  if (turn) {
+    e.done = (async () => {
+      if (e.stopRequested) return;
+      // The reply streams into the session as it goes (makeReply's callbacks),
+      // and says how it ended through the error and `failed`; nothing to keep.
+      await reply(turn.text, e.session.messages, { planning: turn.planning });
+    })()
+      .catch((err) => {
+        if (!e.stopRequested) e.handle.setError(String(err?.message ?? err));
+      })
+      .finally(() => end(e));
+    return { revision: await hub.currentRevision(id), done: e.done, finished: e.done };
+  }
+
   const callbacks: RunPlanCallbacks = {
     connector: env.connector,
     model: env.model,
@@ -364,6 +514,8 @@ export async function startRunner(
     sessionId: id,
     thinkOn: env.thinkOn,
     toolDefinitions: env.toolContext.definitions,
+    // Messages the user sent join the chat, and the next step's prompt.
+    userNotes: (step) => takeNotes(e, step),
     // Pause holds here, before the next step; Stop ends the plan.
     gate: () => {
       if (e.stopRequested) return Promise.resolve(false);
@@ -404,6 +556,7 @@ async function end(e: Entry) {
     const keep = stopped.answer ? { answer: stopped.answer, asked: stopped.asked } : {};
     patchStep(e, stopped.id, { status: "pending", note: "Stopped", ...keep });
   }
+  dropNotes(e);
   await e.chain; // the run record is current before it goes
   e.ended = true;
   e.runningStep = null;
@@ -425,6 +578,9 @@ async function end(e: Entry) {
 // the next step. Pausing twice is fine.
 export async function pauseRun(id: string) {
   const e = liveEntry(id);
+  if (e.kind === "turn") {
+    throw new HttpError(409, "A single reply can't be paused. Stop it instead.", { reason: "not a plan" });
+  }
   if (e.pauseRequested) return;
   e.pauseRequested = true;
   await sync(e);
@@ -479,6 +635,14 @@ export async function answerAsk(id: string, askId: string, answer: Answer) {
   }
   e.ask.decide(answer);
   await e.chain;
+}
+
+// Stops every run in this process and waits until each is over. For a server
+// that is closing in a process that goes on (the dev server restarting after a
+// config change): its runs end properly, with their last save, instead of being
+// left running with no server to hold them.
+export async function stopAllRuns() {
+  await Promise.all([...store.keys()].map((id) => stopRun(id).catch(() => {})));
 }
 
 // For tests: drops every entry without saving, and lets the hub go of the sessions.

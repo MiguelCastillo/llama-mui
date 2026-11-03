@@ -60,12 +60,12 @@ class NoNote extends Error {}
 
 // Sets the note's status and report (no report: gone). Returns false if the
 // parent has no such note or no longer exists.
-async function writeNote(parentId: string, end: RunEnd, status: ThreadOutcome, report: PlanThread["report"]): Promise<boolean> {
+async function writeNote(parentId: string, childId: string, status: ThreadOutcome, report: PlanThread["report"]): Promise<boolean> {
   let planId: string | undefined;
   try {
     const { revision } = await hub.edit(parentId, (parent) => {
       const threads: PlanThread[] = Array.isArray(parent.threads) ? parent.threads : [];
-      const note = threads.find((t) => t.sessionId === end.id);
+      const note = threads.find((t) => t.sessionId === childId);
       if (!note) throw new NoNote();
       planId = note.planId;
       const { report: _old, ...rest } = note;
@@ -74,7 +74,7 @@ async function writeNote(parentId: string, end: RunEnd, status: ThreadOutcome, r
     hub.publish({
       type: "thread",
       id: parentId,
-      data: { sessionId: end.id, ...(planId ? { planId } : {}), status, report: report ?? null, revision },
+      data: { sessionId: childId, ...(planId ? { planId } : {}), status, report: report ?? null, revision },
     });
     return true;
   } catch (e) {
@@ -108,7 +108,7 @@ export async function reportToParent(end: RunEnd, ask: AskReport = askModel): Pr
   try {
     const status = threadStatus(end.session);
     if (status === "missing") return;
-    if (!(await writeNote(parentId, end, status, undefined))) return;
+    if (!(await writeNote(parentId, end.id, status, undefined))) return;
 
     const steps = end.session.plan ?? [];
     const input: ReportInput = {
@@ -120,8 +120,25 @@ export async function reportToParent(end: RunEnd, ask: AskReport = askModel): Pr
       stopped: end.stopped,
     };
     const text = await reportText(end, input, ask);
-    await writeNote(parentId, end, status, { text, at: Date.now() });
+    await writeNote(parentId, end.id, status, { text, at: Date.now() });
   } catch (e) {
     console.warn(`Couldn't report on thread ${end.id} to session ${parentId}: ${e}`);
+  }
+}
+
+// A restart ended the thread's run (see restart.ts): the note says the thread is
+// not finished, with a plain sentence instead of a model's report (nothing is
+// asked of a model at start-up). `session` is the thread as the restart left it.
+export async function reportInterrupted(childId: string, session: Pick<Session, "parentId" | "plan">): Promise<void> {
+  const parentId = session.parentId;
+  if (typeof parentId !== "string" || !parentId) return;
+  try {
+    const steps = session.plan ?? [];
+    const done = steps.filter((s) => s.status === "done").length;
+    const how = steps.length ? `after ${done} of ${steps.length} steps` : "before it got anywhere";
+    const text = `The server restarted while this was running, so it stopped ${how}. Open the thread and press Continue to go on.`;
+    await writeNote(parentId, childId, "unfinished", { text, at: Date.now() });
+  } catch (e) {
+    console.warn(`Couldn't report that thread ${childId} was interrupted to session ${parentId}: ${e}`);
   }
 }

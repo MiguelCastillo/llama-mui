@@ -125,6 +125,7 @@ export function stepPrompt(
   request?: string,
   changed: string[] = [],
   context?: string | null,
+  userNotes: string[] = [],
 ): string {
   const list = steps.map((s, j) => `${s.status === "done" ? "[x]" : "[ ]"} ${j + 1}. ${s.text}`).join("\n");
   const parts: string[] = [];
@@ -138,6 +139,11 @@ export function stepPrompt(
   if (answer) {
     if (asked) parts.push(`You asked: ${asked}`);
     parts.push(`The user answered your question: ${answer}`);
+  }
+  // What the user said to the run after it began. A fresh context has not
+  // seen those messages, and they may change how this step is done.
+  if (userNotes.length) {
+    parts.push(`The user sent these messages while the plan was running:\n${userNotes.map((n) => `- ${n}`).join("\n")}`);
   }
   parts.push(`Do step ${i + 1} of ${steps.length}: ${steps[i].text}`);
   return parts.join("\n\n");

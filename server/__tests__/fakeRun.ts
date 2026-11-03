@@ -17,8 +17,12 @@ const asking = new Map<string, Ask>();
 const answers = new Map<string, Answer>();
 export const handles = new Map<string, RunnerHandle>();
 export const started: string[] = [];
+// What each step's prompt would carry of the user's messages to the run, as
+// runPlan builds it: every message received so far (key "<id>/<step>").
+export const promptNotes = new Map<string, string[]>();
 
 export function resetFakes() {
+  promptNotes.clear();
   jobs.clear();
   asking.clear();
   answers.clear();
@@ -44,12 +48,17 @@ export const askedAnswer = (id: string, step: string) => answers.get(`${id}/${st
 
 export async function fakeRun(id: string, cb: RunPlanCallbacks) {
   cb.planRunningRef.current = true;
+  const noted: string[] = [];
   try {
     for (;;) {
       const next = cb.planRef.current?.find((s) => s.status === "pending");
       if (!next) break;
       if (cb.gate && !(await cb.gate())) break;
       const key = `${id}/${next.id}`;
+      // After the gate, before the step, as in runPlan.
+      const number = cb.planRef.current!.findIndex((s) => s.id === next.id) + 1;
+      noted.push(...(cb.userNotes?.({ id: next.id, number }) ?? []).map((m) => m.content));
+      promptNotes.set(key, [...noted]);
       started.push(next.id);
       cb.setStep(next.id, { status: "running" });
       const c = new AbortController();

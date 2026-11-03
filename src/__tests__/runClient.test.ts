@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { forgetRevisions, type Session } from "../api";
+import { ApiError, forgetRevisions, type Session } from "../api";
 import {
   START_WAIT_MS,
   allViews,
@@ -10,6 +10,8 @@ import {
   pauseControl,
   resetRunClient,
   resume,
+  sendChat,
+  sendMessage,
   startRun,
   stop,
   subscribe,
@@ -433,15 +435,79 @@ describe("commands", () => {
   });
 });
 
+describe("messages to the run", () => {
+  it("sends the message as a command and answers with the step that will see it", async () => {
+    serve(() => ({ body: { ok: true, revision: 9, messageId: "m1", step: 2, stepId: "s2" } }));
+    await expect(sendMessage("a", "Use tabs")).resolves.toEqual({ step: 2, messageId: "m1" });
+    expect(commands()).toEqual([{ method: "POST", path: "/api/sessions/a/commands/message", body: { text: "Use tabs" } }]);
+  });
+
+  it("throws the server's plain refusal, so the text stays in the box", async () => {
+    serve(() => ({ status: 409, body: { error: "No step is left to see this message.", reason: "no step left" } }));
+    const refused = await sendMessage("a", "More").catch((e) => e);
+    expect(refused).toBeInstanceOf(ApiError);
+    expect(refused.message).toBe("No step is left to see this message.");
+    expect(refused.data.reason).toBe("no step left");
+  });
+
+  it("sendChat sends the text with the page's choices and answers once the reply's run shows", async () => {
+    const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, planning: true };
+    const p = sendChat("a", "Hello", options);
+    let done = false;
+    void p.then(() => (done = true));
+    subscribeAll(() => {});
+    await vi.waitFor(() => expect(commands()).toHaveLength(1));
+    expect(commands()[0]).toEqual({
+      method: "POST",
+      path: "/api/sessions/a/commands/message",
+      body: { text: "Hello", ...options },
+    });
+    await flush();
+    expect(done).toBe(false);
+    global().emit("status", { id: "a", run: run({ kind: "turn" }) });
+    await p;
+    // A reply is a run of its own kind: no steps, so the page treats it differently.
+    expect(getView("a")).toMatchObject({ kind: "turn", status: "running" });
+  });
+
+  it("sendChat throws the server's plain refusal, so the text stays in the box", async () => {
+    serve(() => ({ status: 409, body: { error: "This session is busy: a reply is already running in it.", reason: "already running" } }));
+    const refused = await sendChat("a", "More", { connectorId: "c1", model: "m", toolsOn: false, thinkOn: false, planning: false }).catch((e) => e);
+    expect(refused).toBeInstanceOf(ApiError);
+    expect(refused.message).toMatch(/busy/);
+    expect(refused.data.reason).toBe("already running");
+    expect(getView("a")).toBeUndefined();
+  });
+
+  it("a plan's view says plan, and a reply's says turn", async () => {
+    global().emit("snapshot", { runs: [{ id: "a", run: run() }] });
+    expect(getView("a")!.kind).toBe("plan");
+    global().emit("status", { id: "a", run: run({ kind: "turn" }) });
+    expect(getView("a")!.kind).toBe("turn");
+  });
+
+  it("shows the messages no step has seen yet in the run's view, and drops them once seen", () => {
+    global().emit("snapshot", { runs: [{ id: "a", run: run() }] });
+    expect(getView("a")!.notes).toEqual([]);
+    const note = { id: "m1", text: "Use tabs", step: 2, stepId: "s2" };
+    global().emit("status", { id: "a", run: run({ notes: [note] }) });
+    expect(getView("a")!.notes).toEqual([{ id: "m1", text: "Use tabs", step: 2 }]);
+    global().emit("status", { id: "a", run: run() });
+    expect(getView("a")!.notes).toEqual([]);
+  });
+});
+
 describe("needsYou", () => {
   const view = (extra: Partial<RunnerView>): RunnerView => ({
     sessionId: "a",
+    kind: "plan",
     session: session("a"),
     status: "running",
     ask: null,
     error: null,
     streaming: false,
     startedAt: 1,
+    notes: [],
     ...extra,
   });
   it("is false for nothing and for a plain running view", () => {

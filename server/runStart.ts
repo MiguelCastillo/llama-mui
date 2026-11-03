@@ -25,7 +25,7 @@ import { chooseThread } from "./chooseThread.ts";
 import type { RunOptions } from "./commands.ts";
 import { HttpError } from "./http.ts";
 import * as hub from "./runHub.ts";
-import { type RunnerDeps, isRunning, startRunner } from "./runners.ts";
+import { type RunnerDeps, isRunning, startRunner, startTurn } from "./runners.ts";
 import { deleteSession, readSession, revisionOf } from "./sessionFile.ts";
 
 // Runs one request to the server's own /api. A failure is a plain sentence
@@ -113,6 +113,25 @@ async function startInThread(
   }
   await startRunner(childId, env, deps);
   return childId;
+}
+
+// Starts one chat reply for the saved session: the `message` command for a
+// session with no run. The page saved the session first (the messages before
+// this one, so Resend has cut the failed reply off); the model's history is
+// that, plus `text`. Built from the same choices as a plan run, plus the
+// planning switch. Answers once the run has begun; the reply streams after
+// that. Refused (409) if a run began in the meantime; 404 for a session with
+// no file.
+export async function startTurnFromOptions(
+  id: string,
+  text: string,
+  options: RunOptions & { planning: boolean },
+  deps: RunnerDeps = {},
+): Promise<void> {
+  const disk = await readSession(id);
+  if (!disk) throw new HttpError(404, "No such session");
+  const env = await buildEnv(disk, options);
+  await startTurn(id, env, { text, planning: options.planning }, deps);
 }
 
 // Starts the saved session's plan and says which session it runs in. Answers

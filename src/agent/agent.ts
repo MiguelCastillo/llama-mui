@@ -71,8 +71,9 @@ export interface RoundResult {
 
 // ── runTurn ─────────────────────────────────────────────────────────────────
 
-// Callbacks that Chat.tsx provides so runTurn can update React state and
-// access external dependencies without importing React or Chat itself.
+// Callbacks that the runner provides (src/runnerReply.ts, on the server) so
+// runTurn can update the session and reach external dependencies without
+// importing React or Chat.
 export interface RunTurnCallbacks {
   setMessages: (msgs: ChatMessage[]) => void;
   setError: (err: string | null) => void;
@@ -515,6 +516,12 @@ export interface RunPlanCallbacks {
   // Awaited before each step, once the previous step and its check are done.
   // It may hold (Pause); false ends the plan, leaving later steps pending.
   gate?: () => Promise<boolean>;
+  // Called before each step, right after the gate. Returns the messages the
+  // user sent while the plan ran and no step has seen yet (user messages, in
+  // order). They join the chat before the step, and because a step starts with
+  // a fresh context they also go in its prompt, and in every later step's (see
+  // stepPrompt). `number` is the step's place in the plan, counting from 1.
+  userNotes?: (step: { id: string; number: number }) => ChatMessage[];
 }
 
 // Rounds a blocked step gets to fix itself after the dispute retry, before it
@@ -536,6 +543,8 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
   planRunningRef.current = true;
   setPlanRunning(true);
   let msgs = messages;
+  // What the user said to the run so far, for the prompts of the steps after.
+  const noted: string[] = [];
   try {
     for (;;) {
       let steps = planRef.current;
@@ -551,6 +560,13 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
         if (!steps || i < 0 || steps[i].status === "disputed") break;
       }
       const { id, text } = steps[i];
+      // Messages the user sent during the previous step (or while Pause held)
+      // come in here, before this step's own messages begin.
+      const added = callbacks.userNotes?.({ id, number: i + 1 }) ?? [];
+      if (added.length) {
+        msgs = [...msgs, ...added];
+        noted.push(...added.map((m) => m.content));
+      }
       // The user's answer to this step's question (see stepPrompt). setStep
       // patches replace the rest, so a patch that leaves the step to run again
       // carries them, or a rerun would lose the answer.
@@ -569,7 +585,8 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       const changed = fresh ? filesChanged(msgs.filter((m) => m.planStep)) : [];
       const request = fresh ? callbacks.request : undefined;
       const ctx = fresh ? callbacks.context : undefined;
-      let r = await reply(stepPrompt(steps, i, request, changed, ctx), msgs, { planStep: id, from });
+      // Without fresh steps the model has the messages in its history already.
+      let r = await reply(stepPrompt(steps, i, request, changed, ctx, fresh ? noted : []), msgs, { planStep: id, from });
       msgs = r.messages;
       let failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError) : null;
       if (failed) {

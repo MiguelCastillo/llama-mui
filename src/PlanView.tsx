@@ -134,7 +134,9 @@ export function PlanView({
   // Continue; "Answer and continue" on the step passes one.
   const next = steps.find((s) => s.status !== "done");
   const unfinished = next?.status === "pending" || next?.status === "failed" || next?.status === "waiting";
-  const started = steps.some((s) => s.status !== "pending");
+  // A step that was stopped or interrupted by a restart is back to pending with
+  // a note saying so: the plan has started, so the button says Continue.
+  const started = steps.some((s) => s.status !== "pending" || !!s.note);
 
   // Rerunning a step leaves the ones after it done, but built on the old version.
   const rerun = (i: number) =>

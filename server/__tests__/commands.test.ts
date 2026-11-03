@@ -242,6 +242,86 @@ describe("approve and answer", () => {
   });
 });
 
+describe("message", () => {
+  it("answers with the step that will see it, and the run keeps it until that step starts", async () => {
+    saved("a", 3);
+    await command("a", "run", options);
+    await settle(); // step 1 is in flight
+    const r = await command("a", "message", { text: "  Use tabs, not spaces  " });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ ok: true, step: 2, stepId: "s2" });
+    expect(typeof r.body.messageId).toBe("string");
+    expect(hub.liveRun("a")!.notes).toEqual([{ id: r.body.messageId, text: "Use tabs, not spaces", step: 2, stepId: "s2" }]);
+  });
+
+  it("is refused when no step is left to see it, and says so plainly", async () => {
+    saved("a", 1);
+    await command("a", "run", options);
+    await settle(); // the only step is in flight
+    const r = await command("a", "message", { text: "Also add a README" });
+    expect(r).toMatchObject({ status: 409, body: { reason: "no step left" } });
+    expect(r.body.error).toMatch(/last one is already running/);
+    expect(r.body.error).toMatch(/still in the box/);
+    expect(hub.liveRun("a")!.notes).toBeUndefined();
+  });
+
+  it("checks the text", async () => {
+    saved("a");
+    await command("a", "run", options);
+    await settle();
+    expect((await command("a", "message", {})).status).toBe(400);
+    expect((await command("a", "message", { text: "   " })).status).toBe(400);
+    expect((await command("a", "message", { text: 5 })).status).toBe(400);
+  });
+});
+
+describe("message with no run: one chat reply, run here", () => {
+  const chatOptions = { ...options, planning: false };
+
+  it("hands the starter the text and exactly what the page chose, planning included", async () => {
+    saved("a");
+    const chat = vi.fn(async () => {});
+    const r = await command("a", "message", { ...chatOptions, text: "hello", planning: true, extra: "ignored" }, "POST", { ...deps, chat });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ ok: true, revision: fileOf("a").revision });
+    expect(chat).toHaveBeenCalledWith("a", "hello", { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: true });
+    // Without the flag it is an ordinary reply.
+    await command("a", "message", { ...options, text: "again" }, "POST", { ...deps, chat });
+    expect(chat).toHaveBeenLastCalledWith("a", "again", expect.objectContaining({ planning: false }));
+  });
+
+  it("says plainly what is wrong with the request", async () => {
+    saved("a");
+    const chat = vi.fn(async () => {});
+    const sent = (body: unknown) => command("a", "message", body, "POST", { ...deps, chat });
+    expect((await sent({ text: "hello" })).body.error).toMatch(/connectorId must be given/);
+    expect((await sent({ ...chatOptions, text: "hello", model: "" })).status).toBe(400);
+    expect((await sent({ ...chatOptions, text: "hello", planning: "yes" })).body.error).toMatch(/planning must be true or false/);
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("passes the starter's refusal on, so the page keeps the text", async () => {
+    saved("a");
+    const chat = async () => {
+      throw new HttpError(409, "This session is busy.", { reason: "already running" });
+    };
+    expect(await command("a", "message", { ...chatOptions, text: "hello" }, "POST", { ...deps, chat })).toMatchObject({
+      status: 409,
+      body: { reason: "already running", error: "This session is busy." },
+    });
+  });
+
+  it("goes to the plan, not to a new reply, while a plan runs", async () => {
+    saved("a", 3);
+    await command("a", "run", options);
+    await settle();
+    const chat = vi.fn(async () => {});
+    const r = await command("a", "message", { ...chatOptions, text: "Use tabs" }, "POST", { ...deps, chat });
+    expect(r.body).toMatchObject({ ok: true, step: 2 });
+    expect(chat).not.toHaveBeenCalled();
+  });
+});
+
 describe("the route", () => {
   it("ignores paths that aren't commands", async () => {
     const req = Readable.from([]) as unknown as IncomingMessage;

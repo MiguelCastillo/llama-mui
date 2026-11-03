@@ -105,7 +105,6 @@ import { settleStart, startAction, type Start, type StartAction } from "./todos"
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
-import { askForSessionName } from "./agent/sessionNaming";
 import {
   PlanView,
   checkRoom,
@@ -121,7 +120,6 @@ import {
   stepPrompt,
   weighDispute,
 } from "./agent/plan";
-import { runTurn } from "./agent/agent";
 import { applyThreadEvent, noteView, threadStatus, type ThreadStatus } from "./planThread";
 import {
   allViews,
@@ -131,6 +129,8 @@ import {
   pause as pauseRunner,
   pauseControl,
   resume as resumeRunner,
+  sendChat,
+  sendMessage as sendToRun,
   startRun as startRemoteRun,
   stop as stopRunner,
   subscribe,
@@ -251,12 +251,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // prompt stays the same. Until then (undefined) it follows workingDir.
   const [fixedPromptDir, setFixedPromptDir] = useState<string | null | undefined>(undefined);
   const promptDir = fixedPromptDir === undefined ? workingDir : fixedPromptDir;
-  // What a reply is waiting on the user for: a path the model asked for that
-  // isn't attached, or a change to approve. Cleared once they answer.
-  const [pending, setPending] = useState<{
-    ask: Ask;
-    decide: (answer: Answer) => void;
-  } | null>(null);
   // What to offer the model given those attachments and Settings → Tools.
   const [toolContext, setToolContext] = useState<ToolContext>({
     definitions: [],
@@ -319,7 +313,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setPlanSummary(summary ?? null);
     toBottom();
   };
-  // A change the model suggested to a plan that's under way; see reply().
+  // A change the model suggested to a plan that's under way; see makeReply in src/runnerReply.ts.
   const [planProposal, setPlanProposal] = useState<PlanStep[] | null>(null);
   const answerProposal = (accept: boolean) => {
     // Matched again by text: the user may have changed the plan since. A step
@@ -333,15 +327,20 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (accept && planProposal) changePlan(planProposal.map(keep));
     setPlanProposal(null);
   };
-  // A plan runs on the server, not here (see src/runClient.ts). `runnerView` is
-  // what this open session's run last reported (null when it has none); the
-  // plan is running until the run ends.
+  // Plans and chat replies run on the server, not here (see src/runClient.ts):
+  // every session has one owner. `runnerView` is what this open session's run
+  // last reported (null when it has none). A run is a plan's, or one reply's
+  // (`turnRunning`: a message was sent and the server is streaming the answer).
+  // It is running until the run ends.
   const [runnerView, setRunnerView] = useState<RunnerView | null>(null);
-  const planRunning = !!runnerView && runnerView.status !== "stopped";
+  const runActive = !!runnerView && runnerView.status !== "stopped";
+  const turnRunning = runActive && runnerView?.kind === "turn";
+  const planRunning = runActive && !turnRunning;
   // The last runner error put in `error` (see mirrorView).
   const mirroredError = useRef<string | null>(null);
   // What the run of the open session is waiting on the user for, if
-  // anything: it shows here the way Chat's own prompt does (see `pending`).
+  // anything: a path the model asked for that isn't attached, or a change to
+  // approve. It shows here, and the answer is a command to the server.
   const runnerAsk = runnerView?.ask ?? null;
   // Whether the open session has a run that hasn't ended, read from the
   // client, so a guard in a handler sees a run that started a moment ago.
@@ -349,13 +348,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const v = getView(id);
     return !!v && v.status !== "stopped";
   };
-  // For runTurn's plan tool, which asks whether a plan is running. Only the
-  // server's own turns run inside a plan now, so for Chat's turns it stays false.
-  const planRunningRef = useRef(false);
   // When the current task started, for the counter beside the waiting dots
-  // (and on the plan card while a plan runs): from sending
-  // (or Run) until nothing is left running, so a plan's steps and checks
-  // count as one task even though each turn sets and clears `abort`.
+  // (and on the plan card while a plan runs): the run's own start while one
+  // runs, so a plan's steps and checks count as one task.
   const [busySince, setBusySince] = useState<number | null>(null);
   // Pieces streamed in the current round and when the first one came, for
   // the live tokens per second beside the counter. llama.cpp streams about
@@ -373,7 +368,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setToolbarOpenState(open);
     saveFlag(TOOLBAR_KEY, open);
   };
-  const [abort, setAbort] = useState<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Whether the chat follows new output: while you're at the bottom. Scrolling
   // up stops it, so you can read back while a reply streams (it used to pull
@@ -488,6 +482,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (s.model && !live) setModel(s.model);
   };
 
+  // Set below, once refreshModels exists; the latest one, for the listener.
+  const refreshModelsAfterTurn = useRef<() => void>(() => {});
+
   // Shows the server's view of the open session's run: its live session goes
   // into the state the way a loaded one does (applySession), and the view
   // itself is kept for the status. A view without its session yet (the run
@@ -510,6 +507,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     }
     setRunnerView(null);
     dismiss(v.sessionId);
+    // After a reply the model list is read again (a model may have been loaded
+    // or unloaded meanwhile), as the page did itself when it ran the reply.
+    if (v.kind === "turn") refreshModelsAfterTurn.current();
   };
   // The id of the session on screen, for the listener below: a view of any
   // other session is not shown.
@@ -600,7 +600,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       contextStart,
       attachments,
       usage,
-      failed: abort ? INTERRUPTED : failed,
+      failed,
       plan,
       planProposal,
       planContext,
@@ -619,17 +619,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
 
   // The server refused a save because the session is no longer what this page
-  // loaded (another window saved it, or a plan is running in it). The server's
-  // copy is the one to show, so it is read again; what was changed here since
-  // the last save is dropped, and the message says so. A reply that is still
-  // streaming here can't be replaced under it: the reload waits for its end.
-  const reloadPending = useRef<string | null>(null);
+  // loaded (another window saved it, or a plan or reply is running in it). The
+  // server's copy is the one to show, so it is read again; what was changed
+  // here since the last save is dropped, and the message says so.
   const reloadFromServer = (message: string) => {
-    if (abort) {
-      reloadPending.current = message;
-      return;
-    }
-    reloadPending.current = null;
     savedKey.current = "";
     setError(message);
     loadSession(sessionId);
@@ -650,7 +643,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // server would refuse this page's save anyway. Nothing is saved either
     // while Run is being sent (see startRun).
     if (!loaded || messages.length === 0 || runnerActive(sessionId) || starting.current === sessionId) return;
-    if (reloadPending.current && !abort) return reloadFromServer(reloadPending.current);
     const session = snapshot();
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -672,7 +664,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return () => clearTimeout(timer);
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planSummary, planId, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId, threads, titleHint, planMovedIn]);
+  }, [loaded, messages, contextStart, attachments, usage, model, failed, plan, planProposal, planContext, planSummary, planId, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId, threads, titleHint, planMovedIn]);
 
   // Set by openSession: once that session has loaded, the chat box scrolls to
   // its plan card instead of the end.
@@ -693,13 +685,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   }, [loaded, sessionId]);
 
   // Switches to another chat, saving this one first unless it was deleted.
-  // Only Chat's own streaming turn blocks it: a plan keeps running on the
-  // server while another session is open.
+  // Nothing blocks it: a plan or a reply keeps running on the server while
+  // another session is open.
   // `toPlan`: show the plan card when it is open, not the end of the chat: "" for
   // the session's plan, or a planId to find its card (a thread's note
   // has one). The cards are marked with data-plan-card where they are drawn.
   const openSession = (id: string, saveFirst = true, toPlan: string | null = null) => {
-    if (abort) return;
     if (saveFirst) saveNow();
     scrollToPlan.current = toPlan === null ? null : { sessionId: id, planId: toPlan };
     setFollowing(toPlan === null);
@@ -735,7 +726,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // but none of its messages. It is saved right away (saveNow skips empty
   // sessions) so it shows in the list under its parent, then opened.
   const newNested = async (parentId: string) => {
-    if (abort) return;
     try {
       const parent =
         parentId === sessionId
@@ -790,7 +780,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       clearPlan();
       return;
     }
-    abort?.abort();
     clearPlan();
   };
   // Deleting asks first, in a Dialog: window.confirm is answered "no" at once,
@@ -896,6 +885,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         setError(e.message);
       });
 
+  refreshModelsAfterTurn.current = () => {
+    if (connector) refreshModels(connector.id);
+  };
+
   // Reload everything each time chat shows: Settings may have changed the
   // server, its key or the folders, and a server that was down may be back.
   useEffect(() => {
@@ -930,13 +923,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // On only when the user wants tools and some are ready in this chat.
   const toolsOn = toolsWanted && toolContext.offered.length > 0;
-  const busy = !!abort || planRunning;
   useEffect(() => {
-    setBusySince((since) => (busy ? (since ?? Date.now()) : null));
-  }, [busy]);
-  // The counter's start: a plan's own (it may have started in another
-  // session's view, or before this one was opened), else this task's.
-  const taskSince = planRunning && runnerView ? runnerView.startedAt : busySince;
+    setBusySince((since) => (runActive ? (since ?? Date.now()) : null));
+  }, [runActive]);
+  // The counter's start: the run's own (it may have started in another
+  // session's view, or before this one was opened).
+  const taskSince = runActive && runnerView ? runnerView.startedAt : busySince;
 
   const canPlan = toolsOn && toolContext.offered.includes("update_plan");
   const planOn = canPlan && planWanted;
@@ -955,10 +947,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // A prompt from a plan step shows in the plan card, under the step (see
   // PlanView); others show at the bottom of the chat.
-  // The prompt on screen: the open session's run's ask (a plan runs there),
-  // or else the one of Chat's own reply. A runner of another session has no
-  // prompt here; it waits (see server/runners.ts).
-  const shownPending = runnerAsk ?? pending;
+  // The prompt on screen: the open session's run's ask (a plan or a reply runs
+  // there). A run of another session has no prompt here; it waits (see
+  // server/runners.ts).
+  const shownPending = runnerAsk;
   const promptInPlan = !!shownPending && planRunning && !!plan;
   // Not smooth: an animation per token never caught up, and fought the user.
   // A prompt in the plan card scrolls itself into view instead.
@@ -969,140 +961,98 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Changes the open session's attachments. The folders a run works in are
   // fixed when it starts and the server owns the session until it ends, so
   // they can't change meanwhile (Chat settings says so, too).
-  const attachmentsLocked = planRunning;
+  const attachmentsLocked = runActive;
   const changeAttachments = (fn: (as: Attachment[]) => Attachment[]) => {
     if (runnerActive(sessionId)) setError(ATTACHMENTS_LOCKED_NOTE);
     else setAttachments(fn);
   };
   const attach = (a: Attachment) => changeAttachments((as) => (as.some((x) => x.path === a.path) ? as : [...as, a]));
 
-  // Shows the prompt and resolves with the user's answer; stopping the reply
-  // counts as deny.
-  const askUser = (ask: Ask, signal: AbortSignal) =>
-    new Promise<Answer>((resolve) => {
-      const decide = (answer: Answer) => {
-        signal.removeEventListener("abort", onAbort);
-        setPending(null);
-        resolve(answer);
-      };
-      const onAbort = () => decide(false);
-      signal.addEventListener("abort", onAbort);
-      setPending({ ask, decide });
-    });
-
   // Sends what the user typed. Returns whether it went, so the message box
-  // clears only then: it waits there while the model is checked.
+  // clears only then: it waits there while the session is saved and the server
+  // is told.
   const send = async (text: string) => {
-    if (!model || !connector || abort || planRunning) return false;
-    if (!(await modelLoaded())) return false;
-    toBottom();
-    reply(text, messages, { planning: planOn });
-    return true;
-  };
-
-  // Streams a reply, building history from `before` instead of `messages`.
-  // Called by `send()` for new messages, by `retry()` for failed ones, and by
-  // `runPlan()` for each step. Returns the messages it ended with, and whether
-  // the model finished (not stopped, failed or cut off by a limit).
-  // `planning`: this turn only writes a plan (see PLANNING_NOTE). `planStep`:
-  // the turn runs that plan step; its messages carry the step's id and show
-  // under the step, and a failure stays with the step instead of offering Resend.
-  const reply = async (
-    text: string,
-    before: ChatMessage[],
-    { planning = false, planStep, from }: { planning?: boolean; planStep?: string; from?: number } = {},
-  ): Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }> => {
-    // Where the model's history starts: the session's (after a clear), or for
-    // a plan step, the step's own first message (see runPlan).
-    const start = Math.max(from ?? contextStart, contextStart);
-    if (!connector) return { ok: false, messages: before };
-    // Every request checks, not just send(): a plan's steps and Resend come
-    // here too, and the model may have been unloaded since.
-    if (!(await modelLoaded())) return { ok: false, messages: before };
-    const connectorId = connector.id;
-    // Fixed for this reply, even if the user changes attachments meanwhile;
-    // only paths the user allows mid-reply are added.
-    if (fixedPromptDir === undefined) setFixedPromptDir(workingDir);
-    const forgotten = before.slice(0, start);
-    // Attachments and tools that are off go the same way, as `update`, and
-    // only when they changed since the last one the model saw.
-    const seen = [...before.slice(start)].reverse().find((m) => m.update)?.update;
-    const controller = new AbortController();
-    const started = performance.now();
-
-    const result = await runTurn(
-      {
-        connectorId,
-        kind: connector.kind,
-        api: connector.api,
-        model,
-        toolsOn,
-        thinkOn,
-        planning,
-        planStep,
-        systemPrompt: toolContext.systemPrompt,
-        toolDefinitions: toolContext.definitions,
-        toolContextUpdate: toolContext.update,
-        seenUpdate: seen ?? "",
-        history: before.slice(start),
-        forgotten,
-        attached: attachedPaths(attachments),
-        chatId: sessionId,
-        controller,
-        started,
-        text,
-      },
-      {
-        setMessages,
-        setError,
-        setFailed,
-        setUsage: (u) => { if (u) setUsage(u); },
-        setAbort,
-        refreshModels,
-        askUser,
-        attach,
-        setPlanProposal,
-        setPastPlans,
-        setPlanAnchor,
-        setPlanContext,
-        setPlanSummary,
-        setPlanId,
-        changePlan,
-        todosRef,
-        changeTodos,
-        planRef,
-        planRunningRef,
-        planAnchor,
-        planContext,
-        planSummary,
-        planId,
-      },
-    );
-
-    // Update streamRate for the UI (tokens per second display).
-    streamRate.current = { pieces: result.messages.length, first: started };
-
-    // After a successful reply, ask the model to name the session if it has
-    // no name yet (modelName is null).
-    if (result.ok && !modelName) {
-      const name = await askForSessionName(result.messages, connectorId, model, controller.signal, connector.api, connector.kind);
-      if (name) {
-        setModelName(name);
-        renameSession(sessionId, { title: name, modelName: name });
+    // While a plan runs, a message goes to the run: the server folds it in
+    // before the next step and says which one (see the notes under the chat),
+    // or refuses, and then the text stays in the box.
+    if (planRunning) {
+      try {
+        await sendToRun(sessionId, text);
+        // A refusal shown earlier is out of date now; the run's own error stays.
+        if (error !== mirroredError.current) setError(null);
+        toBottom();
+        return true;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return false;
       }
     }
-
-    return { ok: result.ok, messages: result.messages, error: result.error };
+    // A reply is streaming: another message waits for its end (the server
+    // refuses it too, see sendNote).
+    if (turnRunning) {
+      setError("A reply is still streaming. Wait for it to finish, or stop it, then send your message.");
+      return false;
+    }
+    // The one before this is still being saved and sent.
+    if (!model || !connector || starting.current) return false;
+    if (!(await modelLoaded())) return false;
+    toBottom();
+    return chatTurn(text, messages, planOn);
   };
 
-  // What the server needs from here to run a plan: which connector and model,
-  // and whether tools and Think are on. The server looks up the connector (and
-  // its key, which the page never has), the models and the tools itself, and
-  // runs what is saved, so a session never carries anything secret.
+  // What the server needs from here to run a plan or a reply: which connector
+  // and model, and whether tools and Think are on. The server looks up the
+  // connector (and its key, which the page never has), the models and the tools
+  // itself, and runs what is saved, so a session never carries anything secret.
   const runOptions = (): RunOptions | null =>
     connector && model
       ? { connectorId: connector.id, model, toolsOn, thinkOn, freshSteps: prefs?.freshPlanSteps }
       : null;
+
+  // Sends one message as a chat turn, which the server runs (see
+  // server/runners.ts, startTurn): this session is saved first, with only the
+  // messages before this one (Resend has cut the failed reply off), then the
+  // server is told. It streams the reply as events, which show here the way a
+  // plan's do (mirrorView): the messages, the usage, the session's name, any
+  // question for the user, an error. `planning`: the reply only writes a plan
+  // (see PLANNING_NOTE). Returns whether it went; a refusal shows as the error,
+  // in the server's own words, and the text stays where it was typed.
+  const chatTurn = async (text: string, before: ChatMessage[], planning: boolean): Promise<boolean> => {
+    const options = runOptions();
+    if (!options) return false;
+    const id = sessionId;
+    const toSend = { ...snapshot(), messages: before };
+    const key = keyOf(toSend);
+    // A first message saves the session just so the server has it to read; if
+    // the message doesn't go, that empty session is removed again.
+    const listed = sessions.some((x) => x.id === id);
+    starting.current = id;
+    try {
+      savedKey.current = key;
+      const summary = await saveSession(toSend);
+      setSessions((ss) => upsertRow(ss, summary));
+      await sendChat(id, text, { ...options, planning });
+      // Until the server's copy of the session arrives (mirrorView), show the
+      // message as sent, and a failure of the reply that came before it as gone.
+      if (openId.current === id && !getView(id)?.session) {
+        setMessages([...before, { role: "user", content: text }]);
+        setFailed(null);
+      }
+      return true;
+    } catch (e) {
+      // Not saved after all, or not started: the next save must try again.
+      if (savedKey.current === key) savedKey.current = "";
+      if (!listed && before.length === 0) {
+        deleteSession(id)
+          .then(() => setSessions((ss) => ss.filter((x) => x.id !== id)))
+          .catch(() => {});
+      }
+      runRefused(e);
+      return false;
+    } finally {
+      starting.current = null;
+    }
+  };
   // Saves `session`, then asks the server to run its plan: from the first step
   // that's pending, in order, one turn each, checking every step before ticking
   // it off (see runPlan in src/agent/agent.ts). From then on the server owns the
@@ -1151,7 +1101,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // was. A plan that already started (Continue, Resume, Restart), or one that
   // was just moved in, runs where it is.
   const runFromCard = async () => {
-    if (!connector || !model || abort || runnerActive(sessionId)) return;
+    if (!connector || !model || runnerActive(sessionId)) return;
     try {
       if (!planMovedIn && !(await modelLoaded())) return;
       const ranIn = await startRun();
@@ -1207,12 +1157,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     };
   }, [loaded, sessionId]);
 
-  // Retries the last user message, dropping the failed reply.
-  const retry = () => {
+  // Retries the last user message, dropping the failed reply (Resend). The
+  // session is saved with the messages before that message, then the server is
+  // told to send it again (see chatTurn). Like a first try it isn't a planning
+  // turn, as before.
+  const retry = async () => {
     const userMsg = [...messages].reverse().find((m) => m.role === "user");
-    if (!userMsg || !!abort || planRunning) return;
+    if (!userMsg || runActive || starting.current) return;
+    if (!model || !connector || !(await modelLoaded())) return;
     const index = messages.indexOf(userMsg);
-    reply(userMsg.content, messages.slice(0, index));
+    toBottom();
+    await chatTurn(userMsg.content, messages.slice(0, index), false);
   };
 
   // Tool results show inside the call that asked for them, and the assistant
@@ -1233,7 +1188,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     <MessageBubble
       key={t.start}
       parts={t.parts}
-      streaming={(!!abort || !!runnerView?.streaming) && i === turns.length - 1}
+      streaming={!!runnerView?.streaming && i === turns.length - 1}
       since={taskSince}
       rate={streamRate}
       toolResults={toolResults}
@@ -1243,7 +1198,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       failed={i === lastFailedTurnIndex ? failed : undefined}
       connectorName={connector ? connector.name || connector.kind : undefined}
       onResend={i === lastFailedTurnIndex ? retry : undefined}
-      resendDisabled={i === lastFailedTurnIndex ? !!abort || planRunning : undefined}
+      resendDisabled={i === lastFailedTurnIndex ? runActive : undefined}
     />
   );
   // Each update_plan call's turn, to show the plan it wrote after that turn.
@@ -1271,7 +1226,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const own = turns.flatMap((t, i) => (t.parts[0].planStep === id ? [bubble(t, i)] : []));
     return own.length ? own : null;
   };
-  const canClone = (!plan || plan.every((st) => st.status === "done")) && !abort && !planRunning;
+  const canClone = (!plan || plan.every((st) => st.status === "done")) && !runActive;
   const planCards = [
     ...threads.map((t) => ({
       anchor: t.anchor,
@@ -1309,7 +1264,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   steps={plan}
                   summary={planSummary}
                   context={planContext}
-                  running={planRunning || !!abort}
+                  running={runActive}
                   since={planRunning && runnerView?.status !== "paused" ? taskSince : null}
                   control={planRunning ? pauseControl(runnerView?.status) : undefined}
                   onPause={() => showFailure(pauseRunner(sessionId))}
@@ -1359,7 +1314,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // (no model, busy, session didn't load), the text is put in the message box.
   const [pendingStart, setPendingStart] = useState<StartAction | null>(null);
   const startFromEmpty = (start: Start) => {
-    const action = startAction(start, { model: !!model && !!connector, busy: !!abort || planRunning });
+    const action = startAction(start, { model: !!model && !!connector, busy: runActive });
     if (action.sessionId && action.sessionId !== sessionId) openSession(action.sessionId);
     if (action.kind === "fill") setFill({ text: action.text, n: Date.now() });
     else setPendingStart(action);
@@ -1415,7 +1370,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         currentId={sessionId}
         open={narrow ? drawerOpen : sessionsOpen}
         narrow={narrow}
-        busy={!!abort}
+        busy={false}
         attention={attention}
         onSelect={(id) => id !== sessionId && openSession(id)}
         onNew={newChat}
@@ -1485,7 +1440,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               onChange={(e) =>
                 e.target.value === MANAGE_MODELS ? (location.hash = "#/settings/models") : setModel(e.target.value)
               }
-              disabled={!!abort}
+              disabled={runActive}
               sx={{ width: narrow ? "100%" : 240 }}
               // The status chips are for the open menu; closed, just the name fits.
               // No padding under the list: Manage models' hover highlight then runs
@@ -1574,7 +1529,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                     }}
                   />
                 }
-                disabled={!!abort || toolCount === 0}
+                disabled={runActive || toolCount === 0}
               />
             </Tooltip>
             <Tooltip
@@ -1587,7 +1542,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               <FormControlLabel
                 label="Plan"
                 control={<Switch checked={planOn} onChange={(e) => setPlanWanted(e.target.checked)} />}
-                disabled={!!abort || !canPlan}
+                disabled={runActive || !canPlan}
               />
             </Tooltip>
           </Stack>
@@ -1608,7 +1563,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         {!(narrow ? drawerOpen : sessionsOpen) && (
           <Tooltip title="New session">
             <span>
-              <IconButton onClick={newChat} disabled={!!abort}>
+              <IconButton onClick={newChat}>
                 <AddCommentIcon />
               </IconButton>
             </span>
@@ -1757,6 +1712,18 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             {contextStart > 0 && contextStart === messages.length && <ContextDivider />}
             {cardsBefore("end", true)}
             {planCards.filter((c) => slot(c.anchor).lost).map((c) => c.card)}
+            {/* Messages sent to the running plan that no step has seen yet:
+                they join the chat when their step starts. */}
+            {runnerView?.notes.map((n) => (
+              <Box key={n.id} sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 0.5 }}>
+                <Paper sx={{ px: 2, py: 1.5, maxWidth: "100%", bgcolor: "primary.main", color: "primary.contrastText", opacity: 0.6 }}>
+                  <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{n.text}</Typography>
+                </Paper>
+                <Typography variant="caption" color="text.secondary">
+                  Step {n.step} will see this when it starts
+                </Typography>
+              </Box>
+            ))}
             {shownPending && !promptInPlan && (
               <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} />
             )}
@@ -1801,13 +1768,22 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               }
             />
             <Composer
-              placeholder={narrow ? "Message" : "Message (Enter to send, Shift+Enter for a new line)"}
+              placeholder={
+                planRunning
+                  ? narrow
+                    ? "Message the plan"
+                    : "Message the running plan: the next step will see it (Enter to send)"
+                  : narrow
+                    ? "Message"
+                    : "Message (Enter to send, Shift+Enter for a new line)"
+              }
               onSend={send}
+              sendWithStop={planRunning}
               fill={fill}
               onStop={
-                planRunning ? () => showFailure(stopRunner(sessionId)) : abort ? () => abort.abort() : undefined
+                runActive ? () => showFailure(stopRunner(sessionId)) : undefined
               }
-              disabled={!model}
+              disabled={!model && !planRunning}
               below={
                 showIndicator && (
                   <ContextIndicator
@@ -1816,7 +1792,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                     onClear={clearContext}
                     onCompact={compactSession}
                     canCompact={contextStart > 0}
-                    disabled={!!abort || planRunning}
+                    disabled={runActive}
                   />
                 )
               }
@@ -1836,11 +1812,14 @@ function Composer({
   placeholder,
   onSend,
   onStop,
+  sendWithStop,
   disabled,
   below,
   fill,
 }: {
   placeholder: string;
+  // Keep Send beside Stop: while a plan runs, a message goes to the run.
+  sendWithStop?: boolean;
   // Text to put in the box and focus it (not sent); a new `n` is a new request.
   fill?: { text: string; n: number } | null;
   // Resolves to whether the message went; the box clears only then.
@@ -1881,13 +1860,14 @@ function Composer({
       {/* Send lines up with the input's top edge; the context
           indicator sits just below it. */}
       <Stack spacing={1.25} sx={{ flexShrink: 0, alignItems: "flex-end" }}>
-        {onStop ? (
-          <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={onStop}>
-            Stop
-          </Button>
-        ) : (
+        {(!onStop || sendWithStop) && (
           <Button variant="contained" endIcon={<SendIcon />} onClick={send} disabled={!text.trim() || disabled}>
             Send
+          </Button>
+        )}
+        {onStop && (
+          <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={onStop}>
+            Stop
           </Button>
         )}
         {below}
@@ -2092,6 +2072,12 @@ function MessageBubble({
           )}
         </Stack>
       </Paper>
+      {/* A message sent to a running plan: which step saw it. */}
+      {isUser && (parts[0].seenByStep || parts[0].notSeen) && (
+        <Typography variant="caption" color="text.secondary">
+          {parts[0].seenByStep ? `Seen by step ${parts[0].seenByStep}` : "No step saw this: the plan ended first"}
+        </Typography>
+      )}
       {errorLine}
     </Box>
   );

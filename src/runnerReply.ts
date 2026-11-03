@@ -1,4 +1,5 @@
-// The reply a runner sends for each plan step: Chat's reply() without React.
+// The reply a runner sends, for each plan step and for a chat turn: one reply
+// without React (it used to be Chat's reply(), and Chat no longer has one).
 // Everything runTurn reports is written into the runner's session, so the
 // session is the same whether or not Chat is showing it. No React in this file.
 
@@ -32,7 +33,7 @@ export async function modelLoaded(h: RunnerHandle): Promise<boolean> {
     return true;
   }
   if (!status || status === "unknown" || status === "loaded") return true;
-  h.setError(`${model} isn't loaded, so nothing was sent. Load it with ▶ in the model menu, then continue.`);
+  h.setError(`${model} isn't loaded, so nothing was sent. Load it with ▶ in the model menu, then try again.`);
   return false;
 }
 

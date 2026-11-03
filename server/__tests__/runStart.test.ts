@@ -22,7 +22,7 @@ vi.mock("../sessionFile.ts", async (original) => (await import("./memorySessions
 const { load, save } = await import("../store.ts");
 const { connectorRoutes } = await import("../connectors.ts");
 const { setApiOrigin } = await import("../../src/api.ts");
-const { startFromOptions } = await import("../runStart.ts");
+const { startFromOptions, startTurnFromOptions } = await import("../runStart.ts");
 const { HttpError } = await import("../http.ts");
 const hub = await import("../runHub.ts");
 const runners = await import("../runners.ts");
@@ -219,6 +219,103 @@ describe("the run command's starter", () => {
   it("answers with the session it runs in: the one it was sent to", async () => {
     saved("a");
     expect(await start("a")).toEqual({ sessionId: "a" });
+  });
+});
+
+describe("the message command's starter for a chat reply", () => {
+  const turnOptions = { ...options, planning: false };
+  const said: { text: string; before: any[]; planning?: boolean }[] = [];
+  let finishReply: (ok: boolean) => void = () => {};
+  // The reply is a fake that waits for the test; the rest is what the starter does.
+  const reply = (h: any) => {
+    handles.set(h.sessionId, h);
+    envs.push(h.env);
+    return async (text: string, before: any[], opts: { planning?: boolean } = {}) => {
+      said.push({ text, before, planning: opts.planning });
+      const messages = [...before, { role: "user", content: text }, { role: "assistant", content: "Fine." }];
+      h.edit((s: any) => ({ ...s, messages }));
+      const ok = await new Promise<boolean>((resolve) => (finishReply = resolve));
+      return { ok, messages };
+    };
+  };
+  const chat = (id: string, text: string, o = turnOptions) => startTurnFromOptions(id, text, o, { reply });
+  const history = [
+    { role: "user", content: "Hi" },
+    { role: "assistant", content: "Hello!" },
+  ];
+
+  beforeEach(() => {
+    said.length = 0;
+    finishReply = () => {};
+  });
+
+  it("builds the reply's run from the page's choices and the saved session, and sends the text with its history", async () => {
+    saved("a", { plan: null, messages: history, attachments: [{ path: "/work/app", kind: "folder", source: "manual" }] });
+    await chat("a", "And now?");
+    await vi.waitFor(() => expect(said).toHaveLength(1));
+    expect(said[0]).toEqual({ text: "And now?", before: history, planning: false });
+    expect(envs[0]).toMatchObject({ model: "m", toolsOn: true, thinkOn: false });
+    // The connector is the list's entry: that a key is set, not the key.
+    expect(envs[0].connector).toEqual({ id: "c1", name: "Studio", url: "http://127.0.0.1:1", hasKey: true, kind: "llama", api: "openai" });
+    const context = calls.find((c) => c.url === "/api/tools/context")!;
+    expect(JSON.parse(context.body)).toEqual({ attachments: ["/work/app"], promptDir: "/work/app" });
+    expect(hub.liveRun("a")).toMatchObject({ kind: "turn", status: "running" });
+    finishReply(true);
+    await vi.waitFor(() => expect(hub.liveRun("a")).toBeNull());
+    expect(fileOf("a").messages.map((m: any) => m.content)).toEqual(["Hi", "Hello!", "And now?", "Fine."]);
+  });
+
+  it("passes the planning switch on", async () => {
+    saved("a", { plan: null, messages: history });
+    await chat("a", "Plan it", { ...turnOptions, planning: true });
+    await vi.waitFor(() => expect(said).toHaveLength(1));
+    expect(said[0].planning).toBe(true);
+    finishReply(true);
+    await vi.waitFor(() => expect(hub.liveRun("a")).toBeNull());
+  });
+
+  it("holds no key anywhere", async () => {
+    saved("a", { plan: null, messages: history });
+    await chat("a", "Hello");
+    await vi.waitFor(() => expect(said).toHaveLength(1));
+    finishReply(true);
+    await vi.waitFor(() => expect(hub.liveRun("a")).toBeNull());
+    expect(JSON.stringify(events)).not.toContain(KEY);
+    expect(JSON.stringify(envs)).not.toContain(KEY);
+    expect(JSON.stringify(fileOf("a"))).not.toContain(KEY);
+    for (const c of calls) expect(JSON.stringify(c)).not.toContain(KEY);
+  });
+
+  it("refuses a server that isn't in the list, and starts nothing", async () => {
+    saved("a", { plan: null, messages: history });
+    const e = await refusal(chat("a", "Hello", { ...turnOptions, connectorId: "gone" }));
+    expect(e).toMatchObject({ status: 409, extra: { reason: "no connector" } });
+    expect(hub.liveRun("a")).toBeNull();
+    expect(said).toEqual([]);
+  });
+
+  it("says plainly when the model server can't be reached, and starts nothing", async () => {
+    saved("a", { plan: null, messages: history });
+    modelsStatus = 502;
+    const e = await refusal(chat("a", "Hello"));
+    expect(e).toMatchObject({ status: 502, extra: { reason: "unreachable" } });
+    expect(hub.liveRun("a")).toBeNull();
+  });
+
+  it("is refused while a reply or a plan already runs, and says the text is still in the box", async () => {
+    saved("a", { plan: null, messages: history });
+    await chat("a", "First");
+    await vi.waitFor(() => expect(said).toHaveLength(1));
+    const e = await refusal(chat("a", "Second"));
+    expect(e).toMatchObject({ status: 409, extra: { reason: "already running" } });
+    expect(e.message).toMatch(/still in the box/);
+    expect(said).toHaveLength(1);
+    finishReply(true);
+    await vi.waitFor(() => expect(hub.liveRun("a")).toBeNull());
+  });
+
+  it("is a 404 for a session with no file", async () => {
+    expect((await refusal(chat("missing", "Hello"))).status).toBe(404);
   });
 });
 

@@ -408,7 +408,9 @@ vitest (`npm test`).
 - **Stopped or failed**: if you press **Stop**, or the reply fails, the step
   goes back to pending (with "The reply failed: …" if it did) and the plan
   stops. **Continue** picks it up again. A step's answer is kept.
-- While a plan runs, you can't send messages in its own session, but you can
+- While a plan runs you can still send messages in its session: the message
+  goes to the run, and a step sees it (see
+  [Messages to a running plan](#messages-to-a-running-plan)). You can also
   switch to any other session and chat there. Switching is blocked only
   while a model turn you started in the open session is streaming.
 - What a step asks you while it runs (approve a change or a command, allow a
@@ -427,9 +429,10 @@ The run uses the same code the page used to (`runPlan` and the reply in
 `src/agent/` and `src/runnerReply.ts`), and holds the session as plain saved
 data. It saves it (debounced, through the server's owner of the session: see
 [Saved sessions](#features)) as it goes, and while it runs the page doesn't
-save that session at all. The server restarting (`npm run dev` restarting
-when a server file changes, or stopping it) ends every run; the plan is left
-unfinished and shows **Continue**.
+save that session at all. The server stopping or restarting (`npm run dev`
+restarting when a server file changes, or stopping it) ends every run, and
+nothing starts again by itself: see
+[After a restart](#after-a-restart).
 
 - **Run** saves the session first, then sends a `run` command with what the
   page has chosen: the server (connector), the model, and whether Tools and
@@ -473,6 +476,82 @@ unfinished and shows **Continue**.
 - **Cancel plan** on a running plan stops the run first and waits until it is
   over, then removes the plan; the removal is an ordinary save.
 - Deleting a session that is running stops the run first.
+
+### Messages to a running plan
+
+Type in the message box while a plan runs and the message goes to the run
+(a `message` command), not to the model at once. A step starts with a fresh
+context, so the run folds your message in at the next step boundary: after
+**Pause** has let go and before the next step starts, it joins the chat and is
+put in that step's prompt, and in every step after it.
+
+- The answer comes straight away and says which step will see it. The box
+  clears, and the chat shows the message with "Seen by step 3" under it once
+  that step starts. Several messages before the same step all go in together.
+- Nothing is queued silently. If no step is left to see it (the last step is
+  already running, or **Stop** was pressed) the message is refused with a plain
+  reason, and your text stays in the box: send it when the plan has finished,
+  as an ordinary message.
+- A message that was accepted but whose plan ended (stopped, failed) before
+  another step started goes into the chat anyway, marked "No step saw this:
+  the plan ended first", so the text is never lost.
+- Your messages are part of the run's record (`notes`) while they wait, so a
+  window opened meanwhile shows them. They hold only what you typed.
+- A message to a thread is the same: open the thread and type there. Only the
+  thread's run sees it; the chat that started the thread gets just the outcome
+  and the report when the run ends.
+
+### Chat replies run on the server too
+
+A message to a session with no plan running is one chat reply, and it runs on
+the server as well, as a run one reply long (`startTurn` in
+`server/runners.ts`). So every session has one owner, whether you are chatting
+in it or it is running a plan.
+
+- **Send** saves the session first, with the messages before this one, then
+  sends a `message` command with the text and the **Plan** switch. The reply
+  streams back as events and shows the way a plan's steps do: the messages as
+  they grow, the usage, the session's name when the model has written it, any
+  question for you (a command to approve, a folder to allow) in the chat, and
+  an error if the reply failed. Reloading or closing the page doesn't cut it
+  off; open the session and it is still streaming.
+- **Resend** on a failed reply cuts the failed reply off, saves the shorter
+  chat, then sends the message again. A reply being written takes no second
+  message: it is refused with "A reply is still streaming…" and the text stays
+  in the box. **Stop** works as before. A chat reply has no **Pause**.
+- The reply is made by the same code as before (`runTurn`, the naming, the
+  usage and the planning turns work as they did); only where it runs changed.
+
+### After a restart
+
+A run lives in the server's memory, so when the server stops, so does the run.
+When it starts again it looks at every saved session whose file still says a run
+was going (the `run` record in `session.json`), and settles each one, once:
+
+- A step that was running goes back to **pending** with the note
+  "Interrupted by a restart". An answer you had given it is kept.
+- A question the run was waiting on is gone: nothing is left that could take
+  the answer. **Continue** asks again if the step still needs it.
+- A tool call that never got its result is closed with a result saying it was
+  cut off, so the next request to the model isn't refused for it.
+- A message of yours that no step had seen goes into the chat, marked as not
+  seen.
+- The chat shows the last reply as cut off (the same as a reload in the middle
+  of a reply), and a chat reply that was streaming shows as failed, with
+  **Resend**.
+- The run's record is removed and the revision goes up by one. If the session
+  was a thread, the note in the chat that started it says **Not finished in a
+  thread**, with "The server restarted while this was running, so it stopped
+  after 1 of 3 steps. Open the thread and press Continue to go on." No model
+  is asked for that report.
+
+Nothing starts again by itself: a plan someone wanted to keep running could
+change files or spend a lot of time, so you decide. The plan card shows
+**Continue** (it also does after a **Stop**, since a step was stopped), and
+Continue runs the plan where it is. A server that isn't restarted but is closed
+while the same program goes on (`npm run dev` after a change to its config)
+stops its runs first, as **Stop** does, so they end properly and are not left
+running with no server.
 
 ### Who marks a step done
 
@@ -533,6 +612,10 @@ the step, not in the chat.
   report a moment later. Running the plan again (Continue, Resume or
   Restart) puts the spinner back and hides the old report until the new run
   ends.
+- If the server restarts while the thread runs, the note says **Not finished
+  in a thread** and that it was interrupted (see
+  [After a restart](#after-a-restart)); open the thread and press
+  **Continue**.
 - The note is not kept up to date if you change the thread yourself later
   (say you mark a failed step done): it shows how the last run ended. A note
   made before notes had a report shows the thread's saved state, with no
@@ -615,7 +698,8 @@ step that was running when the page closed comes back as pending.
     starts with the session, its revision and its run, then sends `status`,
     `step`, `ask`, `session` (only what changed: the changed fields and the
     messages from the first one that differs, at most about ten a second),
-    `saved` and `removed`. A quiet connection gets a comment line every 15
+    `ack` (the step that will see a message you sent to the run),
+    `thread`, `saved` and `removed`. A quiet connection gets a comment line every 15
     seconds. The events hold no API keys: keys stay in `settings.json`, and the
     server never hands one to a run.
   - **Nested sessions**: the button beside the trash icon on each row makes a

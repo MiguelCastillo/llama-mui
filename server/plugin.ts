@@ -17,6 +17,8 @@ import { selfOrigin } from "./selfOrigin.ts";
 import { sessionRoutes } from "./sessions.ts";
 import { toolRoutes } from "./tools.ts";
 import { modelAdminRoutes } from "./modelAdmin.ts";
+import { recoverOnce } from "./restart.ts";
+import { stopAllRuns } from "./runners.ts";
 
 async function route(r: Route) {
   if (await eventRoutes(r)) return;
@@ -67,10 +69,14 @@ const handler: Connect.NextHandleFunction = (req, res) => {
   });
 };
 
-// Plans run on the server call its own /api over http (see setApiOrigin), so
+// What a server does when it starts. Plans run on the server call its own /api over http (see setApiOrigin), so
 // once the server is listening it tells the client code where that is. Plain
 // http only: a server started with https would need to trust its own certificate.
-function useOwnAddress(httpServer: Server | null) {
+function whenServing(httpServer: Server | null) {
+  // A run that was going when the last server stopped is marked as interrupted
+  // (see restart.ts); this server's own runs end if it is closed meanwhile.
+  void recoverOnce();
+  httpServer?.once("close", () => void stopAllRuns());
   if (!httpServer || "setSecureContext" in httpServer) return;
   const set = () => {
     const origin = selfOrigin(httpServer.address());
@@ -85,11 +91,11 @@ export function api(): Plugin {
     name: "llama-mui-api",
     configureServer(server) {
       server.middlewares.use("/api", handler);
-      useOwnAddress(server.httpServer as Server | null);
+      whenServing(server.httpServer as Server | null);
     },
     configurePreviewServer(server) {
       server.middlewares.use("/api", handler);
-      useOwnAddress(server.httpServer as Server | null);
+      whenServing(server.httpServer as Server | null);
     },
   };
 }
