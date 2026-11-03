@@ -1445,7 +1445,7 @@ function MessageBubble({
   const took = [...parts].reverse().find((m) => m.took)?.took;
   const isUser = parts[0].role === "user";
   // What was sent after this message without being shown: its chat update
-  // and note (see README, "What the model is told"). Opened on request.
+  // and note (see docs/guide.md, "What the model is told"). Opened on request.
   const hidden = isUser ? [parts[0].update, parts[0].note].filter(Boolean).join("\n\n") : "";
   const last = parts[parts.length - 1];
   // The waiting dots: shown while the reply's newest turn has nothing yet,

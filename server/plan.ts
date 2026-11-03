@@ -2,7 +2,7 @@
 // Small models say they're done when they aren't, so chat runs the plan one
 // step per turn and checks each step (see src/Plan.tsx). The server only
 // checks the steps' shape; chat keeps the plan and shows it. The rules for
-// when plans are made and who marks steps done are in README, "How plans work".
+// when plans are made and who marks steps done are in docs/guide.md, "How plans work".
 
 import { ToolError, type ToolSpec, fn } from "./toolkit.ts";
 

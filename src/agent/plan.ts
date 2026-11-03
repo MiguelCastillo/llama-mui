@@ -22,7 +22,7 @@ export const PLANNING_TOOLS = new Set([
   "fetch_url",
 ]);
 // A note: an instruction for one turn, sent after the message's text (see
-// README, "What the model is told"). A question comes first: led by "only
+// docs/guide.md, "What the model is told"). A question comes first: led by "only
 // plan", the model opened its answers to questions with "This is a question,
 // not a file change request", replying to a note the user never sees.
 export const PLANNING_NOTE =
@@ -36,7 +36,7 @@ export const PLANNING_NOTE =
 // Not by position: a step that dropped the finished steps from the plan once
 // gave their "done" to the steps that took their places. The step running may
 // be reworded, so it keeps its id (its messages and runPlan use it) as the
-// first new step with no match. See README, "How plans work".
+// first new step with no match. See docs/guide.md, "How plans work".
 export function planFromCall(args: string, old: PlanStep[], running: boolean): PlanStep[] | null {
   try {
     const steps = JSON.parse(args).steps;

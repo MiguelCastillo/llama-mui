@@ -53,8 +53,8 @@ export interface Store {
   preferences: Preferences;
   models: Record<string, ModelSettings>;
   // A command that checks a folder's code (a typecheck, tests), by the
-  // folder's path; chat runs it after each plan step. See README, "Running a
-  // plan".
+  // folder's path; chat runs it after each plan step. See docs/guide.md,
+  // "Running a plan".
   checkCommands: Record<string, string>;
 }
 

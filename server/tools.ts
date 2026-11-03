@@ -121,7 +121,7 @@ const isOffered = (ctx: ToolContext, t: ToolSpec) => !ctx.store.disabledTools.in
 // session, since it's the start of every request and a change made llama.cpp
 // reprocess the whole chat (about a minute for 40k tokens). The tool list, also
 // at the start, lists every tool for the same reason; one that's off is refused
-// when it's called (runTool). See README, "What the model is told".
+// when it's called (runTool). See docs/guide.md, "What the model is told".
 //
 // Everything but the last line is the same in every session, so a new one
 // reuses another's cached start (the tool list comes first, then this). Only
