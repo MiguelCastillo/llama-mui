@@ -362,6 +362,47 @@ async function collect(api: "anthropic" | "openai", kind: "llama" | "anthropic" 
 
 afterEach(() => vi.unstubAllGlobals());
 
+// A history cut off while a tool call waited: the call has no result.
+const orphanHistory: ChatMessage[] = [
+  { role: "user", content: "Read README.md" },
+  { role: "assistant", content: "Reading it.", toolCalls: [{ id: "t1", name: "read_file", arguments: '{"path":"README.md"}' }] },
+  { role: "user", content: "Are you there?" },
+];
+const cutOff = "This call did not run: it was cut off before it finished (the page was reloaded while it waited).";
+
+describe("streamChat with a tool call that never got a result", () => {
+  const send = (api: "anthropic" | "openai") =>
+    streamChat({ ...request, api, kind: "llama", messages: orphanHistory }, () => {}, new AbortController().signal);
+
+  it("sends a tool_result for it with the Messages API", async () => {
+    const requests = serve([
+      { type: "message_start", message: { id: "m1", type: "message", role: "assistant", content: [], model: "qwen", stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ]);
+    await send("anthropic");
+    const sent = requests[0].body.messages;
+    expect(sent[1].content.some((b: any) => b.type === "tool_use" && b.id === "t1")).toBe(true);
+    // The result comes first in the next user message, ahead of the user's own text.
+    expect(sent[2].role).toBe("user");
+    expect(sent[2].content[0]).toEqual({ type: "tool_result", tool_use_id: "t1", content: cutOff });
+  });
+
+  it("sends a tool message for it with the Chat Completions API", async () => {
+    const requests = serve([{ choices: [{ delta: {} }] }]);
+    await send("openai");
+    const sent = requests[0].body.messages;
+    const i = sent.findIndex((m: any) => m.role === "assistant" && m.tool_calls);
+    expect(sent[i + 1]).toEqual({ role: "tool", tool_call_id: "t1", content: cutOff });
+  });
+
+  it("leaves the caller's history untouched", async () => {
+    serve([{ choices: [{ delta: {} }] }]);
+    await send("openai");
+    expect(orphanHistory).toHaveLength(3);
+  });
+});
+
 describe("streamChat with the Messages API", () => {
   // A reply that thinks, says something and calls a tool. llama.cpp's
   // signature is empty; Claude's isn't.

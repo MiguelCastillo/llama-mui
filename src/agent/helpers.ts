@@ -36,11 +36,25 @@ export function commandSummary(output: string): string {
 // The INTERRUPTED constant, extracted so failureLine is pure.
 export const INTERRUPTED = "interrupted";
 
-// What happened to a failed reply, in the user's terms. Our server answers
-// 502 when it can't reach the llama server; a TypeError means the request
-// never got an answer at all.
-export function failureLine(failed: string): string {
+const MESSAGE_CUT = 160;
+
+// What happened to a failed reply, in the user's terms. `who` is the
+// connector's name or kind. Our server answers 502 when it can't reach the
+// llama server; a TypeError means the request never got an answer at all. A
+// 4xx like "Error: POST /v1/messages: 400 <message>" was an answer: say who
+// gave it and what it said, cut short (the full error is in the tooltip).
+export function failureLine(failed: string, who = "the llama server"): string {
+  const name = who.trim() || "the llama server";
+  const sentence = name.charAt(0).toUpperCase() + name.slice(1);
   if (failed === INTERRUPTED) return "The reply was cut off.";
-  if (failed.startsWith("TypeError") || failed.includes(": 502 ")) return "Couldn't reach the llama server.";
-  return "The llama server returned an error.";
+  if (failed.startsWith("TypeError") || failed.includes(": 502 ")) return `Couldn't reach ${name}.`;
+  const rejected = /^(?:Error: )?POST \S+: 4\d\d\s+([\s\S]*)$/.exec(failed);
+  if (rejected) {
+    const message = rejected[1].replace(/\s+/g, " ").trim();
+    if (message) {
+      const cut = message.length > MESSAGE_CUT ? `${message.slice(0, MESSAGE_CUT).trimEnd()}…` : message;
+      return `${sentence} rejected the request: ${cut}`;
+    }
+  }
+  return `${sentence} returned an error.`;
 }

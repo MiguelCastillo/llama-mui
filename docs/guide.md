@@ -484,7 +484,9 @@ step that was running when the page closed comes back as pending.
   saying what went wrong (the reply was cut off, the llama server couldn't be
   reached, or it returned an error), with a **Resend** button. Hover the line
   for the raw error. A reply cut off by a reload or closed tab can still be
-  resent after the chat reopens.
+  resent after the chat reopens. A tool call that never finished (the page
+  reloaded or the server restarted while it waited) gets a result saying it
+  didn't run, when the session loads and before each request, so Resend works.
 
 - Model picker from the active server's `/v1/models`, laid out like the Models
   page: each model's status, context and source, with ▶ / ■ to load or unload

@@ -154,4 +154,53 @@ describe("failureLine", () => {
   it("handles empty string", () => {
     expect(failureLine("")).toBe("The llama server returned an error.");
   });
+
+  it("names the connector that rejected a 400", () => {
+    const err = "Error: POST /v1/messages: 400 messages.3: tool_use ids were found without tool_result blocks";
+    expect(failureLine(err, "Anthropic")).toBe(
+      "Anthropic rejected the request: messages.3: tool_use ids were found without tool_result blocks",
+    );
+  });
+
+  it("falls back to the llama server for a 400 without a name", () => {
+    expect(failureLine("Error: POST /v1/chat/completions: 400 bad thing")).toBe(
+      "The llama server rejected the request: bad thing",
+    );
+  });
+
+  it("cuts a long rejection message to about 160 characters", () => {
+    const line = failureLine(`Error: POST /v1/messages: 400 ${"x".repeat(400)}`, "Anthropic");
+    expect(line).toBe(`Anthropic rejected the request: ${"x".repeat(160)}…`);
+  });
+
+  it("does not cut a message of exactly 160 characters", () => {
+    const line = failureLine(`Error: POST /v1/messages: 400 ${"y".repeat(160)}`, "Anthropic");
+    expect(line).toBe(`Anthropic rejected the request: ${"y".repeat(160)}`);
+  });
+
+  it("collapses whitespace in the rejection message", () => {
+    expect(failureLine("Error: POST /v1/messages: 400 line one\n  line two", "Anthropic")).toBe(
+      "Anthropic rejected the request: line one line two",
+    );
+  });
+
+  it("says it couldn't reach the named connector on a 502", () => {
+    expect(failureLine("Error: POST /v1/messages: 502 Bad Gateway", "Work llama")).toBe("Couldn't reach Work llama.");
+  });
+
+  it("says it couldn't reach the named connector on a TypeError", () => {
+    expect(failureLine("TypeError: fetch failed", "Anthropic")).toBe("Couldn't reach Anthropic.");
+  });
+
+  it("keeps the cut-off line for an interrupted reply whatever the name", () => {
+    expect(failureLine(INTERRUPTED, "Anthropic")).toBe("The reply was cut off.");
+  });
+
+  it("names the connector in the fallback", () => {
+    expect(failureLine("Something went wrong", "anthropic")).toBe("Anthropic returned an error.");
+  });
+
+  it("uses the default name when the connector name is blank", () => {
+    expect(failureLine("Error: POST /v1/messages: 400 nope", "  ")).toBe("The llama server rejected the request: nope");
+  });
 });

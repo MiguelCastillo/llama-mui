@@ -872,6 +872,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       showSteps={prefs?.showSteps ?? true}
       renderMarkdown={prefs?.renderMarkdown ?? true}
       failed={i === lastFailedTurnIndex ? failed : undefined}
+      connectorName={connector ? connector.name || connector.kind : undefined}
       onResend={i === lastFailedTurnIndex ? retry : undefined}
       resendDisabled={i === lastFailedTurnIndex ? !!abort : undefined}
     />
@@ -1502,6 +1503,7 @@ function MessageBubble({
   showSteps,
   renderMarkdown,
   failed,
+  connectorName,
   onResend,
   resendDisabled,
   since,
@@ -1518,6 +1520,8 @@ function MessageBubble({
   renderMarkdown: boolean;
   // Error message for the last user message in this turn.
   failed?: string | null;
+  // Who answered the failed request, named in its error line.
+  connectorName?: string;
   // Callback for resending the last user message.
   onResend?: () => void;
   // Disabled state for the resend button.
@@ -1560,7 +1564,7 @@ function MessageBubble({
         {/* The raw error is for debugging, so it waits on hover. */}
         <Tooltip title={failed === INTERRUPTED ? "" : failed}>
           <Typography variant="caption" color="error.main">
-            {failureLine(failed)}
+            {failureLine(failed, connectorName)}
           </Typography>
         </Tooltip>
         <Button

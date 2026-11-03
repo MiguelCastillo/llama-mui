@@ -1,6 +1,7 @@
 // Turn-loop helpers extracted from Chat.tsx.
 
 import { type Api, type Kind, type ChatMessage, type ToolCall, type Usage, type Todo, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, streamChat, runTool } from "../api";
+import { closeOpenToolCalls } from "../closeOpenToolCalls";
 import { callKey, shareTokens } from "./helpers";
 import { applyTodoCall, openTodos } from "./todos";
 import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext } from "./plan";
@@ -150,8 +151,10 @@ export async function runTurn(
   let attached = [...attachedBase];
 
   const update = toolsOn && toolContextUpdate !== seenUpdate ? { update: toolContextUpdate } : {};
+  // A call left without a result (Stop, a reload) would break every request
+  // after it, so it's closed here, and the repaired history is what's kept.
   let history: ChatMessage[] = [
-    ...baseHistory,
+    ...closeOpenToolCalls(baseHistory),
     { role: "user", content: text, ...update, ...(planning && { note: PLANNING_NOTE }), ...tag },
   ];
   setError(null);
@@ -611,7 +614,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       if (asking) break;
       if (!check) {
         setStep(id, r.error
-          ? { status: "pending", note: `The reply failed: ${failureLine(r.error)}`, ...keep }
+          ? { status: "pending", note: `The reply failed: ${failureLine(r.error, connector.name || connector.kind)}`, ...keep }
           : { status: "pending", ...keep });
         break;
       }

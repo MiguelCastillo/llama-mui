@@ -6,6 +6,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
+import { closeOpenToolCalls } from "./closeOpenToolCalls";
 
 export type ModelStatus = "loaded" | "loading" | "unloaded" | string;
 
@@ -604,9 +605,11 @@ export interface ChatReply {
 }
 
 // Streams one reply, calling onDelta for each piece of text or thinking, in
-// the connector's API.
+// the connector's API. A tool call without a result would make the server
+// reject the request, so those are closed first.
 export function streamChat(req: ChatRequest, onDelta: (d: StreamDelta) => void, signal: AbortSignal): Promise<ChatReply> {
-  return req.api === "openai" ? streamCompletions(req, onDelta, signal) : streamMessages(req, onDelta, signal);
+  const repaired = { ...req, messages: closeOpenToolCalls(req.messages) };
+  return repaired.api === "openai" ? streamCompletions(repaired, onDelta, signal) : streamMessages(repaired, onDelta, signal);
 }
 
 // The Messages API requires a cap. Big enough for a step that writes a whole

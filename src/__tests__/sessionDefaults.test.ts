@@ -32,4 +32,22 @@ describe("withSessionDefaults", () => {
     expect(s.attachments).toHaveLength(1);
     expect(s.todos).toEqual([{ id: "a", summary: "s", description: "d", context: "c", status: "done", createdAt: 3 }]);
   });
+
+  it("closes a tool call that never got a result when a session loads", () => {
+    const raw = {
+      id: "x",
+      title: "t",
+      model: "m",
+      messages: [
+        { role: "user", content: "go" },
+        { role: "assistant", content: "", toolCalls: [{ id: "a", name: "run_command", arguments: "{}" }] },
+      ],
+    } as unknown as Session;
+    const s = withSessionDefaults(raw);
+    expect(s.messages).toHaveLength(3);
+    expect(s.messages[2]).toMatchObject({ role: "tool", toolCallId: "a", stats: { ms: 0, tokens: 0 } });
+    expect(s.messages[2].content).toMatch(/did not run/);
+    // Loading a repaired session again changes nothing.
+    expect(withSessionDefaults(s).messages).toEqual(s.messages);
+  });
 });
