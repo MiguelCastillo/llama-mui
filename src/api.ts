@@ -498,6 +498,9 @@ export interface Session {
   userName?: string | null;
   // Things to come back to, from add_todo; see src/agent/todos.ts. Older saved chats don't have it.
   todos?: Todo[];
+  // The session this one is nested under (its direct parent). The panel shows
+  // one level only: see buildSessionTree in sessionTree.ts. Older saved chats don't have it.
+  parentId?: string | null;
 }
 
 export interface Todo {
@@ -560,6 +563,10 @@ export interface SessionSummary {
   userName?: string | null;
   // The session's open todos, without descriptions; see openTodoList in server/sessions.ts.
   todos?: { id: string; summary: string }[];
+  // The session this one is nested under (its direct parent, any session). The
+  // panel shows one level only; see buildSessionTree in sessionTree.ts. Null,
+  // missing, or a parent that no longer exists: top level.
+  parentId?: string | null;
 }
 
 // Saved sessions, newest first, and the calls to open, save and delete one.

@@ -71,13 +71,30 @@ export function openTodoList(todos: unknown): { id: string; summary: string }[] 
     .map((t) => ({ id: t.id, summary: t.summary }));
 }
 
+// The row the sessions list shows for a saved session. The list, a save and a
+// rename all answer with it, so the client can swap a row for the answer
+// without losing a field (a nested session would jump to the top level
+// without its parentId).
+export function summaryOf(s: any) {
+  return {
+    id: String(s.id),
+    title: String(s.title),
+    updatedAt: Number(s.updatedAt),
+    modelName: s.modelName ?? null,
+    userName: s.userName ?? null,
+    todos: openTodoList(s.todos),
+    parentId: typeof s.parentId === "string" ? s.parentId : null,
+  };
+}
+
 let migration: Promise<void> | undefined;
 
 // Handles /api/sessions; returns false for anything else.
-//   GET          → [{ id, title, updatedAt, todos }], newest first
+//   GET          → [summary], newest first; a summary is { id, title, updatedAt,
+//                  modelName, userName, todos, parentId } (see summaryOf)
 //   GET /<id>    → the saved session
-//   PUT /<id>    → saves it; the server sets createdAt and updatedAt
-//   PATCH /<id>  → updates only the name fields, keeps updatedAt
+//   PUT /<id>    → saves it; the server sets createdAt and updatedAt; answers with its summary
+//   PATCH /<id>  → updates only the name fields, keeps updatedAt; answers with its summary
 //   DELETE /<id> → deletes its session.json, and its folder if nothing else is in it
 export async function sessionRoutes({ req, res, parts, method }: Route): Promise<boolean> {
   if (parts[0] !== "sessions") return false;
@@ -89,14 +106,7 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
     const sessions = await Promise.all(names.map((n) => readSession(n).catch(() => null)));
     const list = sessions
       .filter((s) => s !== null)
-      .map((s) => ({
-        id: String(s.id),
-        title: String(s.title),
-        updatedAt: Number(s.updatedAt),
-        modelName: s.modelName ?? null,
-        userName: s.userName ?? null,
-        todos: openTodoList(s.todos),
-      }))
+      .map(summaryOf)
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
     sendJson(res, 200, list);
     return true;
@@ -122,7 +132,7 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
     const title = String(userName ?? modelName ?? body.title ?? "New session").slice(0, 100);
     const session = { ...body, id, title, modelName, userName, createdAt: old?.createdAt ?? now, updatedAt: now };
     await writeSession(id, session);
-    sendJson(res, 200, { id, title, updatedAt: now });
+    sendJson(res, 200, summaryOf(session));
     return true;
   }
   if (method === "PATCH") {
@@ -137,7 +147,7 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
       userName: body.userName !== undefined ? body.userName : old.userName,
     };
     await writeSession(id, session);
-    sendJson(res, 200, { id, title, updatedAt: old.updatedAt });
+    sendJson(res, 200, summaryOf(session));
     return true;
   }
   if (method === "DELETE") {

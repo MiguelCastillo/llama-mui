@@ -119,6 +119,7 @@ import {
 } from "./agent/plan";
 import { runTurn, runPlan } from "./agent/agent";
 import { withSessionDefaults } from "./sessionDefaults";
+import { nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
 // and whether the Tools switch is on. Storage can be unavailable (private
@@ -393,7 +394,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const savedKey = useRef("");
   // Not the title: it comes from the names and the first message, and a saved
   // one holds the user's name, which saves never send.
-  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos]);
+  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos, s.parentId ?? null]);
+
+  // The session this one is nested under (its direct parent), if any.
+  const [parentId, setParentId] = useState<string | null>(null);
 
   const applySession = (s: Session) => {
     // Saved before plans had a place: pinned after the chat's last message as
@@ -426,6 +430,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setPlanAnchor(planAnchor);
     setPastPlans(pastPlans);
     changeTodos(s.todos ?? []);
+    setParentId(s.parentId ?? null);
     if (s.model) setModel(s.model);
   };
 
@@ -472,6 +477,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       promptDir: fixedPromptDir,
       modelName,
       todos,
+      parentId,
     };
     const key = keyOf(session);
     if (key === savedKey.current) return;
@@ -488,7 +494,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return () => clearTimeout(timer);
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planSummary, planAnchor, pastPlans, fixedPromptDir, modelName, todos]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planSummary, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -512,8 +518,27 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setPlanAnchor(null);
     setPastPlans([]);
     changeTodos([]);
+    setParentId(null);
     setDrawerOpen(false);
     loadSession(id);
+  };
+  // An empty session under `parentId`, with the same working folders and model
+  // but none of its messages. It is saved right away (saveNow skips empty
+  // sessions) so it shows in the list under its parent, then opened.
+  const newNested = async (parentId: string) => {
+    if (abort || planRunningRef.current) return;
+    try {
+      const parent =
+        parentId === sessionId
+          ? { id: sessionId, model, attachments }
+          : withSessionDefaults(await getSession(parentId));
+      const child = nestedSessionFrom(parent, crypto.randomUUID());
+      const summary = await saveSession(child);
+      setSessions((ss) => [summary, ...ss.filter((x) => x.id !== summary.id)]);
+      openSession(child.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
   // A new session starts on the connector's default model (see pickModel),
   // not on whatever this tab last used; opening a saved one keeps its own.
@@ -540,6 +565,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // without being shown, in some browsers (the Claude app's browser pane).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const removeSession = (id: string) => setConfirmDelete(id);
+  // Deleting does not cascade: nested sessions are kept, keep their parentId,
+  // and show at the top level because their parent is gone. The Dialog says so.
+  const heldNested = confirmDelete ? nestedHeldBy(sessions, confirmDelete) : 0;
   // The user's name for a session is userName; an empty one clears it, and the
   // title falls back to the model's name, then the first message.
   const renameSessionLocal = (id: string, name: string) => {
@@ -1058,6 +1086,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         busy={!!abort || planRunning}
         onSelect={(id) => id !== sessionId && openSession(id)}
         onNew={newChat}
+        onNewNested={newNested}
         onDelete={removeSession}
         onRename={renameSessionLocal}
         onClose={() => setDrawerOpen(false)}
@@ -1286,6 +1315,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           <DialogContentText>
             “{sessions.find((s) => s.id === confirmDelete)?.title ?? "This session"}” and its messages will be deleted.
             This can't be undone.
+            {heldNested > 0 &&
+              (heldNested === 1
+                ? " It holds 1 nested session. It is kept and moves up to the top level."
+                : ` It holds ${heldNested} nested sessions. They are kept and move up to the top level.`)}
           </DialogContentText>
         </DialogContent>
         <DialogActions>

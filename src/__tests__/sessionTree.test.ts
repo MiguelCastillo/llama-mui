@@ -1,0 +1,131 @@
+import { describe, expect, it } from "vitest";
+import type { Attachment, SessionSummary } from "../api";
+import { buildSessionTree, countNested, nestedHeldBy, nestedSessionFrom } from "../sessionTree";
+
+const row = (id: string, parentId?: string | null, updatedAt = 1): SessionSummary => ({
+  id,
+  title: id,
+  updatedAt,
+  parentId,
+});
+
+// The tree as ids, so a test reads as the shape it expects.
+const shape = (summaries: SessionSummary[]) =>
+  buildSessionTree(summaries).map((n) => [n.session.id, n.children.map((c) => c.session.id)]);
+
+describe("buildSessionTree", () => {
+  it("keeps sessions without parents at the top level", () => {
+    expect(buildSessionTree([])).toEqual([]);
+    expect(shape([row("a", null, 2), row("b", undefined, 1)])).toEqual([
+      ["a", []],
+      ["b", []],
+    ]);
+  });
+
+  it("puts a child under its parent", () => {
+    expect(shape([row("p", null, 5), row("c", "p", 1)])).toEqual([["p", ["c"]]]);
+  });
+
+  it("shows a grandchild under the top parent and keeps its stored parent", () => {
+    const tree = buildSessionTree([row("p", null, 3), row("c", "p", 2), row("g", "c", 1)]);
+    expect(tree).toHaveLength(1);
+    expect(tree[0].children.map((n) => n.session.id)).toEqual(["c", "g"]);
+    expect(tree[0].children.every((n) => n.children.length === 0)).toBe(true);
+    expect(tree[0].children[1].session.parentId).toBe("c");
+  });
+
+  it("shows a session whose parent is missing at the top level, with its own children", () => {
+    expect(shape([row("o", "gone", 2), row("c", "o", 1)])).toEqual([["o", ["c"]]]);
+  });
+
+  it("shows both sessions of a two-session cycle at the top level without looping", () => {
+    expect(shape([row("a", "b", 2), row("b", "a", 1)])).toEqual([
+      ["a", []],
+      ["b", []],
+    ]);
+  });
+
+  it("shows a session that is its own parent at the top level", () => {
+    expect(shape([row("a", "a")])).toEqual([["a", []]]);
+  });
+
+  it("shows a child of a cycle member under that member", () => {
+    expect(shape([row("a", "b", 3), row("b", "a", 2), row("c", "b", 1)])).toEqual([
+      ["a", []],
+      ["b", ["c"]],
+    ]);
+  });
+
+  it("shows a child of a self-parent under it", () => {
+    expect(shape([row("a", "a", 2), row("c", "a", 1)])).toEqual([["a", ["c"]]]);
+  });
+
+  it("sorts newest first at the top level and among siblings, then by id", () => {
+    const tree = buildSessionTree([
+      row("old", null, 1),
+      row("new", null, 9),
+      row("p", null, 5),
+      row("c1", "p", 2),
+      row("c3", "p", 8),
+      row("c2", "p", 2),
+    ]);
+    expect(tree.map((n) => n.session.id)).toEqual(["new", "p", "old"]);
+    expect(tree[1].children.map((n) => n.session.id)).toEqual(["c3", "c1", "c2"]);
+  });
+});
+
+describe("countNested", () => {
+  it("counts the children", () => {
+    const [none] = buildSessionTree([row("a")]);
+    expect(countNested(none)).toBe(0);
+    const [p] = buildSessionTree([row("p"), row("c1", "p"), row("c2", "p"), row("g", "c1")]);
+    expect(countNested(p)).toBe(3);
+  });
+});
+
+describe("nestedHeldBy", () => {
+  const rows = [row("p"), row("c", "p"), row("g", "c"), row("x")];
+  it("counts everything shown under a top-level session", () => {
+    expect(nestedHeldBy(rows, "p")).toBe(2);
+  });
+  it("counts the direct children of a nested session, which the tree shows under the top row", () => {
+    expect(nestedHeldBy(rows, "c")).toBe(1);
+  });
+  it("is 0 for a session with none, an unknown id, or a self-parent", () => {
+    expect(nestedHeldBy(rows, "x")).toBe(0);
+    expect(nestedHeldBy(rows, "nope")).toBe(0);
+    expect(nestedHeldBy([row("s", "s")], "s")).toBe(0);
+  });
+});
+
+describe("nestedSessionFrom", () => {
+  const attachments: Attachment[] = [{ path: "/work/app", kind: "folder", source: "manual" }];
+  const parent = { id: "p", model: "some-model", attachments };
+
+  it("starts from the parent's model and attachments and is nested under it", () => {
+    const s = nestedSessionFrom(parent, "child");
+    expect(s).toMatchObject({
+      id: "child",
+      title: "New session",
+      model: "some-model",
+      parentId: "p",
+      attachments: [{ path: "/work/app", kind: "folder", source: "manual" }],
+    });
+  });
+
+  it("does not share the attachments array with the parent", () => {
+    const s = nestedSessionFrom(parent, "child");
+    expect(s.attachments).not.toBe(attachments);
+    expect(s.attachments[0]).not.toBe(attachments[0]);
+    s.attachments.push({ path: "/other", kind: "folder", source: "manual" });
+    expect(attachments).toHaveLength(1);
+  });
+
+  it("does not take the parent's messages, plan or todos", () => {
+    const s = nestedSessionFrom(parent, "child");
+    expect(s.messages).toEqual([]);
+    expect(s.plan).toBeNull();
+    expect(s.todos).toEqual([]);
+    expect(s.usage).toBeNull();
+  });
+});

@@ -60,6 +60,15 @@ describe("withSessionDefaults", () => {
     expect(s.todos).toEqual([{ id: "a", summary: "s", description: "d", context: "c", status: "done", createdAt: 3 }]);
   });
 
+  it("gives an old session no parent", () => {
+    expect(withSessionDefaults({ id: "x", title: "t", model: "m" } as Session).parentId).toBeNull();
+    expect(withSessionDefaults({ id: "x", title: "t", model: "m", parentId: 5 } as unknown as Session).parentId).toBeNull();
+  });
+
+  it("keeps the parent a session is nested under", () => {
+    expect(withSessionDefaults({ id: "x", title: "t", model: "m", parentId: "p" } as Session).parentId).toBe("p");
+  });
+
   it("closes a tool call that never got a result when a session loads", () => {
     const raw = {
       id: "x",

@@ -85,6 +85,18 @@ describe("session routes", () => {
     expect(ids).not.toContain("only-worktrees");
   });
 
+  it("carries parentId in the list and in the PUT and PATCH answers, and null without one", async () => {
+    const put = await call("PUT", ["child-1"], saved("child-1", { parentId: "abc" }));
+    expect(put.body.parentId).toBe("abc");
+    const patch = await call("PATCH", ["child-1"], { title: "Renamed", userName: "Renamed" });
+    expect(patch.body).toMatchObject({ id: "child-1", title: "Renamed", parentId: "abc" });
+    const list = (await call("GET", [])).body;
+    expect(list.find((s: any) => s.id === "child-1").parentId).toBe("abc");
+    expect(list.find((s: any) => s.id === "abc").parentId).toBeNull();
+    expect((await call("PUT", ["plain-1"], saved("plain-1"))).body.parentId).toBeNull();
+    expect((await call("PATCH", ["plain-1"], { userName: "X" })).body.parentId).toBeNull();
+  });
+
   it("refuses an id that is not a plain id", async () => {
     expect((await call("PUT", ["..%2Fx"], saved("x"))).status).toBe(400);
     expect((await call("GET", ["A_B"])).status).toBe(400);

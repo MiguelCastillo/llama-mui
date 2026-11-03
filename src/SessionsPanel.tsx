@@ -11,14 +11,22 @@ import {
   Typography,
 } from "@mui/material";
 import AddCommentIcon from "@mui/icons-material/AddComment";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import SubdirectoryArrowRightIcon from "@mui/icons-material/SubdirectoryArrowRight";
 import type { SessionSummary } from "./api";
-import { useState } from "react";
+import { buildSessionTree, type SessionNode } from "./sessionTree";
+import { useMemo, useState } from "react";
 
 const DEFAULT_WIDTH = 260;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
+// How far each level of nesting moves a row to the right (MUI spacing units).
+const INDENT = 1.5;
+// Room kept at the left of every row for the show/hide arrow.
+const ARROW_SLOT = 24;
 
 // Load the saved width, or default to 260.
 function loadWidth(): number {
@@ -54,8 +62,162 @@ function displayTitle(s: SessionSummary): string {
   return s.userName ?? s.modelName ?? s.title;
 }
 
-// The saved chats, newest first. Beside the chat on wide screens; on phones
-// it slides in over it.
+// What every row needs from the panel; passed down instead of a long list of
+// props per row.
+type RowContext = {
+  currentId: string;
+  narrow: boolean;
+  busy: boolean;
+  // Which session is being renamed: { id, value }.
+  editing: { id: string; value: string } | null;
+  setEditing: (e: { id: string; value: string } | null) => void;
+  saveEdit: (id: string, value: string) => void;
+  // Ids of rows whose nested sessions are hidden.
+  collapsed: ReadonlySet<string>;
+  toggleCollapsed: (id: string) => void;
+  onSelect: (id: string) => void;
+  onNewNested: (id: string) => void;
+  onDelete: (id: string) => void;
+};
+
+// One session row, then (unless hidden) its nested sessions, one level deeper.
+// Works for any depth; how deep the tree goes is decided in sessionTree.ts.
+function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ctx: RowContext }) {
+  const { currentId, narrow, busy, editing, setEditing, saveEdit, collapsed } = ctx;
+  const s = node.session;
+  const isEditing = editing?.id === s.id;
+  const title = displayTitle(s);
+  const hasChildren = node.children.length > 0;
+  const isCollapsed = collapsed.has(s.id);
+  return (
+    <>
+      <ListItem
+        disablePadding
+        // The action buttons show on hover, except on phones (no hover).
+        sx={{
+          ml: depth * INDENT,
+          // A thin line down the left edge ties a nested row to its parent.
+          ...(depth > 0 && { borderLeft: 1, borderColor: "divider" }),
+          "& .MuiListItemSecondaryAction-root": { visibility: narrow ? "visible" : "hidden" },
+          "&:hover .MuiListItemSecondaryAction-root": { visibility: "visible" },
+        }}
+        secondaryAction={
+          <Box sx={{ display: "flex", gap: 0.5 }}>
+            <Tooltip title="New nested session: an empty session under this one, with the same folder and model">
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label={`New nested session under ${title}`}
+                  disabled={busy}
+                  onClick={() => ctx.onNewNested(s.id)}
+                >
+                  <SubdirectoryArrowRightIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Rename session">
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label={`Rename ${title}`}
+                  disabled={busy}
+                  onClick={() => setEditing({ id: s.id, value: title })}
+                >
+                  <EditOutlinedIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Delete session">
+              <span>
+                <IconButton
+                  edge="end"
+                  size="small"
+                  aria-label={`Delete ${title}`}
+                  disabled={busy && s.id === currentId}
+                  onClick={() => ctx.onDelete(s.id)}
+                >
+                  <DeleteOutlinedIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
+        }
+      >
+        {hasChildren ? (
+          <Tooltip title={isCollapsed ? "Show nested sessions" : "Hide nested sessions"}>
+            <IconButton
+              size="small"
+              aria-label={`${isCollapsed ? "Show" : "Hide"} nested sessions of ${title}`}
+              aria-expanded={!isCollapsed}
+              onClick={() => ctx.toggleCollapsed(s.id)}
+              sx={{ width: ARROW_SLOT, height: ARROW_SLOT, flexShrink: 0 }}
+            >
+              {isCollapsed ? <ChevronRightIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <Box sx={{ width: ARROW_SLOT, flexShrink: 0 }} />
+        )}
+        <ListItemButton
+          selected={s.id === currentId}
+          disabled={busy && s.id !== currentId}
+          onClick={() => ctx.onSelect(s.id)}
+          sx={{ borderRadius: 1, pl: 0.5, pr: 11 }}
+        >
+          {isEditing ? (
+            <TextField
+              autoFocus
+              size="small"
+              fullWidth
+              value={editing.value}
+              placeholder={s.modelName ?? "Session name"}
+              onChange={(e) => setEditing({ id: s.id, value: e.target.value })}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  saveEdit(s.id, (e.target as HTMLInputElement).value);
+                }
+                if (e.key === "Escape") setEditing(null);
+              }}
+              onBlur={() => saveEdit(s.id, editing.value)}
+              slotProps={{
+                input: {
+                  endAdornment: (
+                    // Keeps focus in the field, so its blur (which saves)
+                    // doesn't fire before Cancel's click.
+                    <Box
+                      sx={{ display: "flex", alignItems: "center", pr: 0.5 }}
+                      onMouseDown={(e) => e.preventDefault()}
+                    >
+                      <Tooltip title="Save">
+                        <IconButton size="small" onClick={() => saveEdit(s.id, editing.value)}>
+                          ✓
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Cancel">
+                        <IconButton size="small" onClick={() => setEditing(null)}>
+                          ✕
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  ),
+                },
+              }}
+            />
+          ) : (
+            <ListItemText primary={title} secondary={ago(s.updatedAt)} slotProps={{ primary: { noWrap: true } }} />
+          )}
+        </ListItemButton>
+      </ListItem>
+      {hasChildren &&
+        !isCollapsed &&
+        node.children.map((c) => <SessionRow key={c.session.id} node={c} depth={depth + 1} ctx={ctx} />)}
+    </>
+  );
+}
+
+// The saved chats, newest first, with nested sessions under their parent.
+// Beside the chat on wide screens; on phones it slides in over it.
 export default function SessionsPanel({
   sessions,
   currentId,
@@ -64,6 +226,7 @@ export default function SessionsPanel({
   busy,
   onSelect,
   onNew,
+  onNewNested,
   onDelete,
   onRename,
   onClose,
@@ -77,6 +240,8 @@ export default function SessionsPanel({
   busy: boolean;
   onSelect: (id: string) => void;
   onNew: () => void;
+  // Make an empty session under `parentId`.
+  onNewNested: (parentId: string) => void;
   onDelete: (id: string) => void;
   // `name`: what the user typed, trimmed; empty goes back to the model's name.
   onRename: (id: string, name: string) => void;
@@ -85,10 +250,45 @@ export default function SessionsPanel({
   const [width, setWidth] = useState(loadWidth);
   // Which session is being renamed: { id, value }.
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
+  // Rows whose nested sessions are hidden. Kept here only, not saved.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const tree = useMemo(() => buildSessionTree(sessions), [sessions]);
 
   const saveEdit = (id: string, value: string) => {
     onRename(id, value.trim());
     setEditing(null);
+  };
+
+  const toggleCollapsed = (id: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+
+  // Make the nested session, and show it: open the parent's nested sessions.
+  const newNested = (parentId: string) => {
+    setCollapsed((prev) => {
+      if (!prev.has(parentId)) return prev;
+      const next = new Set(prev);
+      next.delete(parentId);
+      return next;
+    });
+    onNewNested(parentId);
+  };
+
+  const ctx: RowContext = {
+    currentId,
+    narrow,
+    busy,
+    editing,
+    setEditing,
+    saveEdit,
+    collapsed,
+    toggleCollapsed,
+    onSelect,
+    onNewNested: newNested,
+    onDelete,
   };
 
   const list = (
@@ -119,106 +319,9 @@ export default function SessionsPanel({
         </Typography>
       ) : (
         <List dense sx={{ overflowY: "auto", flexGrow: 1, px: 1 }}>
-          {sessions.map((s) => {
-            const isEditing = editing?.id === s.id;
-            const title = displayTitle(s);
-            return (
-              <ListItem
-                key={s.id}
-                disablePadding
-                // The action buttons show on hover, except on phones (no hover).
-                sx={{
-                  "& .MuiListItemSecondaryAction-root": { visibility: narrow ? "visible" : "hidden" },
-                  "&:hover .MuiListItemSecondaryAction-root": { visibility: "visible" },
-                }}
-                secondaryAction={
-                  <Box sx={{ display: "flex", gap: 0.5 }}>
-                    <Tooltip title="Rename session">
-                      <span>
-                        <IconButton
-                          edge="end"
-                          size="small"
-                          aria-label={`Rename ${title}`}
-                          disabled={busy}
-                          onClick={() => setEditing({ id: s.id, value: title })}
-                        >
-                          <EditOutlinedIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                    <Tooltip title="Delete session">
-                      <span>
-                        <IconButton
-                          edge="end"
-                          size="small"
-                          aria-label={`Delete ${title}`}
-                          disabled={busy && s.id === currentId}
-                          onClick={() => onDelete(s.id)}
-                        >
-                          <DeleteOutlinedIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                  </Box>
-                }
-              >
-                <ListItemButton
-                  selected={s.id === currentId}
-                  disabled={busy && s.id !== currentId}
-                  onClick={() => onSelect(s.id)}
-                  sx={{ borderRadius: 1, pr: 5 }}
-                >
-                  {isEditing ? (
-                    <TextField
-                      autoFocus
-                      size="small"
-                      fullWidth
-                      value={editing.value}
-                      placeholder={s.modelName ?? "Session name"}
-                      onChange={(e) => setEditing({ id: s.id, value: e.target.value })}
-                      onClick={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          saveEdit(s.id, (e.target as HTMLInputElement).value);
-                        }
-                        if (e.key === "Escape") setEditing(null);
-                      }}
-                      onBlur={() => saveEdit(s.id, editing.value)}
-                      slotProps={{
-                        input: {
-                          endAdornment: (
-                            // Keeps focus in the field, so its blur (which saves)
-                            // doesn't fire before Cancel's click.
-                            <Box
-                              sx={{ display: "flex", alignItems: "center", pr: 0.5 }}
-                              onMouseDown={(e) => e.preventDefault()}
-                            >
-                              <Tooltip title="Save">
-                                <IconButton size="small" onClick={() => saveEdit(s.id, editing.value)}>
-                                  ✓
-                                </IconButton>
-                              </Tooltip>
-                              <Tooltip title="Cancel">
-                                <IconButton size="small" onClick={() => setEditing(null)}>
-                                  ✕
-                                </IconButton>
-                              </Tooltip>
-                            </Box>
-                          ),
-                        },
-                      }}
-                    />
-                  ) : (
-                    <ListItemText
-                      primary={title}
-                      secondary={ago(s.updatedAt)}
-                      slotProps={{ primary: { noWrap: true } }}
-                    />
-                  )}
-                </ListItemButton>
-              </ListItem>
-            );
-          })}
+          {tree.map((node) => (
+            <SessionRow key={node.session.id} node={node} depth={0} ctx={ctx} />
+          ))}
         </List>
       )}
     </Box>

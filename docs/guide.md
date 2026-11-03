@@ -483,6 +483,16 @@ step that was running when the page closed comes back as pending.
   asks for the list. The **Sessions** panel on the
   left lists them newest first; click one to switch, **+** starts a new session,
   and the trash icon deletes one.
+  - **Nested sessions**: the button beside the trash icon on each row makes a
+    new, empty session under that one. It keeps the same working folder
+    (attachments) and model, but none of the messages. Nested sessions show
+    indented under their parent, and only one level is shown: a nested session
+    made inside another nested one appears under the same top-level parent. A
+    small arrow on a parent hides or shows its nested sessions. Deleting a parent
+    asks first and says how many nested sessions it holds; they are kept and move
+    up to the top level. The link to the parent is saved as `parentId` in
+    `session.json` and in the sessions list. Tools on/off is one setting for the
+    whole app, so a nested session follows it.
 - **Session naming**: after the first reply, the model is asked to name the
   session in 3–6 words. The name shows as the session title unless you give it
   one yourself. Hover the session and click the **✎** icon to rename it: a text
