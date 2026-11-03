@@ -2,7 +2,7 @@
 // change. The server checked the call and answered (server/todos.ts); chat
 // applies it here and saves it with the session, like update_plan's plan.
 
-import type { Todo, ToolCall } from "../api";
+import type { Todo, ToolCall } from "../api.ts";
 
 export const openTodos = (todos: Todo[]) => todos.filter((t) => t.status === "open");
 

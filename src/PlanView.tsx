@@ -102,7 +102,7 @@ export function PlanView({
   // folder), shown under that step: at the bottom of the chat, it meant
   // scrolling between it and the plan's progress.
   prompt?: ReactNode;
-  // The Pause control while the plan runs (see pauseControl in runners.ts): a
+  // The Pause control while the plan runs (see pauseControl in runView.ts): a
   // short caption, and the button, if any. `running` stays true while paused,
   // so the steps stay uneditable.
   control?: { text: string | null; button: "Pause" | "Resume" | null };

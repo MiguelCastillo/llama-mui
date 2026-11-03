@@ -7,9 +7,9 @@
 // - planToThread: builds the child session and the parent without the plan.
 // - threadStatus / threadLabel: what the parent's note says about the thread,
 //   from the child's saved plan.
-import type { ChatMessage, PlanStep, Session } from "./api";
-import { stepLine } from "./agent/plan";
-import { nestedSessionFrom } from "./sessionTree";
+import type { ChatMessage, PlanStep, Session } from "./api.ts";
+import { stepLine } from "./agent/plan.ts";
+import { nestedSessionFrom } from "./sessionTree.ts";
 
 // The message that asked for a plan: the last one the user sent (not a step's)
 // before the update_plan call that wrote it (the call whose id is `anchor`),
@@ -74,7 +74,7 @@ export function planToThread(parent: Session, childId: string): { parent: Sessio
 // How a thread stands, from the child's saved state. "missing": the child
 // can't be found (null). "done": all its steps are done. "failed": a step
 // failed or is disputed. Anything else is "unfinished": a plan that is not
-// finished and has no runner was stopped. While a runner has it the child is
+// finished and has no run was stopped. While a run has it the child is
 // running, and the caller shows that (no status) rather than calling this.
 export type ThreadStatus = "missing" | "done" | "failed" | "unfinished";
 

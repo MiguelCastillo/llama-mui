@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Alert,
   Badge,
   Box,
   Button,
@@ -40,6 +41,9 @@ export const AttachmentIcon = ({ kind }: { kind: Attachment["kind"] }) =>
 
 type SectionId = "attachments";
 
+// Shown, and used as the error, when attachments are changed while a plan runs.
+export const ATTACHMENTS_LOCKED_NOTE = "Folders can't change while a plan runs. Stop it or wait until it finishes.";
+
 // Button next to the message box that opens this chat's settings (for now,
 // what's attached). Laid out like Settings, but everything here belongs to
 // this chat and New chat clears it.
@@ -50,6 +54,7 @@ export default function ChatSettings({
   onMakeWorkingDir,
   checkCommands,
   onSetCheckCommand,
+  locked = false,
 }: {
   attachments: Attachment[];
   onAttach: (a: Attachment) => void;
@@ -57,6 +62,9 @@ export default function ChatSettings({
   onMakeWorkingDir: (path: string) => void;
   checkCommands: Record<string, string>;
   onSetCheckCommand: (folder: string, command: string) => void;
+  // A plan is running: its session belongs to the server until it ends, so
+  // what is attached can't change. The check commands can (they aren't the session's).
+  locked?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [section, setSection] = useState<SectionId>("attachments");
@@ -119,6 +127,7 @@ export default function ChatSettings({
                 onMakeWorkingDir={onMakeWorkingDir}
                 checkCommands={checkCommands}
                 onSetCheckCommand={onSetCheckCommand}
+                locked={locked}
               />
             )}
           </Box>
@@ -139,6 +148,7 @@ function AttachmentsSection({
   onMakeWorkingDir,
   checkCommands,
   onSetCheckCommand,
+  locked,
 }: {
   attachments: Attachment[];
   onAdd: (a: Attachment) => void;
@@ -146,6 +156,7 @@ function AttachmentsSection({
   onMakeWorkingDir: (path: string) => void;
   checkCommands: Record<string, string>;
   onSetCheckCommand: (folder: string, command: string) => void;
+  locked: boolean;
 }) {
   const workingDir = attachments.find((a) => a.kind === "folder")?.path;
   const [path, setPath] = useState("");
@@ -178,6 +189,7 @@ function AttachmentsSection({
           attach is it, unless you pick another.
         </Typography>
       </Box>
+      {locked && <Alert severity="info">{ATTACHMENTS_LOCKED_NOTE}</Alert>}
       {attachments.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
           Nothing yet.
@@ -210,7 +222,7 @@ function AttachmentsSection({
               ) : (
                 a.kind === "folder" && (
                   <Tooltip title="Make this the working directory">
-                    <IconButton size="small" onClick={() => onMakeWorkingDir(a.path)} aria-label={`Make ${a.path} the working directory`}>
+                    <IconButton size="small" disabled={locked} onClick={() => onMakeWorkingDir(a.path)} aria-label={`Make ${a.path} the working directory`}>
                       <HomeOutlinedIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
@@ -225,7 +237,7 @@ function AttachmentsSection({
                 sx={{ flexShrink: 0 }}
               />
               <Tooltip title="Remove from this session">
-                <IconButton size="small" onClick={() => onRemove(a.path)} aria-label={`Remove ${a.path}`}>
+                <IconButton size="small" disabled={locked} onClick={() => onRemove(a.path)} aria-label={`Remove ${a.path}`}>
                   <CloseIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
@@ -238,7 +250,7 @@ function AttachmentsSection({
           size="small"
           variant="outlined"
           startIcon={<InsertDriveFileOutlinedIcon />}
-          disabled={picking}
+          disabled={picking || locked}
           onClick={() => pick("file")}
         >
           Choose files…
@@ -247,7 +259,7 @@ function AttachmentsSection({
           size="small"
           variant="outlined"
           startIcon={<FolderOutlinedIcon />}
-          disabled={picking}
+          disabled={picking || locked}
           onClick={() => pick("folder")}
         >
           Choose folders…
@@ -276,8 +288,9 @@ function AttachmentsSection({
           }}
           error={!!error}
           helperText={error}
+          disabled={locked}
         />
-        <Button type="submit" variant="contained" disabled={!path.trim()} sx={{ flexShrink: 0, mt: 0.25 }}>
+        <Button type="submit" variant="contained" disabled={!path.trim() || locked} sx={{ flexShrink: 0, mt: 0.25 }}>
           Attach
         </Button>
       </Stack>

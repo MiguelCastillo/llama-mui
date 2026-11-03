@@ -1,6 +1,6 @@
-import type { Session } from "./api";
-import { readTodos } from "./agent/todos";
-import { closeOpenToolCalls } from "./closeOpenToolCalls";
+import type { Session } from "./api.ts";
+import { readTodos } from "./agent/todos.ts";
+import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 
 // A session as chat opens it, with a default for every field it reads: shared
 // or imported session.json files may lack some, and chat showed a blank page.

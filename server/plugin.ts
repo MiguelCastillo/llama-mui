@@ -2,7 +2,10 @@
 // options, the llama proxy, and the model's tools. It runs in both `vite` (dev) and
 // `vite preview`.
 
+import type { Server } from "node:http";
 import type { Connect, Plugin } from "vite";
+import { setApiOrigin } from "../src/api.ts";
+import { commandRoutes } from "./commands.ts";
 import { connectorRoutes } from "./connectors.ts";
 import { attachmentRoutes } from "./disk.ts";
 import { eventRoutes } from "./events.ts";
@@ -10,6 +13,7 @@ import { HttpError, type Route, sendJson } from "./http.ts";
 import { instructionRoutes } from "./instructions.ts";
 import { modelSettingRoutes } from "./models.ts";
 import { preferenceRoutes } from "./preferences.ts";
+import { selfOrigin } from "./selfOrigin.ts";
 import { sessionRoutes } from "./sessions.ts";
 import { toolRoutes } from "./tools.ts";
 import { modelAdminRoutes } from "./modelAdmin.ts";
@@ -22,6 +26,7 @@ async function route(r: Route) {
   if (await attachmentRoutes(r)) return;
   if (await preferenceRoutes(r)) return;
   if (await modelSettingRoutes(r)) return;
+  if (await commandRoutes(r)) return;
   if (await sessionRoutes(r)) return;
   if (await instructionRoutes(r)) return;
   throw new HttpError(404, "Not found");
@@ -62,10 +67,29 @@ const handler: Connect.NextHandleFunction = (req, res) => {
   });
 };
 
+// Plans run on the server call its own /api over http (see setApiOrigin), so
+// once the server is listening it tells the client code where that is. Plain
+// http only: a server started with https would need to trust its own certificate.
+function useOwnAddress(httpServer: Server | null) {
+  if (!httpServer || "setSecureContext" in httpServer) return;
+  const set = () => {
+    const origin = selfOrigin(httpServer.address());
+    if (origin) setApiOrigin(origin);
+  };
+  if (httpServer.listening) set();
+  else httpServer.once("listening", set);
+}
+
 export function api(): Plugin {
   return {
     name: "llama-mui-api",
-    configureServer: (server) => void server.middlewares.use("/api", handler),
-    configurePreviewServer: (server) => void server.middlewares.use("/api", handler),
+    configureServer(server) {
+      server.middlewares.use("/api", handler);
+      useOwnAddress(server.httpServer as Server | null);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use("/api", handler);
+      useOwnAddress(server.httpServer as Server | null);
+    },
   };
 }

@@ -1,10 +1,10 @@
 // Turn-loop helpers extracted from Chat.tsx.
 
-import { type Api, type Kind, type ChatMessage, type ToolCall, type Usage, type Todo, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, streamChat, runTool } from "../api";
-import { closeOpenToolCalls } from "../closeOpenToolCalls";
-import { callKey, shareTokens } from "./helpers";
-import { applyTodoCall, openTodos } from "./todos";
-import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext, extractPlanSummary } from "./plan";
+import { type Api, type Kind, type ChatMessage, type ToolCall, type Usage, type Todo, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, streamChat, runTool } from "../api.ts";
+import { closeOpenToolCalls } from "../closeOpenToolCalls.ts";
+import { callKey, shareTokens } from "./helpers.ts";
+import { applyTodoCall, openTodos } from "./todos.ts";
+import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext, extractPlanSummary } from "./plan.ts";
 
 // Maximum number of identical tool calls (same name + arguments) before the
 // repeat guard fires and stops the model from looping.
@@ -404,8 +404,8 @@ export async function runTurn(
 
 // ── plan runner ──────────────────────────────────────────────────────────────
 
-import { type Connector, type Model, type PlanStep, runCheckCommand } from "../api";
-import { commandSummary, failureLine } from "./helpers";
+import { type Connector, type Model, type PlanStep, runCheckCommand } from "../api.ts";
+import { commandSummary, failureLine } from "./helpers.ts";
 import {
   stepPrompt,
   filesChanged,
@@ -422,7 +422,7 @@ import {
   stepOutput,
   type WholeFile,
   type Dispute,
-} from "./plan";
+} from "./plan.ts";
 
 // ── checkStep helpers ───────────────────────────────────────────────────────
 

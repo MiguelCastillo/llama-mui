@@ -7,8 +7,8 @@
 // below and nowhere else. To allow deeper levels later, attach each row to its
 // own parent instead of its top ancestor (and keep the cycle check); the
 // SessionNode shape and the panel already handle any depth.
-import type { Session, SessionSummary } from "./api";
-import { withSessionDefaults } from "./sessionDefaults";
+import type { Session, SessionSummary } from "./api.ts";
+import { withSessionDefaults } from "./sessionDefaults.ts";
 
 export type SessionNode = { session: SessionSummary; children: SessionNode[] };
 

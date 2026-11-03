@@ -1,0 +1,125 @@
+// Commands: what a page asks of a session's run. Events (events.ts) carry the
+// run to the page; these are the way back, ordinary requests.
+//
+//   POST /api/sessions/<id>/commands/<name>     body: JSON
+//
+//   run      { connectorId, model, toolsOn, thinkOn, freshSteps? }  start the
+//            plan's open steps. The session must be saved first: the run reads
+//            it from the server, not from the page, and looks up the server
+//            (connector), its models and the tools itself (see runStart.ts).
+//   pause    after the step in flight and its check, hold before the next step
+//   resume   go on
+//   stop     end the run now; answers once it is over
+//   approve  { askId, allow }   yes or no to an access or approval question
+//            (a no also turns down a question that asks for a path)
+//   answer   { askId, paths: [{ path, kind }] }   the files or folders picked
+//            for a question that asks for a path
+//
+// An answer is { ok: true, revision }: the session's revision once the command
+// is done. A command that can't be done is a 409 with a plain `error` and a
+// `reason`: "already running" (a second window starting the same plan),
+// "not running", "stale ask" (that question was answered already: the first
+// answer wins), "nothing to run", "wrong answer", "stale revision",
+// "no connector" (the server the page chose isn't in the list any more). A run
+// that can't reach the model server or its tools is a 502, reason "unreachable".
+
+import { HttpError, type Route, readJson, sendJson } from "./http.ts";
+import * as hub from "./runHub.ts";
+import { startFromOptions } from "./runStart.ts";
+import * as runners from "./runners.ts";
+import { sessionFolder } from "./sessionFile.ts";
+
+export interface RunOptions {
+  connectorId: string;
+  model: string;
+  toolsOn: boolean;
+  thinkOn: boolean;
+  freshSteps?: boolean;
+}
+
+export interface CommandDeps {
+  // Starts the run of a saved session from what the page chose.
+  start: (id: string, options: RunOptions) => Promise<void>;
+}
+
+// The real starter builds the run from the page's choices (see runStart.ts);
+// tests pass their own to start a run from a fake.
+const defaultDeps: CommandDeps = {
+  start: (id, options) => startFromOptions(id, options),
+};
+
+function parseRunOptions(body: any): RunOptions {
+  const text = (v: unknown, name: string) => {
+    if (typeof v !== "string" || !v) throw new HttpError(400, `${name} must be given`);
+    return v;
+  };
+  const flag = (v: unknown, name: string) => {
+    if (typeof v !== "boolean") throw new HttpError(400, `${name} must be true or false`);
+    return v;
+  };
+  const freshSteps = body.freshSteps;
+  if (freshSteps !== undefined && typeof freshSteps !== "boolean") throw new HttpError(400, "freshSteps must be true or false");
+  return {
+    connectorId: text(body.connectorId, "connectorId"),
+    model: text(body.model, "model"),
+    toolsOn: flag(body.toolsOn, "toolsOn"),
+    thinkOn: flag(body.thinkOn, "thinkOn"),
+    ...(freshSteps === undefined ? {} : { freshSteps }),
+  };
+}
+
+const askIdOf = (body: any): string => {
+  if (typeof body.askId !== "string" || !body.askId) throw new HttpError(400, "askId must be given");
+  return body.askId;
+};
+
+// Handles POST /api/sessions/<id>/commands/<name>; returns false for anything else.
+export async function commandRoutes({ req, res, parts, method }: Route, deps: CommandDeps = defaultDeps): Promise<boolean> {
+  if (parts.length !== 4 || parts[0] !== "sessions" || parts[2] !== "commands") return false;
+  if (method !== "POST") throw new HttpError(405, "Commands are sent with POST");
+  const id = parts[1];
+  sessionFolder(id); // a bad id is a 400
+  const body = await readJson(req);
+
+  switch (parts[3]) {
+    case "run":
+      await deps.start(id, parseRunOptions(body));
+      break;
+    case "pause":
+      await runners.pauseRun(id);
+      break;
+    case "resume":
+      await runners.resumeRun(id);
+      break;
+    case "stop":
+      await runners.stopRun(id);
+      break;
+    case "approve":
+      if (typeof body.allow !== "boolean") throw new HttpError(400, "allow must be true or false");
+      await runners.answerAsk(id, askIdOf(body), body.allow);
+      break;
+    case "answer": {
+      if (body.text !== undefined) {
+        throw new HttpError(409, "Nothing is waiting for typed text. A step that asked a question is answered on the plan card, and the plan is run again.", {
+          reason: "wrong answer",
+        });
+      }
+      const paths = body.paths;
+      const valid =
+        Array.isArray(paths) &&
+        paths.length > 0 &&
+        paths.every((p) => typeof p?.path === "string" && p.path && (p.kind === "file" || p.kind === "folder"));
+      if (!valid) throw new HttpError(400, "paths must be a list of { path, kind }, with kind file or folder");
+      await runners.answerAsk(
+        id,
+        askIdOf(body),
+        paths.map((p: any) => ({ path: p.path, kind: p.kind })),
+      );
+      break;
+    }
+    default:
+      throw new HttpError(404, "Unknown command");
+  }
+  sendJson(res, 200, { ok: true, revision: await hub.currentRevision(id) });
+  return true;
+}

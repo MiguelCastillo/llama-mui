@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ChatMessage, Session } from "../api";
 import type { RunTurnCallbacks, RunTurnConfig } from "../agent/agent";
-import type { RunnerEnv, RunnerHandle } from "../runners";
+import type { RunnerEnv, RunnerHandle } from "../runnerTypes";
 
 const { mockRunTurn, mockListModels, mockRename, mockName } = vi.hoisted(() => ({
   mockRunTurn: vi.fn(),

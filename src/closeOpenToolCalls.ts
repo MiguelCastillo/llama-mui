@@ -1,4 +1,4 @@
-import type { ChatMessage } from "./api";
+import type { ChatMessage } from "./api.ts";
 
 export const UNFINISHED_CALL =
   "This call did not run: it was cut off before it finished (the page was reloaded while it waited).";

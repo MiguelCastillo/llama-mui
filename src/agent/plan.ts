@@ -2,7 +2,7 @@
 // say they're done when they aren't, so chat runs a plan one step per turn and
 // checks each step with reviewStep before ticking it off.
 
-import { type Api, type Kind, type ChatMessage, type PlanStep, type ToolCall, streamChat } from "../api";
+import { type Api, type Kind, type ChatMessage, type PlanStep, type ToolCall, streamChat } from "../api.ts";
 
 // With Plan on, a new message first gets a planning turn: the model can only
 // read and call update_plan, so it writes the plan instead of starting on the

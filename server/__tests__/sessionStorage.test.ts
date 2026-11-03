@@ -118,3 +118,18 @@ describe("session routes", () => {
     expect(await readFile(work, "utf8")).toBe("work\n");
   });
 });
+
+describe("the run record on GET", () => {
+  it("shows a run that is live in this process, and hides a record a crash left in the file", async () => {
+    const hub = await import("../runHub.ts");
+    await call("PUT", ["with-run"], saved("with-run"));
+    const onDisk = JSON.parse(await readFile(sessionFile("with-run"), "utf8"));
+    await writeFile(sessionFile("with-run"), JSON.stringify({ ...onDisk, run: { status: "running", startedAt: 5 } }));
+    expect((await call("GET", ["with-run"])).body.run).toBeUndefined();
+
+    await hub.beginRun("with-run");
+    expect((await call("GET", ["with-run"])).body.run).toMatchObject({ status: "running" });
+    await hub.endRun("with-run");
+    expect((await call("GET", ["with-run"])).body.run).toBeUndefined();
+  });
+});

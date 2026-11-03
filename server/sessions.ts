@@ -45,6 +45,7 @@ let migration: Promise<void> | undefined;
 //   GET          → [summary], newest first; a summary is { id, title, updatedAt,
 //                  modelName, userName, todos, parentId } (see summaryOf)
 //   GET /<id>    → the saved session, with its `revision` (0 if it never had one)
+//                  and `run` while a plan is running in it in this process
 //   PUT /<id>    → saves it; the server sets createdAt, updatedAt and revision;
 //                  answers with its summary plus the new `revision`. Send the
 //                  `revision` the page loaded: if the file has moved on it answers
@@ -76,7 +77,10 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
   if (method === "GET") {
     const session = await readSession(id);
     if (!session) throw new HttpError(404, "No such session");
-    sendJson(res, 200, { ...session, revision: revisionOf(session) });
+    // `run` is the run live in this process, never a record a crash left in the file.
+    const { run: _recorded, ...saved } = session;
+    const run = hub.liveRun(id);
+    sendJson(res, 200, { ...saved, revision: revisionOf(session), ...(run ? { run } : {}) });
     return true;
   }
   if (method === "PUT") {

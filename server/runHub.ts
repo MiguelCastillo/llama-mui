@@ -14,7 +14,7 @@
 //  - an event bus the SSE routes read from: status, ask, saved, removed (and,
 //    for the runner to publish later, step, session, thread and ack).
 //
-// The run record in session.json is { status, startedAt, ask? }: plain data, no
+// The run record in session.json is { status, startedAt, ask?, streaming?, error? }: plain data, no
 // functions, and nothing secret (the server never hands a run an API key).
 // Every write goes through one queue per session, so a check of the revision and
 // the write that follows it can't be split by another request.
@@ -37,6 +37,10 @@ export interface RunState {
   status: RunStatus;
   startedAt: number;
   ask?: RunAsk;
+  // A request is in flight (a step's reply or its check).
+  streaming?: boolean;
+  // What went wrong, in the run's plain words (never a key: the run doesn't have one).
+  error?: string;
 }
 
 export type HubEventType = "status" | "step" | "ask" | "session" | "saved" | "removed" | "thread" | "ack";
@@ -171,6 +175,9 @@ async function commit(id: string, session: any, prev: any | null, runOver = fals
   return { session: out, revision };
 }
 
+// The revision on disk now (0 if the session isn't saved, or has none).
+export const currentRevision = (id: string): Promise<number> => locked(id, async () => revisionOf(await readSession(id)));
+
 // Saves a session as asked by the page (PUT). `build` gets what's on disk (or
 // null) and returns the new session. `sentRevision` is the one the page
 // loaded; leave it out for a client that doesn't track revisions.
@@ -204,6 +211,7 @@ export function edit(id: string, change: (session: any) => void): Promise<Saved>
     if (!prev) throw new HttpError(404, "No such session");
     const base = runs.get(id)?.session?.() ?? prev;
     change(base);
+    announce(id); // a rename during a run reaches the pages that show it
     return commit(id, base, prev);
   });
 }
@@ -218,15 +226,23 @@ export function save(id: string, session: any): Promise<Saved> {
 }
 
 // Marks a session as running. Refused if it already is (a second window
-// starting the same plan).
+// starting the same plan). `expectRevision`: the revision the run's copy of the
+// session was read at; if a save has landed since, the run is refused rather
+// than writing its older copy over it.
 export function beginRun(
   id: string,
-  opts: { status?: RunStatus; session?: () => any } = {},
+  opts: { status?: RunStatus; session?: () => any; expectRevision?: number } = {},
 ): Promise<RunState> {
   return locked(id, async () => {
     if (runs.has(id)) throw new HttpError(409, "This plan is already running.", { reason: "already running" });
     const prev = await readSession(id);
     if (!prev) throw new HttpError(404, "No such session");
+    if (opts.expectRevision !== undefined && opts.expectRevision !== revisionOf(prev)) {
+      throw new HttpError(409, "This session changed just now, so the plan wasn't started. Try again.", {
+        reason: "stale revision",
+        revision: revisionOf(prev),
+      });
+    }
     const live: Live = { state: { status: opts.status ?? "running", startedAt: Date.now() }, session: opts.session };
     if (live.session) live.sent = copyForEvents(live.session());
     runs.set(id, live);
@@ -241,12 +257,24 @@ export function beginRun(
   });
 }
 
-// Changes the run's status and/or its pending question (`ask: null` clears it).
-export function updateRun(id: string, patch: { status?: RunStatus; ask?: RunAsk | null }): Promise<RunState> {
+// Changes the run's status, its pending question (`ask: null` clears it), and
+// whether a request is in flight and the error shown (`error: null` clears it).
+export function updateRun(
+  id: string,
+  patch: { status?: RunStatus; ask?: RunAsk | null; streaming?: boolean; error?: string | null },
+): Promise<RunState> {
   return locked(id, async () => {
     const live = runs.get(id);
     if (!live) throw new Error(`No run is live for session ${id}`);
     if (patch.status) live.state.status = patch.status;
+    if (patch.streaming !== undefined) {
+      if (patch.streaming) live.state.streaming = true;
+      else delete live.state.streaming;
+    }
+    if ("error" in patch) {
+      if (patch.error) live.state.error = patch.error;
+      else delete live.state.error;
+    }
     if ("ask" in patch) {
       if (patch.ask) live.state.ask = JSON.parse(JSON.stringify(patch.ask));
       else delete live.state.ask;
@@ -260,8 +288,10 @@ export function updateRun(id: string, patch: { status?: RunStatus; ask?: RunAsk 
 }
 
 // The run is over: the session is the page's again. Its record leaves
-// session.json, and a final save of the run's session goes out with it.
-export function endRun(id: string): Promise<void> {
+// session.json, and a final save of the run's session goes out with it. `error`
+// is how the run ended, if badly; it goes out with the status event, since
+// the run record that held it is gone.
+export function endRun(id: string, opts: { error?: string | null } = {}): Promise<void> {
   return locked(id, async () => {
     const live = runs.get(id);
     if (!live) return;
@@ -269,7 +299,7 @@ export function endRun(id: string): Promise<void> {
     runs.delete(id);
     const prev = await readSession(id);
     if (prev) await commit(id, live.session?.() ?? prev, prev, true);
-    publish({ type: "status", id, data: { run: null } });
+    publish({ type: "status", id, data: opts.error ? { run: null, error: opts.error } : { run: null } });
   });
 }
 

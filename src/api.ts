@@ -6,7 +6,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { closeOpenToolCalls } from "./closeOpenToolCalls";
+import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 
 export type ModelStatus = "loaded" | "loading" | "unloaded" | string;
 
@@ -220,8 +220,22 @@ export class ApiError extends Error {
   }
 }
 
+// Where the app's own /api is. In the browser it is the page's own origin, and a
+// request just names its path. The server runs plans with this same code, in
+// Node, where a path alone means nothing: the plugin calls setApiOrigin with its
+// own address (http://127.0.0.1:<port>) once it is listening. Every request then
+// goes through the server's own /api, whose proxy adds the connector's API key,
+// so code running on the server never holds one.
+let apiOrigin: string | null = null;
+
+export function setApiOrigin(origin: string | null) {
+  apiOrigin = origin ? origin.replace(/\/+$/, "") : null;
+}
+
+const originOf = () => apiOrigin ?? location.origin;
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(apiOrigin ? apiOrigin + path : path, {
     method,
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -644,6 +658,12 @@ export const saveSession = (s: Session) => {
     return row;
   });
 };
+// A command to a session's run (see server/commands.ts): run, pause, resume,
+// stop, approve, answer. Answers { ok, revision }; a command that can't be done
+// is an ApiError, a 409 with a plain message and `data.reason`.
+export const sendCommand = (id: string, name: string, body: Record<string, unknown> = {}) =>
+  call<{ ok: true; revision: number }>("POST", `/api/sessions/${id}/commands/${name}`, body);
+
 export const deleteSession = (id: string) =>
   call<{ id: string }>("DELETE", `/api/sessions/${id}`).then((r) => {
     knownRevision.delete(id);
@@ -737,7 +757,7 @@ async function streamMessages(
   signal: AbortSignal,
 ): Promise<ChatReply> {
   const client = new Anthropic({
-    baseURL: `${location.origin}/api/c/${connectorId}`,
+    baseURL: `${originOf()}/api/c/${connectorId}`,
     apiKey: "set-by-the-server",
     dangerouslyAllowBrowser: true,
     // The SDK retries only failed requests (Anthropic's 429s and 529s), never
@@ -849,7 +869,7 @@ async function streamCompletions(
   signal: AbortSignal,
 ): Promise<ChatReply> {
   const client = new OpenAI({
-    baseURL: `${location.origin}/api/c/${connectorId}/v1`,
+    baseURL: `${originOf()}/api/c/${connectorId}/v1`,
     apiKey: "set-by-the-server",
     dangerouslyAllowBrowser: true,
     maxRetries: 0,

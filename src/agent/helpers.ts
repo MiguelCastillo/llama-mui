@@ -1,6 +1,6 @@
 // Pure helper functions extracted from Chat.tsx.
 
-import { type ChatMessage, type ToolCall } from "../api";
+import { type ChatMessage, type ToolCall } from "../api.ts";
 
 // Distributes token counts across messages, so the chat display shows roughly
 // how many tokens each message used based on its share of total content length.

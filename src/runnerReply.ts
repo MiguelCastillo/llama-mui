@@ -2,11 +2,11 @@
 // Everything runTurn reports is written into the runner's session, so the
 // session is the same whether or not Chat is showing it. No React in this file.
 
-import { type Attachment, type Session, listModels, renameSession } from "./api";
-import { type RunPlanCallbacks, type RunTurnCallbacks, runTurn } from "./agent/agent";
-import { INTERRUPTED } from "./agent/helpers";
-import { askForSessionName } from "./agent/sessionNaming";
-import type { RunnerHandle } from "./runners";
+import { type Attachment, type Session, listModels, renameSession } from "./api.ts";
+import { type RunPlanCallbacks, type RunTurnCallbacks, runTurn } from "./agent/agent.ts";
+import { INTERRUPTED } from "./agent/helpers.ts";
+import { askForSessionName } from "./agent/sessionNaming.ts";
+import type { RunnerHandle } from "./runnerTypes.ts";
 
 // The working directory: the first attached folder (Chat settings moves
 // another one first).
