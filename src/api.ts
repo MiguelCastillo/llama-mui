@@ -501,6 +501,25 @@ export interface Session {
   // The session this one is nested under (its direct parent). The panel shows
   // one level only: see buildSessionTree in sessionTree.ts. Older saved chats don't have it.
   parentId?: string | null;
+  // Plans this session moved into their own nested sessions, each shown as a
+  // note where the plan was. Older saved chats don't have it.
+  threads?: PlanThread[];
+  // The title until the model names the session (e.g. a plan's summary for a
+  // thread's first message). Older saved chats don't have it.
+  titleHint?: string | null;
+  // The plan came from the parent session and has not run yet: Run runs it
+  // here instead of moving it again. Cleared when the run starts.
+  planMovedIn?: boolean;
+}
+
+// A plan that runs in its own nested session; see planThread.ts.
+export interface PlanThread {
+  // The nested session the plan runs in.
+  sessionId: string;
+  // The plan's summary at the time it moved (or its first step).
+  summary: string;
+  // Where the note shows: the plan's anchor in the parent (see planAnchor).
+  anchor: string | null;
 }
 
 export interface Todo {

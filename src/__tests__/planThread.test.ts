@@ -1,0 +1,262 @@
+import { describe, expect, it } from "vitest";
+import type { Attachment, ChatMessage, PlanStep, Session } from "../api";
+import { isFreshPlan, planRequestFor, planToThread, threadLabel, threadStatus } from "../planThread";
+
+const step = (id: string, status: PlanStep["status"] = "pending", extra: Partial<PlanStep> = {}): PlanStep => ({
+  id,
+  text: `Do ${id} in detail`,
+  summary: `Step ${id}`,
+  status,
+  ...extra,
+});
+
+// A chat where the user asked twice; the plan was written after the second ask
+// (by the update_plan call "call-1"), and the user wrote once more after it.
+const chat = (): ChatMessage[] => [
+  { role: "user", content: "an old question" },
+  { role: "assistant", content: "an old answer" },
+  { role: "user", content: "Build the thing" },
+  {
+    role: "assistant",
+    content: "Here is a plan.",
+    toolCalls: [{ id: "call-1", name: "update_plan", arguments: "{}" }],
+  },
+  { role: "tool", content: "ok", toolCallId: "call-1" },
+  { role: "user", content: "and something after the plan" },
+];
+
+const folder: Attachment = { path: "/work/app", kind: "folder", source: "manual" };
+
+const parentSession = (extra: Partial<Session> = {}): Session => ({
+  id: "parent",
+  title: "Build the thing",
+  model: "model-a",
+  messages: chat(),
+  contextStart: 0,
+  attachments: [folder],
+  usage: null,
+  failed: null,
+  plan: [step("1"), step("2")],
+  planContext: "Use TypeScript.",
+  planSummary: "Build the thing in two steps",
+  planAnchor: "call-1",
+  ...extra,
+});
+
+describe("planToThread: the child", () => {
+  it("starts from the request before the plan, not the whole history", () => {
+    const { child } = planToThread(parentSession(), "child")!;
+    expect(child.messages).toEqual([{ role: "user", content: "Build the thing" }]);
+    expect(child.messages.some((m) => m.planStep)).toBe(false);
+  });
+
+  it("holds the plan, its context and summary, anchored after the first message", () => {
+    const { child } = planToThread(parentSession(), "child")!;
+    expect(child.plan).toEqual([step("1"), step("2")]);
+    expect(child.planContext).toBe("Use TypeScript.");
+    expect(child.planSummary).toBe("Build the thing in two steps");
+    expect(child.planAnchor).toBe("at:1");
+    expect(child.planMovedIn).toBe(true);
+  });
+
+  it("is nested under the parent and inherits its model and folders", () => {
+    const { child } = planToThread(parentSession(), "child")!;
+    expect(child.id).toBe("child");
+    expect(child.parentId).toBe("parent");
+    expect(child.model).toBe("model-a");
+    expect(child.attachments).toEqual([folder]);
+  });
+
+  it("copies the attachments and steps instead of sharing them", () => {
+    const parent = parentSession();
+    const { child } = planToThread(parent, "child")!;
+    expect(child.attachments[0]).not.toBe(parent.attachments[0]);
+    expect(child.plan![0]).not.toBe(parent.plan![0]);
+    child.attachments[0].path = "/elsewhere";
+    child.plan![0].status = "done";
+    expect(parent.attachments[0].path).toBe("/work/app");
+    expect(parent.plan![0].status).toBe("pending");
+  });
+
+  it("has no history, usage, failure or todos of the parent's", () => {
+    const { child } = planToThread(parentSession({ usage: { contextTokens: 5 }, failed: "boom" }), "child")!;
+    expect(child.usage).toBeNull();
+    expect(child.failed).toBeNull();
+    expect(child.contextStart).toBe(0);
+    expect(child.pastPlans).toEqual([]);
+  });
+
+  it("is titled from the plan summary", () => {
+    const { child } = planToThread(parentSession(), "child")!;
+    expect(child.title).toBe("Build the thing in two steps");
+    expect(child.titleHint).toBe("Build the thing in two steps");
+  });
+
+  it("is titled from the first step when the plan has no summary", () => {
+    const { child } = planToThread(parentSession({ planSummary: null }), "child")!;
+    expect(child.title).toBe("Step 1");
+    expect(child.titleHint).toBe("Step 1");
+    expect(child.planSummary).toBeNull();
+  });
+
+  it("cuts a long title to 80 characters", () => {
+    const { child } = planToThread(parentSession({ planSummary: "x".repeat(200) }), "child")!;
+    expect(child.title).toBe("x".repeat(80));
+    expect(child.titleHint).toBe("x".repeat(80));
+  });
+
+  it("follows an 'at:N' anchor to the request before that point", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "second" },
+      { role: "assistant", content: "ok" },
+    ];
+    const { child } = planToThread(parentSession({ messages, planAnchor: "at:2" }), "child")!;
+    expect(child.messages).toEqual([{ role: "user", content: "first" }]);
+  });
+
+  it("falls back to the summary, then to a plain line, when there is no request", () => {
+    const none = parentSession({ messages: [], planAnchor: "at:0" });
+    expect(planToThread(none, "child")!.child.messages[0].content).toBe("Build the thing in two steps");
+    const bare = parentSession({ messages: [], planAnchor: "at:0", planSummary: null });
+    expect(planToThread(bare, "child")!.child.messages[0].content).toBe("Run the plan below.");
+  });
+});
+
+describe("planToThread: the parent", () => {
+  it("loses the plan and keeps a note where it was", () => {
+    const { parent } = planToThread(parentSession({ planProposal: [step("9")] }), "child")!;
+    expect(parent.plan).toBeNull();
+    expect(parent.planProposal).toBeNull();
+    expect(parent.planContext).toBeNull();
+    expect(parent.planSummary).toBeNull();
+    expect(parent.planAnchor).toBeNull();
+    expect(parent.threads).toEqual([{ sessionId: "child", summary: "Build the thing in two steps", anchor: "call-1" }]);
+  });
+
+  it("keeps everything else, and adds to earlier notes", () => {
+    const earlier = { sessionId: "old", summary: "Earlier plan", anchor: "call-0" };
+    const input = parentSession({ threads: [earlier] });
+    const { parent } = planToThread(input, "child")!;
+    expect(parent.id).toBe("parent");
+    expect(parent.messages).toEqual(chat());
+    expect(parent.model).toBe("model-a");
+    expect(parent.threads!.map((t) => t.sessionId)).toEqual(["old", "child"]);
+  });
+
+  it("uses the first step for the note when the plan has no summary", () => {
+    const { parent } = planToThread(parentSession({ planSummary: null }), "child")!;
+    expect(parent.threads![0].summary).toBe("Step 1");
+  });
+
+  it("does not change the session it was given", () => {
+    const input = parentSession();
+    const before = structuredClone(input);
+    planToThread(input, "child");
+    expect(input).toEqual(before);
+  });
+
+  it("makes the child under a nested parent, that parent's own child", () => {
+    const nested = parentSession({ id: "mid", parentId: "root" });
+    const { parent, child } = planToThread(nested, "child")!;
+    expect(child.parentId).toBe("mid");
+    expect(parent.parentId).toBe("root");
+  });
+});
+
+describe("planToThread: only a fresh plan moves", () => {
+  it("moves a plan whose steps are all pending", () => {
+    expect(planToThread(parentSession(), "child")).not.toBeNull();
+    expect(isFreshPlan([step("1")], chat())).toBe(true);
+  });
+
+  it.each(["done", "failed", "running", "disputed", "waiting"] as const)("keeps a plan with a %s step", (status) => {
+    const parent = parentSession({ plan: [step("1", status), step("2")] });
+    expect(planToThread(parent, "child")).toBeNull();
+  });
+
+  it("keeps a pending plan whose steps already have messages", () => {
+    const messages: ChatMessage[] = [...chat(), { role: "user", content: "Do step 1", planStep: "1" }];
+    expect(planToThread(parentSession({ messages }), "child")).toBeNull();
+  });
+
+  it("keeps a session with no plan or with no steps", () => {
+    expect(planToThread(parentSession({ plan: null }), "child")).toBeNull();
+    expect(planToThread(parentSession({ plan: [] }), "child")).toBeNull();
+  });
+});
+
+describe("threadStatus", () => {
+  it("is missing when the child can't be found", () => {
+    expect(threadStatus(null)).toBe("missing");
+  });
+
+  it("is done when every step is done", () => {
+    expect(threadStatus({ plan: [step("1", "done"), step("2", "done")] })).toBe("done");
+  });
+
+  it("is failed when a step failed or is disputed", () => {
+    expect(threadStatus({ plan: [step("1", "done"), step("2", "failed")] })).toBe("failed");
+    expect(threadStatus({ plan: [step("1", "disputed"), step("2", "pending")] })).toBe("failed");
+  });
+
+  it("is failed even when other steps are still pending", () => {
+    expect(threadStatus({ plan: [step("1", "failed"), step("2", "pending")] })).toBe("failed");
+  });
+
+  it.each(["pending", "running", "waiting"] as const)("is unfinished with a %s step", (status) => {
+    expect(threadStatus({ plan: [step("1", "done"), step("2", status)] })).toBe("unfinished");
+  });
+
+  it("is unfinished when the child has no plan or no steps", () => {
+    expect(threadStatus({ plan: null })).toBe("unfinished");
+    expect(threadStatus({ plan: [] })).toBe("unfinished");
+  });
+});
+
+describe("threadLabel", () => {
+  it("says each status in plain words", () => {
+    expect(threadLabel("done", "Build it")).toBe("Done in a thread: Build it");
+    expect(threadLabel("failed", "Build it")).toBe("Failed in a thread: Build it");
+    expect(threadLabel("unfinished", "Build it")).toBe("Not finished in a thread: Build it");
+    expect(threadLabel("missing", "Build it")).toBe("Thread was deleted: Build it");
+  });
+
+  it("says running while the status is not known yet", () => {
+    expect(threadLabel(undefined, "Build it")).toBe("Running in a thread: Build it");
+  });
+});
+
+describe("planRequestFor", () => {
+  it("finds the last request before the update_plan call with that id", () => {
+    expect(planRequestFor(chat(), "call-1")).toBe("Build the thing");
+  });
+
+  it("finds the last request before 'at:N'", () => {
+    expect(planRequestFor(chat(), "at:2")).toBe("an old question");
+    expect(planRequestFor(chat(), "at:3")).toBe("Build the thing");
+  });
+
+  it("skips messages that belong to a plan step", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "the real request" },
+      { role: "user", content: "Do step 1", planStep: "1" },
+      { role: "assistant", content: "done" },
+    ];
+    expect(planRequestFor(messages, "at:3")).toBe("the real request");
+  });
+
+  it("gives undefined when no user message comes before the plan", () => {
+    expect(planRequestFor([], "at:0")).toBeUndefined();
+    expect(planRequestFor(chat(), "at:1")).toBe("an old question");
+    expect(planRequestFor(chat(), "at:0")).toBeUndefined();
+    const onlySteps: ChatMessage[] = [{ role: "user", content: "Do step 1", planStep: "1" }];
+    expect(planRequestFor(onlySteps, "at:1")).toBeUndefined();
+  });
+
+  it("looks at the whole chat when the anchor matches nothing", () => {
+    expect(planRequestFor(chat(), "nope")).toBe("and something after the plan");
+    expect(planRequestFor(chat(), null)).toBe("and something after the plan");
+  });
+});

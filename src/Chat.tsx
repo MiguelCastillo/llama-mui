@@ -69,6 +69,7 @@ import {
   type ToolContext,
   type PastPlan,
   type PlanStep,
+  type PlanThread,
   type Todo,
   setCheckCommand,
   type Session,
@@ -118,6 +119,8 @@ import {
   weighDispute,
 } from "./agent/plan";
 import { runTurn, runPlan } from "./agent/agent";
+import { planRequestFor, planToThread, threadStatus, type ThreadStatus } from "./planThread";
+import ThreadNote from "./ThreadNote";
 import { withSessionDefaults } from "./sessionDefaults";
 import { nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 
@@ -394,10 +397,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const savedKey = useRef("");
   // Not the title: it comes from the names and the first message, and a saved
   // one holds the user's name, which saves never send.
-  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos, s.parentId ?? null]);
+  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos, s.parentId ?? null, s.threads ?? [], s.titleHint ?? null, s.planMovedIn ?? false]);
 
   // The session this one is nested under (its direct parent), if any.
   const [parentId, setParentId] = useState<string | null>(null);
+  // Plans that moved out to their own sessions (see src/planThread.ts), the
+  // name this session has until the model names it, and whether the plan was
+  // moved in here from the parent and has not run yet.
+  const [threads, setThreads] = useState<PlanThread[]>([]);
+  const [titleHint, setTitleHint] = useState<string | null>(null);
+  const [planMovedIn, setPlanMovedIn] = useState(false);
 
   const applySession = (s: Session) => {
     // Saved before plans had a place: pinned after the chat's last message as
@@ -431,6 +440,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setPastPlans(pastPlans);
     changeTodos(s.todos ?? []);
     setParentId(s.parentId ?? null);
+    setThreads(s.threads ?? []);
+    setTitleHint(s.titleHint ?? null);
+    setPlanMovedIn(s.planMovedIn ?? false);
     if (s.model) setModel(s.model);
   };
 
@@ -455,13 +467,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .catch((e) => setError(e.message));
   }, []);
 
-  const saveNow = () => {
-    if (!loaded || messages.length === 0) return;
+  // The session as it is now, built from the current state.
+  const snapshot = (): Session => {
     const firstUser = messages.find((m) => m.role === "user")?.content ?? "New session";
     // The server puts the user's name, when there is one, ahead of this.
-    const session: Session = {
+    return {
       id: sessionId,
-      title: modelName ?? firstUser.slice(0, 80),
+      title: modelName ?? titleHint ?? firstUser.slice(0, 80),
       model,
       messages,
       contextStart,
@@ -478,7 +490,15 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       modelName,
       todos,
       parentId,
+      threads,
+      titleHint,
+      planMovedIn,
     };
+  };
+
+  const saveNow = () => {
+    if (!loaded || messages.length === 0) return;
+    const session = snapshot();
     const key = keyOf(session);
     if (key === savedKey.current) return;
     savedKey.current = key;
@@ -494,7 +514,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return () => clearTimeout(timer);
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planSummary, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planSummary, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId, threads, titleHint, planMovedIn]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -519,6 +539,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setPastPlans([]);
     changeTodos([]);
     setParentId(null);
+    setThreads([]);
+    setTitleHint(null);
+    setPlanMovedIn(false);
     setDrawerOpen(false);
     loadSession(id);
   };
@@ -866,11 +889,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // disputed step waits for the user.
   // The message that asked for the plan: the last one you sent (not a step's)
   // before the update_plan call that wrote it, or before "at:N" for a clone.
-  const planRequest = () => {
-    const call = messages.findIndex((m) => m.toolCalls?.some((c) => c.id === planAnchor));
-    const end = call >= 0 ? call : planAnchor?.startsWith("at:") ? Number(planAnchor.slice(3)) : messages.length;
-    return [...messages.slice(0, end)].reverse().find((m) => m.role === "user" && !m.planStep)?.content;
-  };
+  const planRequest = () => planRequestFor(messages, planAnchor);
   const runPlanWrapper = () => runPlan({
     request: planRequest(),
     context: planContext,
@@ -895,6 +914,74 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     thinkOn,
     toolDefinitions: toolContext.definitions,
   });
+
+  // The plan card's Run. A plan that hasn't started moves into its own nested
+  // session (a thread) and runs there; the child is saved first, then this
+  // session with a note where the plan was, then the child is opened. It runs
+  // once it has loaded (`pendingRun`). A plan that already started (Continue,
+  // Resume, Restart), or one that was just moved in, runs where it is.
+  const [pendingRun, setPendingRun] = useState<string | null>(null);
+  const runFromCard = async () => {
+    if (planMovedIn) {
+      setPlanMovedIn(false);
+      runPlanWrapper();
+      return;
+    }
+    if (!connector || !model || abort || planRunningRef.current) return;
+    try {
+      if (!(await modelLoaded())) return;
+      const moved = planToThread(snapshot(), crypto.randomUUID());
+      if (!moved) {
+        runPlanWrapper();
+        return;
+      }
+      const childSummary = await saveSession(moved.child);
+      const parentSummary = await saveSession(moved.parent);
+      setSessions((ss) => [
+        childSummary,
+        parentSummary,
+        ...ss.filter((x) => x.id !== childSummary.id && x.id !== parentSummary.id),
+      ]);
+      setPendingRun(moved.child.id);
+      openSession(moved.child.id, false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // Runs the moved plan once the child has loaded. The effect waits for that
+  // exact session (the load is asynchronous) and loaded without error; if the
+  // load failed there is nothing to run, so it only clears the wait. The plan
+  // card's Run is still there to start it by hand (planMovedIn is kept then).
+  useEffect(() => {
+    if (!pendingRun || !loaded || pendingRun !== sessionId) return;
+    setPendingRun(null);
+    if (!loadedOk.current) return;
+    setPlanMovedIn(false);
+    runPlanWrapper();
+  }, [pendingRun, loaded, sessionId]);
+
+  // How each thread this session started stands, read from the child's saved
+  // state once this session has loaded. Until then (or while it is read) a
+  // note says "Running in a thread"; a child that can't be read counts as
+  // deleted. An answer for a session that has since been closed is ignored.
+  const [threadStatuses, setThreadStatuses] = useState<Record<string, ThreadStatus>>({});
+  useEffect(() => {
+    setThreadStatuses({});
+    if (!loaded || !loadedOk.current) return;
+    let current = true;
+    for (const t of threads) {
+      getSession(t.sessionId)
+        .then((c) => threadStatus(withSessionDefaults(c)))
+        .catch((): ThreadStatus => "missing")
+        .then((status) => {
+          if (current) setThreadStatuses((m) => ({ ...m, [t.sessionId]: status }));
+        });
+    }
+    return () => {
+      current = false;
+    };
+  }, [loaded, sessionId]);
 
   // Retries the last user message, dropping the failed reply.
   const retry = () => {
@@ -962,6 +1049,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
   const canClone = (!plan || plan.every((st) => st.status === "done")) && !abort && !planRunning;
   const planCards = [
+    ...threads.map((t) => ({
+      anchor: t.anchor,
+      card: (
+        <ThreadNote
+          key={`thread-${t.sessionId}`}
+          summary={t.summary}
+          status={threadStatuses[t.sessionId]}
+          onOpen={() => openSession(t.sessionId)}
+        />
+      ),
+    })),
     ...pastPlans.map((p, i) => ({
       anchor: p.anchor,
       card: (
@@ -989,7 +1087,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 running={planRunning || !!abort}
                 since={planRunning ? busySince : null}
                 counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
-                onRun={runPlanWrapper}
+                onRun={runFromCard}
                 onChange={changePlan}
                 proposal={planProposal}
                 onProposal={answerProposal}
@@ -1069,6 +1167,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       };
       setPlanAnchor(shift(planAnchor));
       setPastPlans(pastPlans.map((p) => ({ ...p, anchor: shift(p.anchor) })));
+      setThreads(threads.map((t) => ({ ...t, anchor: shift(t.anchor) })));
       setContextStart(0);
       setUsage(null);
       // Also update savedKey so we don't save again

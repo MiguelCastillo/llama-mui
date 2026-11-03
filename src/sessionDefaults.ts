@@ -17,5 +17,8 @@ export function withSessionDefaults(s: Session): Session {
     pastPlans: Array.isArray(s.pastPlans) ? s.pastPlans : [],
     todos: readTodos(s.todos),
     parentId: typeof s.parentId === "string" ? s.parentId : null,
+    threads: Array.isArray(s.threads) ? s.threads : [],
+    titleHint: typeof s.titleHint === "string" ? s.titleHint : null,
+    planMovedIn: s.planMovedIn === true,
   };
 }

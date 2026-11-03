@@ -69,6 +69,25 @@ describe("withSessionDefaults", () => {
     expect(withSessionDefaults({ id: "x", title: "t", model: "m", parentId: "p" } as Session).parentId).toBe("p");
   });
 
+  it("gives an old session no threads, title hint or moved-in plan", () => {
+    const s = withSessionDefaults({ id: "x", title: "t", model: "m" } as Session);
+    expect(s.threads).toEqual([]);
+    expect(s.titleHint).toBeNull();
+    expect(s.planMovedIn).toBe(false);
+    const bad = withSessionDefaults({ id: "x", title: "t", model: "m", threads: 3, titleHint: 4, planMovedIn: "yes" } as unknown as Session);
+    expect(bad.threads).toEqual([]);
+    expect(bad.titleHint).toBeNull();
+    expect(bad.planMovedIn).toBe(false);
+  });
+
+  it("keeps threads, title hint and moved-in plan", () => {
+    const threads = [{ sessionId: "c", summary: "Adds a thing", anchor: "call1" }];
+    const s = withSessionDefaults({ id: "x", title: "t", model: "m", threads, titleHint: "Adds a thing", planMovedIn: true } as Session);
+    expect(s.threads).toEqual(threads);
+    expect(s.titleHint).toBe("Adds a thing");
+    expect(s.planMovedIn).toBe(true);
+  });
+
   it("closes a tool call that never got a result when a session loads", () => {
     const raw = {
       id: "x",

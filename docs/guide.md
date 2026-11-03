@@ -277,6 +277,20 @@ vitest (`npm test`).
 
 ### Running a plan
 
+- **Run** on a plan that hasn't started (no step has run yet) doesn't run it
+  in this chat. It opens a new nested session and runs the plan there, so you
+  watch it in the thread. The thread gets the request that led to the plan
+  (the last message you sent before it, as its first message), the plan
+  context and the plan, but not the rest of the chat. It has the same working
+  folder and model, and is titled from the plan summary until the model names
+  it. The chat you left keeps a note where the plan was (see
+  [Where plans show](#where-plans-show)). A plan started inside a nested
+  session makes its thread under that same session.
+- **Continue**, **Resume**, **Restart** and **Answer and continue** on a
+  plan that has started run it where it is. Only a first **Run** moves to a
+  thread.
+- For now the thread runs in the open chat like any plan, so you can't chat
+  in the parent while it runs. Running a plan while you chat is a later change.
 - **Run** (or **Continue**) runs the first step that's pending or not done,
   then the next, until every step is done or one stops. A disputed step (**?**)
   waits for you, so there's no **Continue** until you mark it done or rerun it.
@@ -434,6 +448,12 @@ the step, not in the chat.
 - A plan under way keeps its place when it changes: a suggestion you accept,
   or a change the model makes during a run. A plan that hasn't started yet,
   rewritten by the model, moves to the turn that rewrote it.
+- When a plan runs in a thread (see [Running a plan](#running-a-plan)), a
+  one-line note takes its place in the chat: **Running in a thread**, then
+  **Done in a thread**, **Failed in a thread** or **Not finished in a
+  thread**, each followed by the plan summary. Click it to open the thread.
+  The result comes from the thread's saved state each time the chat opens. If
+  the thread was deleted, the note says so.
 - A plan in a chat saved before plans had a place is pinned after the last
   message when the chat opens, so new messages go below it. A plan whose
   turn is compacted away moves to the top, where that turn was.
@@ -492,7 +512,9 @@ step that was running when the page closed comes back as pending.
     asks first and says how many nested sessions it holds; they are kept and move
     up to the top level. The link to the parent is saved as `parentId` in
     `session.json` and in the sessions list. Tools on/off is one setting for the
-    whole app, so a nested session follows it.
+    whole app, so a nested session follows it. A plan that hasn't started
+    also makes one: **Run** opens it in a nested session (see
+    [Running a plan](#running-a-plan)).
 - **Session naming**: after the first reply, the model is asked to name the
   session in 3–6 words. The name shows as the session title unless you give it
   one yourself. Hover the session and click the **✎** icon to rename it: a text
