@@ -259,9 +259,17 @@ vitest (`npm test`).
 - **The model decides**, in the planning turn. Its only guidance is the
   tool's instructions: each step is "one change you can make in one turn,
   written so someone could check it from the diff alone".
-- **Limits**: at most 12 steps, each at most 300 characters, and none empty.
+- **Limits**: at most 12 steps, each at most 600 characters, and none empty.
   A plan over a limit is refused with an error such as "at most 12 steps;
   merge some", and the model has to try again.
+- **Summaries**: every step also has a short `summary`, a to-do line of about
+  8 words (at most 80 characters) such as "Make a stuck step retry twice",
+  and the plan can have a one-sentence summary of its own. The card shows the
+  summary as the step's main line, with the full instruction under a
+  collapsed **Details** arrow; the model still gets the instruction when the
+  step runs. Plans saved before summaries show the first 70 or so characters
+  of the instruction instead. A step with no summary, or one over 80
+  characters, is refused like any other limit.
 - **You**: before or between runs, hover a step to edit its text or remove
   it. There's no way to add a step yet; ask the model for a new plan instead.
 - Nothing checks the plan's size. A plan with one big step gets one check at

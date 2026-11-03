@@ -258,6 +258,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // with the session, cleared when the plan is cancelled, moved into pastPlans
   // when a plan is archived, and kept when a plan is cloned.
   const [planContext, setPlanContext] = useState<string | null>(null);
+  // The plan's one-sentence summary (update_plan's top-level summary); it
+  // goes where planContext goes: saved, archived with the plan, cloned.
+  const [planSummary, setPlanSummary] = useState<string | null>(null);
   // Things to come back to (add_todo; see src/agent/todos.ts), saved with the
   // session. The ref is the latest, for tool calls within one reply.
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -274,19 +277,33 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // A finished plan never runs again; Clone starts a new one with its steps,
   // all pending, at the end of the chat. Not while another plan is unfinished,
   // which the clone would replace (see canClone).
-  const clonePlan = (steps: PlanStep[], context?: string | null) => {
-    if (plan) setPastPlans((p) => [...p, { steps: plan, anchor: planAnchor, context: planContext }]);
+  const clonePlan = (steps: PlanStep[], context?: string | null, summary?: string | null) => {
+    if (plan) setPastPlans((p) => [...p, { steps: plan, anchor: planAnchor, context: planContext, summary: planSummary }]);
     setPlanAnchor(`at:${messages.length}`);
-    changePlan(steps.map((st) => ({ id: crypto.randomUUID(), text: st.text, status: "pending" })));
+    changePlan(
+      steps.map((st) => ({
+        id: crypto.randomUUID(),
+        text: st.text,
+        ...(st.summary ? { summary: st.summary } : {}),
+        status: "pending" as const,
+      })),
+    );
     setPlanContext(context ?? null);
+    setPlanSummary(summary ?? null);
     toBottom();
   };
   // A change the model suggested to a plan that's under way; see reply().
   const [planProposal, setPlanProposal] = useState<PlanStep[] | null>(null);
   const answerProposal = (accept: boolean) => {
-    // Matched again by text: the user may have changed the plan since.
+    // Matched again by text: the user may have changed the plan since. A step
+    // kept from an older plan, with no summary, takes the proposal's. The plan's
+    // own summary stays: a proposal changes steps, not what the plan is for.
     const old = planRef.current ?? [];
-    if (accept && planProposal) changePlan(planProposal.map((p) => old.find((o) => o.text === p.text) ?? p));
+    const keep = (p: PlanStep) => {
+      const o = old.find((x) => x.text === p.text);
+      return o ? (o.summary || !p.summary ? o : { ...o, summary: p.summary }) : p;
+    };
+    if (accept && planProposal) changePlan(planProposal.map(keep));
     setPlanProposal(null);
   };
   // The ref is for code that runs inside the plan runner's own awaits, where
@@ -376,7 +393,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const savedKey = useRef("");
   // Not the title: it comes from the names and the first message, and a saved
   // one holds the user's name, which saves never send.
-  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos]);
+  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos]);
 
   const applySession = (s: Session) => {
     // Saved before plans had a place: pinned after the chat's last message as
@@ -405,6 +422,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     );
     setPlanProposal(s.planProposal ?? null);
     setPlanContext(s.planContext ?? null);
+    setPlanSummary(s.planSummary ?? null);
     setPlanAnchor(planAnchor);
     setPastPlans(pastPlans);
     changeTodos(s.todos ?? []);
@@ -448,6 +466,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       plan,
       planProposal,
       planContext,
+      planSummary,
       planAnchor,
       pastPlans,
       promptDir: fixedPromptDir,
@@ -469,7 +488,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return () => clearTimeout(timer);
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
-  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planAnchor, pastPlans, fixedPromptDir, modelName, todos]);
+  }, [loaded, messages, contextStart, attachments, usage, model, abort, failed, plan, planProposal, planContext, planSummary, planAnchor, pastPlans, fixedPromptDir, modelName, todos]);
 
   // Switches to another chat, saving this one first unless it was deleted.
   const openSession = (id: string, saveFirst = true) => {
@@ -489,6 +508,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     changePlan(null);
     setPlanProposal(null);
     setPlanContext(null);
+    setPlanSummary(null);
     setPlanAnchor(null);
     setPastPlans([]);
     changeTodos([]);
@@ -513,6 +533,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     changePlan(null);
     setPlanProposal(null);
     setPlanContext(null);
+    setPlanSummary(null);
     setPlanAnchor(null);
   };
   // Deleting asks first, in a Dialog: window.confirm is answered "no" at once,
@@ -765,6 +786,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         setPastPlans,
         setPlanAnchor,
         setPlanContext,
+        setPlanSummary,
         changePlan,
         todosRef,
         changeTodos,
@@ -772,6 +794,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         planRunningRef,
         planAnchor,
         planContext,
+        planSummary,
       },
     );
 
@@ -791,12 +814,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return { ok: result.ok, messages: result.messages, error: result.error };
   };
 
-  // Changes one step, keeping its text. The patch replaces the rest, so a
-  // step that runs again loses its old note and "may need a rerun" mark. By
-  // id: a step that rewrites the plan moves steps, and its id goes with it.
+  // Changes one step, keeping its text and summary (unless the patch sets a
+  // summary). The patch replaces the rest, so a step that runs again loses its
+  // old note and "may need a rerun" mark. By id: a step that rewrites the plan
+  // moves steps, and its id goes with it.
   const setStep = (id: string, patch: Omit<PlanStep, "id" | "text">) => {
     const steps = planRef.current;
-    if (steps?.some((st) => st.id === id)) changePlan(steps.map((st) => (st.id === id ? { id: st.id, text: st.text, ...patch } : st)));
+    if (steps?.some((st) => st.id === id)) {
+      changePlan(
+        steps.map((st) =>
+          st.id === id ? { id: st.id, text: st.text, ...(st.summary ? { summary: st.summary } : {}), ...patch } : st,
+        ),
+      );
+    }
   };
 
   // Runs the plan's open steps in order, one turn each, and checks every step
@@ -910,10 +940,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         <PlanView
           key={`past-${i}`}
           steps={p.steps}
+          summary={p.summary}
           context={p.context}
           details={stepTurns}
           formatTime={formatSeconds}
-          onClone={canClone ? () => clonePlan(p.steps, p.context) : undefined}
+          onClone={canClone ? () => clonePlan(p.steps, p.context, p.summary) : undefined}
         />
       ),
     })),
@@ -925,6 +956,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               <PlanView
                 key="plan"
                 steps={plan}
+                summary={planSummary}
                 context={planContext}
                 running={planRunning || !!abort}
                 since={planRunning ? busySince : null}
@@ -936,7 +968,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 details={stepTurns}
                 formatTime={formatSeconds}
                 onCancel={() => setConfirmCancelPlan(true)}
-                onClone={canClone ? () => clonePlan(plan, planContext) : undefined}
+                onClone={canClone ? () => clonePlan(plan, planContext, planSummary) : undefined}
                 prompt={promptInPlan && pending ? <PendingPrompt ask={pending.ask} onDecide={pending.decide} /> : undefined}
               />
             ),

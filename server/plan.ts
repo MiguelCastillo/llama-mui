@@ -7,7 +7,9 @@
 import { ToolError, type ToolSpec, fn } from "./toolkit.ts";
 
 const MAX_STEPS = 12;
-const MAX_STEP_CHARS = 300;
+export const MAX_STEP_CHARS = 600;
+export const MAX_SUMMARY_CHARS = 80;
+const MAX_PLAN_SUMMARY_CHARS = 200;
 
 export const planInstructions =
   "For a task that changes files, first call update_plan with the steps, then stop and wait: " +
@@ -15,7 +17,12 @@ export const planInstructions =
   "someone could check it from the diff alone. When a message says \"Do step N\", do only that step, then " +
   "reply with one line saying what you changed. Call update_plan again only if the plan itself has to change. " +
   "Questions that don't change files need no plan. " +
-  "You may also include a `context` field: a brief description of the decisions, constraints, and other details from the conversation that each step needs (each step starts without the chat). Keep it short.";
+  "You may also include a `context` field: a brief description of the decisions, constraints, and other details from the conversation that each step needs (each step starts without the chat). Keep it short. " +
+  "Give every step a `summary`: a to-do line the user reads, a short imperative phrase of at most about 8 words " +
+  "saying what gets done, with no file paths unless the step is about one. " +
+  "Examples: \"Make a stuck step retry twice\", \"Stop asking before making a worktree\", \"Repair chats with unfinished calls\". " +
+  "The step's `text` is the instruction for you, and can be longer. " +
+  "You may also include a plan-level `summary`: one short sentence saying what the plan does.";
 
 const updatePlan: ToolSpec = {
   name: "update_plan",
@@ -35,10 +42,24 @@ const updatePlan: ToolSpec = {
           items: {
             type: "object",
             properties: {
-              text: { type: "string", description: "What this step changes, in one sentence." },
+              summary: {
+                type: "string",
+                description:
+                  `The to-do line the user reads: a short imperative phrase, at most about 8 words (${MAX_SUMMARY_CHARS} characters max), ` +
+                  'saying what gets done, no file paths unless the step is about one. E.g. "Make a stuck step retry twice", ' +
+                  '"Stop asking before making a worktree", "Repair chats with unfinished calls".',
+              },
+              text: {
+                type: "string",
+                description: `The instruction for this step: what it changes, written so someone could check it from the diff alone. At most ${MAX_STEP_CHARS} characters.`,
+              },
             },
-            required: ["text"],
+            required: ["summary", "text"],
           },
+        },
+        summary: {
+          type: "string",
+          description: "Optional. One short sentence saying what this plan does.",
         },
         context: {
           type: "string",
@@ -54,9 +75,36 @@ const updatePlan: ToolSpec = {
     if (!steps?.length) throw new ToolError("steps must be a non-empty list");
     if (steps.length > MAX_STEPS) throw new ToolError(`at most ${MAX_STEPS} steps; merge some`);
     for (const [i, s] of steps.entries()) {
+      const n = i + 1;
       const text = typeof s === "string" ? s : s?.text;
-      if (typeof text !== "string" || !text.trim()) throw new ToolError(`step ${i + 1} has no text`);
-      if (text.length > MAX_STEP_CHARS) throw new ToolError(`step ${i + 1} is over ${MAX_STEP_CHARS} characters`);
+      if (typeof text !== "string" || !text.trim()) {
+        throw new ToolError(`step ${n} has no text; give each step {summary, text}, where text is the instruction`);
+      }
+      if (text.length > MAX_STEP_CHARS) {
+        throw new ToolError(
+          `step ${n} text is ${text.length} characters, over the ${MAX_STEP_CHARS} limit; shorten it or split the step`,
+        );
+      }
+      const summary = typeof s === "string" ? undefined : s?.summary;
+      if (typeof summary !== "string" || !summary.trim()) {
+        throw new ToolError(
+          `step ${n} has no summary; add a short imperative to-do line, e.g. "Make a stuck step retry twice"`,
+        );
+      }
+      if (summary.length > MAX_SUMMARY_CHARS) {
+        throw new ToolError(
+          `step ${n} summary is ${summary.length} characters, over the ${MAX_SUMMARY_CHARS} limit; make it a short to-do line of about 8 words and move detail into text`,
+        );
+      }
+    }
+    const planSummary = args.summary;
+    if (planSummary !== undefined && planSummary !== null) {
+      if (typeof planSummary !== "string") throw new ToolError("summary must be a short sentence (string)");
+      if (planSummary.length > MAX_PLAN_SUMMARY_CHARS) {
+        throw new ToolError(
+          `plan summary is ${planSummary.length} characters, over the ${MAX_PLAN_SUMMARY_CHARS} limit; use one short sentence`,
+        );
+      }
     }
     return `Plan saved: ${steps.length} step${steps.length === 1 ? "" : "s"}. Stop here; the user runs it.`;
   },

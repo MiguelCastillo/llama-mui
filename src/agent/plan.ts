@@ -41,23 +41,58 @@ export const PLANNING_NOTE =
 // gave their "done" to the steps that took their places. The step running may
 // be reworded, so it keeps its id (its messages and runPlan use it) as the
 // first new step with no match. See docs/guide.md, "How plans work".
+//
+// Each step's summary comes from the call. A step that arrives without one (a
+// string step, or a model that left it out) keeps the summary it had.
 export function planFromCall(args: string, old: PlanStep[], running: boolean): PlanStep[] | null {
   try {
     const steps = JSON.parse(args).steps;
     if (!Array.isArray(steps)) return null;
-    const texts = steps.map((s: any) => String(typeof s === "string" ? s : s.text).trim());
+    const items = steps.map((s: any) => ({
+      text: String(typeof s === "string" ? s : s.text).trim(),
+      summary: typeof s?.summary === "string" && s.summary.trim() ? s.summary.trim() : undefined,
+    }));
+    const texts = items.map((i) => i.text);
     const current = running ? old.find((o) => o.status === "running") : undefined;
     let reworded = current && !texts.includes(current.text) ? current : undefined;
-    return texts.map((text: string) => {
+    return items.map(({ text, summary }) => {
       const same = old.find((o) => o.text === text);
-      if (same) return { ...same, text };
+      // The summary key is left out when there is none, so old plans stay as they were.
+      const withSummary = (step: PlanStep): PlanStep => {
+        const { summary: kept, ...rest } = step;
+        const s = summary ?? kept;
+        return s ? { ...rest, summary: s } : rest;
+      };
+      if (same) return withSummary({ ...same, text });
       if (reworded) {
-        const step = { ...reworded, text };
+        const step = withSummary({ ...reworded, text });
         reworded = undefined;
         return step;
       }
-      return { id: crypto.randomUUID(), text, status: "pending" };
+      return withSummary({ id: crypto.randomUUID(), text, status: "pending" });
     });
+  } catch {
+    return null;
+  }
+}
+
+// The line that stands for a step in the plan: its summary, or for a plan from
+// before summaries the start of its text, cut at about this many characters.
+const STEP_LINE_CHARS = 70;
+export function stepLine(step: { text: string; summary?: string | null }): string {
+  const summary = step.summary?.trim();
+  if (summary) return summary;
+  const text = step.text.replace(/\s+/g, " ").trim();
+  return text.length > STEP_LINE_CHARS ? `${text.slice(0, STEP_LINE_CHARS).trimEnd()}…` : text;
+}
+
+// The plan's summary from an update_plan call's arguments, alongside extractContext.
+export function extractPlanSummary(args: string): string | null {
+  try {
+    const val = JSON.parse(args).summary;
+    if (typeof val !== "string") return null;
+    const trimmed = val.trim();
+    return trimmed ? trimmed : null;
   } catch {
     return null;
   }

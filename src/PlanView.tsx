@@ -31,6 +31,7 @@ import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
 import DoneIcon from "@mui/icons-material/Done";
 import { type PlanStep } from "./api";
+import { stepLine } from "./agent/plan";
 
 const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
   pending: <RadioButtonUncheckedIcon fontSize="small" color="disabled" />,
@@ -41,8 +42,19 @@ const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
   waiting: <HelpOutlineIcon fontSize="small" color="warning" />,
 };
 
+// A step put back to pending, keeping its id and its summary (the summary key
+// is left out when there is none, so old plans stay as they were).
+const pending = (s: PlanStep, patch: Partial<PlanStep> = {}): PlanStep => ({
+  id: s.id,
+  text: s.text,
+  ...(s.summary ? { summary: s.summary } : {}),
+  status: "pending",
+  ...patch,
+});
+
 export function PlanView({
   steps,
+  summary,
   context,
   running,
   onRun,
@@ -58,6 +70,8 @@ export function PlanView({
   prompt,
 }: {
   steps: PlanStep[];
+  // One short sentence the model wrote on what this plan does; shown at the top.
+  summary?: string | null;
   // Context the model wrote for this plan, describing what the steps need
   // from the conversation. Shown collapsed by default.
   context?: string | null;
@@ -89,10 +103,18 @@ export function PlanView({
   // Once every step is done, nothing in the plan runs again: no rerun, edit
   // or cancel. Redoing work is a new plan, from a new message.
   const readOnly = !onChange || steps.every((s) => s.status === "done");
-  const [editing, setEditing] = useState<{ i: number; text: string } | null>(null);
+  const [editing, setEditing] = useState<{ i: number; text: string; summary: string } | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
     setOpen((o) => {
+      const next = new Set(o);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  // Steps whose instruction is shown under "Details"; collapsed by default.
+  const [shown, setShown] = useState<Set<string>>(new Set());
+  const toggleShown = (id: string) =>
+    setShown((o) => {
       const next = new Set(o);
       if (!next.delete(id)) next.add(id);
       return next;
@@ -110,7 +132,7 @@ export function PlanView({
     onChange?.(
       steps.map((s, j) =>
         j === i
-          ? { id: s.id, text: s.text, status: "pending" }
+          ? pending(s)
           : j > i && s.status === "done"
             ? { ...s, stale: true }
             : s,
@@ -119,12 +141,26 @@ export function PlanView({
   const save = () => {
     if (!editing) return;
     const text = editing.text.trim();
-    if (text) onChange?.(steps.map((s, j) => (j === editing.i ? { id: s.id, text, status: "pending" } : s)));
+    const summary = editing.summary.trim();
+    // Without text there is nothing to run, so the edit is dropped. An empty
+    // summary is allowed: the step then shows the start of its text.
+    if (text) {
+      onChange?.(
+        steps.map((s, j) =>
+          j === editing.i ? { id: s.id, text, ...(summary ? { summary } : {}), status: "pending" } : s,
+        ),
+      );
+    }
     setEditing(null);
   };
 
   return (
     <Paper variant="outlined" sx={{ p: 1.5 }}>
+      {summary && (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          {summary}
+        </Typography>
+      )}
       {context && (
         <Accordion elevation={0} sx={{ bgcolor: "action.hover", "&:before": { display: "none" } }}>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -177,22 +213,71 @@ export function PlanView({
                 <Box sx={{ pt: 0.25 }}>{STATUS_ICON[s.status]}</Box>
                 <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                   {editing?.i === i ? (
-                    <TextField
-                      size="small"
-                      fullWidth
-                      autoFocus
-                      value={editing.text}
-                      onChange={(e) => setEditing({ i, text: e.target.value })}
-                      onBlur={save}
+                    // Two fields, so the edit ends only when focus leaves both.
+                    <Stack
+                      spacing={1}
+                      onBlur={(e) => {
+                        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) save();
+                      }}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") save();
+                        if (e.key === "Enter" && !e.shiftKey) save();
                         if (e.key === "Escape") setEditing(null);
                       }}
-                    />
+                    >
+                      <TextField
+                        size="small"
+                        fullWidth
+                        autoFocus
+                        label="Summary"
+                        placeholder={stepLine({ text: editing.text })}
+                        value={editing.summary}
+                        onChange={(e) => setEditing({ ...editing, summary: e.target.value })}
+                      />
+                      <TextField
+                        size="small"
+                        fullWidth
+                        multiline
+                        label="Instruction"
+                        value={editing.text}
+                        onChange={(e) => setEditing({ ...editing, text: e.target.value })}
+                      />
+                    </Stack>
                   ) : (
-                    <Typography variant="body2">
-                      {i + 1}. {s.text}
-                    </Typography>
+                    <>
+                      <Typography variant="body2">
+                        {i + 1}. {stepLine(s)}
+                      </Typography>
+                      {/* Nothing to unfold when the line already is the whole text. */}
+                      {stepLine(s) !== s.text && (
+                        <>
+                          <Box
+                            component="button"
+                            type="button"
+                            onClick={() => toggleShown(s.id)}
+                            aria-expanded={shown.has(s.id)}
+                            sx={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              p: 0,
+                              border: 0,
+                              bgcolor: "transparent",
+                              color: "text.secondary",
+                              cursor: "pointer",
+                              font: "inherit",
+                              fontSize: "0.75rem",
+                            }}
+                          >
+                            {shown.has(s.id) ? <ExpandLessIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
+                            Details
+                          </Box>
+                          {shown.has(s.id) && (
+                            <Typography variant="caption" color="text.secondary" component="div" sx={{ whiteSpace: "pre-wrap" }}>
+                              {s.text}
+                            </Typography>
+                          )}
+                        </>
+                      )}
+                    </>
                   )}
                   {/* Only a finished step has a time: running or rerunning it clears it. */}
                   {s.ms != null && (
@@ -220,7 +305,7 @@ export function PlanView({
                       onAnswer={(answer) => {
                         onChange?.(
                           steps.map((st, j) =>
-                            j === i ? { id: st.id, text: st.text, status: "pending", answer, asked: st.note } : st,
+                            j === i ? pending(st, { answer, asked: st.note }) : st,
                           ),
                         );
                         // changePlan updates the plan synchronously, so the run sees the answer.
@@ -246,7 +331,7 @@ export function PlanView({
                       <Tooltip title="The check is wrong: mark it done">
                         <IconButton
                           size="small"
-                          onClick={() => onChange?.(steps.map((st, j) => (j === i ? { id: st.id, text: st.text, status: "done" } : st)))}
+                          onClick={() => onChange?.(steps.map((st, j) => (j === i ? pending(st, { status: "done" }) : st)))}
                         >
                           <DoneIcon fontSize="small" />
                         </IconButton>
@@ -260,7 +345,7 @@ export function PlanView({
                       </Tooltip>
                     )}
                     <Tooltip title="Edit step">
-                      <IconButton size="small" onClick={() => setEditing({ i, text: s.text })}>
+                      <IconButton size="small" onClick={() => setEditing({ i, text: s.text, summary: s.summary ?? "" })}>
                         <EditOutlinedIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -328,7 +413,7 @@ function AnswerForm({ onAnswer }: { onAnswer: (answer: string) => void }) {
   );
 }
 
-// A suggested plan change as a diff of step texts: removed steps struck out,
+// A suggested plan change as a diff of steps (by text, shown by summary): removed steps struck out,
 // new ones marked. Kept steps keep their status when it's accepted.
 function ProposalView({
   steps,
@@ -350,12 +435,12 @@ function ProposalView({
       <Stack spacing={0.25} sx={{ mb: 1 }}>
         {proposal.map((s, i) => (
           <Typography key={s.id} variant="body2" color={old.has(s.text) ? "text.secondary" : "success.main"}>
-            {old.has(s.text) ? " " : "+"} {i + 1}. {s.text}
+            {old.has(s.text) ? " " : "+"} {i + 1}. {stepLine(s)}
           </Typography>
         ))}
         {removed.map((s) => (
           <Typography key={s.id} variant="body2" color="error.main" sx={{ textDecoration: "line-through" }}>
-            − {s.text}
+            − {stepLine(s)}
           </Typography>
         ))}
       </Stack>

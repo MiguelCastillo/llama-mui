@@ -6,10 +6,87 @@ import {
   filesChanged,
   weighDispute,
   extractContext,
+  extractPlanSummary,
+  stepLine,
   parseQuestion,
   recoveryPrompt,
   stepOutput,
 } from "../plan";
+
+// ── summaries ───────────────────────────────────────────────────────────────
+
+describe("planFromCall summaries", () => {
+  it("keeps each step's summary, trimmed", () => {
+    const args = JSON.stringify({
+      steps: [
+        { text: "Do A", summary: "  Make A  " },
+        { text: "Do B", summary: "Make B" },
+      ],
+    });
+    const result = planFromCall(args, [], false);
+    expect(result!.map((s) => s.summary)).toEqual(["Make A", "Make B"]);
+  });
+
+  it("leaves the summary out when the step has none", () => {
+    const result = planFromCall(JSON.stringify({ steps: ["Do A", { text: "Do B", summary: "  " }] }), [], false);
+    expect(result!.every((s) => !("summary" in s))).toBe(true);
+  });
+
+  it("takes the new summary for a step that matches by text", () => {
+    const old: PlanStep[] = [{ id: "s1", text: "Do A", summary: "Old line", status: "done" }];
+    const result = planFromCall(JSON.stringify({ steps: [{ text: "Do A", summary: "New line" }] }), old, false);
+    expect(result).toEqual([{ id: "s1", text: "Do A", summary: "New line", status: "done" }]);
+  });
+
+  it("keeps the old summary when the call gives none", () => {
+    const old: PlanStep[] = [{ id: "s1", text: "Do A", summary: "Old line", status: "done" }];
+    const result = planFromCall(JSON.stringify({ steps: ["Do A"] }), old, false);
+    expect(result![0].summary).toBe("Old line");
+  });
+
+  it("gives a reworded running step its new summary and keeps its id", () => {
+    const old: PlanStep[] = [{ id: "s1", text: "Do A", summary: "Old line", status: "running" }];
+    const result = planFromCall(JSON.stringify({ steps: [{ text: "Do A better", summary: "Better line" }] }), old, true);
+    expect(result).toEqual([{ id: "s1", text: "Do A better", summary: "Better line", status: "running" }]);
+  });
+});
+
+describe("stepLine", () => {
+  it("is the summary when there is one", () => {
+    expect(stepLine({ text: "A long instruction for the model", summary: "Make a stuck step retry" })).toBe(
+      "Make a stuck step retry",
+    );
+  });
+
+  it("is the whole text for a short step without a summary", () => {
+    expect(stepLine({ text: "Add the field" })).toBe("Add the field");
+    expect(stepLine({ text: "Add the field", summary: "  " })).toBe("Add the field");
+  });
+
+  it("cuts a long text at about 70 characters with an ellipsis", () => {
+    const line = stepLine({ text: "word ".repeat(40) });
+    expect(line.endsWith("…")).toBe(true);
+    expect(line.length).toBeLessThanOrEqual(71);
+    expect(line.startsWith("word word")).toBe(true);
+  });
+
+  it("joins a text's lines into one", () => {
+    expect(stepLine({ text: "First line\n  second line" })).toBe("First line second line");
+  });
+});
+
+describe("extractPlanSummary", () => {
+  it("returns the trimmed summary", () => {
+    expect(extractPlanSummary(JSON.stringify({ steps: [], summary: "  Adds summaries  " }))).toBe("Adds summaries");
+  });
+
+  it("returns null when it is missing, empty, not a string or the args aren't JSON", () => {
+    expect(extractPlanSummary(JSON.stringify({ steps: [] }))).toBeNull();
+    expect(extractPlanSummary(JSON.stringify({ summary: "   " }))).toBeNull();
+    expect(extractPlanSummary(JSON.stringify({ summary: 5 }))).toBeNull();
+    expect(extractPlanSummary("not json")).toBeNull();
+  });
+});
 
 // ── planFromCall ────────────────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@ import { type Api, type Kind, type ChatMessage, type ToolCall, type Usage, type 
 import { closeOpenToolCalls } from "../closeOpenToolCalls";
 import { callKey, shareTokens } from "./helpers";
 import { applyTodoCall, openTodos } from "./todos";
-import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext } from "./plan";
+import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext, extractPlanSummary } from "./plan";
 
 // Maximum number of identical tool calls (same name + arguments) before the
 // repeat guard fires and stops the model from looping.
@@ -86,6 +86,7 @@ export interface RunTurnCallbacks {
   setPastPlans: (fn: (p: any[]) => any[]) => void;
   setPlanAnchor: (a: string | null) => void;
   setPlanContext: (c: string | null) => void;
+  setPlanSummary: (s: string | null) => void;
   changePlan: (s: any[]) => void;
   // The session's todos; the ref is the latest, for calls within one reply.
   todosRef: { current: Todo[] };
@@ -94,6 +95,7 @@ export interface RunTurnCallbacks {
   planRunningRef: { current: boolean };
   planAnchor: string | null;
   planContext: string | null;
+  planSummary: string | null;
 }
 
 // Configuration needed for a single reply turn.
@@ -141,7 +143,7 @@ export async function runTurn(
     history: baseHistory, forgotten, attached: attachedBase,
     chatId, controller, started, text,
   } = config;
-  const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext } = callbacks;
+  const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, setPlanSummary, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext, planSummary } = callbacks;
 
   const tag = planStep ? { planStep } : {};
   let error: string | undefined;
@@ -333,17 +335,19 @@ export async function runTurn(
           const old = finished ? [] : current;
           const steps = planFromCall(call.arguments, old, planRunningRef.current);
           const ctx = extractContext(call.arguments);
+          const planSum = extractPlanSummary(call.arguments);
           const underway = old.some((st: any) => st.status !== "pending") && old.some((st: any) => st.status !== "done");
           if (steps && underway && !planRunningRef.current) {
             setPlanProposal(steps);
             result = "Proposed, not made: the user sees your change next to the plan and decides. Tell them what you changed and why.";
           } else if (steps) {
-            if (finished) setPastPlans((p: any[]) => [...p, { steps: current, anchor: planAnchor, context: planContext }]);
+            if (finished) setPastPlans((p: any[]) => [...p, { steps: current, anchor: planAnchor, context: planContext, summary: planSummary ?? undefined }]);
             if (!planRunningRef.current) setPlanAnchor(call.id);
             changePlan(steps);
             // A step revising the plan mid-run usually leaves context out; the
-            // plan's context still holds.
+            // plan's context and summary still hold.
             if (ctx !== null || !planRunningRef.current) setPlanContext(ctx);
+            if (planSum !== null || !planRunningRef.current) setPlanSummary(planSum);
           }
           if (steps && planning) planned = true;
         }

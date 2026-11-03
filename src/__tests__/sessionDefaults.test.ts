@@ -12,9 +12,36 @@ describe("withSessionDefaults", () => {
       usage: null,
       failed: null,
       plan: null,
+      planSummary: null,
       pastPlans: [],
       todos: [],
     });
+  });
+
+  it("loads an old session whose plan has no summaries", () => {
+    const s = withSessionDefaults({
+      id: "x",
+      title: "t",
+      model: "m",
+      plan: [{ id: "a", text: "Do the thing", status: "done" }],
+      pastPlans: [{ steps: [{ id: "b", text: "Older", status: "done" }], anchor: null }],
+    } as unknown as Session);
+    expect(s.planSummary).toBeNull();
+    expect(s.plan).toEqual([{ id: "a", text: "Do the thing", status: "done" }]);
+    expect(s.plan?.[0].summary).toBeUndefined();
+    expect(s.pastPlans?.[0].summary).toBeUndefined();
+  });
+
+  it("keeps the plan summary and step summaries", () => {
+    const s = withSessionDefaults({
+      id: "x",
+      title: "t",
+      model: "m",
+      plan: [{ id: "a", text: "Do it", summary: "Do it now", status: "pending" }],
+      planSummary: "Adds a thing",
+    } as unknown as Session);
+    expect(s.planSummary).toBe("Adds a thing");
+    expect(s.plan?.[0].summary).toBe("Do it now");
   });
 
   it("keeps what is there", () => {

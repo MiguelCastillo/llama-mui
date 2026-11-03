@@ -478,6 +478,9 @@ export interface Session {
   // Context the model wrote alongside the plan (e.g. requirements, notes),
   // kept when the plan is approved and moved into pastPlans when archived.
   planContext?: string | null;
+  // One short sentence the model wrote about what the plan does, shown at the
+  // top of the plan card; archived with the plan. Older saved chats don't have it.
+  planSummary?: string | null;
   // Where `plan` shows: the id of the update_plan call that wrote it, or
   // "at:N", after the chat's first N messages: a clone, a plan from a chat
   // saved before this field, or one whose turn was compacted away ("at:0").
@@ -515,14 +518,20 @@ export interface PastPlan {
   anchor: string | null;
   // Context the model wrote alongside this plan, kept when archived.
   context?: string | null;
+  // The plan's one-sentence summary, kept when archived.
+  summary?: string | null;
 }
 
-// One step of a plan. The model writes only the text; chat sets the status
-// as it runs and checks each step.
+// One step of a plan. The model writes the text and a summary; chat sets the
+// status as it runs and checks each step.
 export interface PlanStep {
   // Stays the same when the step is edited or rerun; its messages carry it.
   id: string;
+  // The instruction for the model.
   text: string;
+  // A short to-do line for the user (at most 80 characters). Plans from
+  // before summaries don't have it; see stepLine in agent/plan.ts.
+  summary?: string;
   // "disputed": the check said it isn't done, the model showed it is (see
   // Plan.tsx, weighDispute), and the user decides.
   // "waiting": the step is blocked and the model asked the user a question

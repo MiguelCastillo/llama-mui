@@ -13,6 +13,7 @@ export function withSessionDefaults(s: Session): Session {
     usage: s.usage ?? null,
     failed: s.failed ?? null,
     plan: Array.isArray(s.plan) ? s.plan : null,
+    planSummary: typeof s.planSummary === "string" ? s.planSummary : null,
     pastPlans: Array.isArray(s.pastPlans) ? s.pastPlans : [],
     todos: readTodos(s.todos),
   };
