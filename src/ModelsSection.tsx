@@ -28,6 +28,8 @@ import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import DownloadIcon from "@mui/icons-material/Download";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
+import StarIcon from "@mui/icons-material/Star";
+import StarBorderIcon from "@mui/icons-material/StarBorder";
 import {
   type Connector,
   type Model,
@@ -38,6 +40,7 @@ import {
   listModels,
   listModelsAdmin,
   searchModels,
+  setDefaultModel,
   downloadModel,
   updateModelSettings,
   loadModel,
@@ -80,6 +83,14 @@ export default function ModelsSection() {
       })
       .catch((e) => setError(e.message));
   }, []);
+
+  // Sets or, with "", clears the model chat starts with on this server.
+  const changeDefault = (id: string) => {
+    if (!connector) return;
+    setDefaultModel(connector, id)
+      .then(setConnector)
+      .catch((e) => setError(e.message));
+  };
 
   const settingsFor = (id: string) => settings && { ...settings.defaults, ...settings.models[id] };
 
@@ -173,7 +184,14 @@ export default function ModelsSection() {
   };
 
   if (connector?.kind === "anthropic") {
-    return <AnthropicModels connector={connector} think={(id) => !!settingsFor(id)?.think} setThink={setThink} />;
+    return (
+      <AnthropicModels
+        connector={connector}
+        think={(id) => !!settingsFor(id)?.think}
+        setThink={setThink}
+        changeDefault={changeDefault}
+      />
+    );
   }
 
   return (
@@ -216,6 +234,7 @@ export default function ModelsSection() {
                           label={m.status}
                           color={m.status === "loaded" ? "success" : "default"}
                         />
+                        {connector?.defaultModel === m.id && <Chip size="small" color="primary" label="default" />}
                       </Stack>
                     }
                     // n/a: unloaded and started without --ctx-size, so the
@@ -230,6 +249,7 @@ export default function ModelsSection() {
                       action icons (color means a state, like the "loaded" chip).
                       A row without Delete keeps its space, so play/stop line up. */}
                   <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0 }}>
+                    <DefaultButton id={m.id} current={connector?.defaultModel} change={changeDefault} />
                     {/* The server can only delete downloaded models, and not while loaded. */}
                     {m.canRemove && m.status !== "loaded" ? (
                       <Tooltip title="Delete model">
@@ -406,10 +426,12 @@ function AnthropicModels({
   connector,
   think,
   setThink,
+  changeDefault,
 }: {
   connector: Connector;
   think: (id: string) => boolean;
   setThink: (id: string, think: boolean) => void;
+  changeDefault: (id: string) => void;
 }) {
   const [models, setModels] = useState<Model[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -448,6 +470,7 @@ function AnthropicModels({
                     </>
                   }
                 />
+                <DefaultButton id={m.id} current={connector.defaultModel} change={changeDefault} />
                 {/* On: Claude thinks as it sees fit and shows a summary. */}
                 <Tooltip title="Think before answering">
                   <FormControlLabel
@@ -469,5 +492,23 @@ function AnthropicModels({
         </Paper>
       )}
     </Stack>
+  );
+}
+
+// The star on a model's row: the default is the one chat starts with on this
+// server. Clicking the default clears it.
+function DefaultButton({ id, current, change }: { id: string; current?: string; change: (id: string) => void }) {
+  const on = current === id;
+  return (
+    <Tooltip title={on ? "Default model; click to clear" : "Make default"}>
+      <IconButton
+        size="small"
+        onClick={() => change(on ? "" : id)}
+        aria-label={on ? `Clear default model ${id}` : `Make ${id} the default model`}
+        aria-pressed={on}
+      >
+        {on ? <StarIcon fontSize="small" color="primary" /> : <StarBorderIcon fontSize="small" />}
+      </IconButton>
+    </Tooltip>
   );
 }

@@ -13,6 +13,7 @@ import {
   DialogContentText,
   DialogTitle,
   IconButton,
+  Link,
   List,
   ListItemButton,
   ListItemIcon,
@@ -52,6 +53,7 @@ import {
 import ChatSection from "./ChatSection";
 import ModelsSection from "./ModelsSection";
 import ToolsSection from "./ToolsSection";
+import { hasWelcomeMarker, WELCOME_HASH, afterSave, setWelcomeHidden, settingsHash, welcomeBannerStep } from "./welcomeState";
 
 // Settings sections, shown in the left nav. Add new ones here.
 const SECTIONS = [
@@ -61,7 +63,16 @@ const SECTIONS = [
   { id: "chat", label: "Chat", icon: <ChatOutlinedIcon />, Component: ChatSection },
 ];
 
-export default function Settings({ section, onClose }: { section: string; onClose: () => void }) {
+export default function Settings({
+  section,
+  welcome = false,
+  onClose,
+}: {
+  section: string;
+  // The address carries the getting-started marker.
+  welcome?: boolean;
+  onClose: () => void;
+}) {
   // Unknown sections (old links) fall back to the first.
   const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
   return (
@@ -76,6 +87,34 @@ export default function Settings({ section, onClose }: { section: string; onClos
           <Typography variant="h6">Settings</Typography>
         </Toolbar>
       </AppBar>
+      {welcome && (
+        <Alert
+          severity="info"
+          icon={false}
+          sx={{ borderRadius: 0, alignItems: "center", "& .MuiAlert-message": { width: "100%" } }}
+        >
+          <Stack direction="row" useFlexGap sx={{ flexWrap: "wrap", alignItems: "center", columnGap: 2, rowGap: 0.5 }}>
+            <Typography variant="body2" sx={{ flexGrow: 1 }}>
+              Getting started{current.id === "connectors" || current.id === "models" ? ", " : ""}
+              {welcomeBannerStep(current.id)}
+            </Typography>
+            <Button size="small" onClick={() => (location.hash = WELCOME_HASH)}>
+              Back to checklist
+            </Button>
+            <Link
+              component="button"
+              type="button"
+              variant="body2"
+              onClick={() => {
+                setWelcomeHidden(true);
+                location.hash = settingsHash(current.id);
+              }}
+            >
+              Exit
+            </Link>
+          </Stack>
+        </Alert>
+      )}
       <Container maxWidth="lg" sx={{ py: 3 }}>
         <Stack direction={{ xs: "column", md: "row" }} spacing={3}>
           <List component="nav" sx={{ width: { md: 180 }, flexShrink: 0 }}>
@@ -83,13 +122,22 @@ export default function Settings({ section, onClose }: { section: string; onClos
               <ListItemButton
                 key={s.id}
                 selected={s.id === current.id}
-                href={`#/settings/${s.id}`}
+                href={settingsHash(s.id, welcome)}
                 sx={{ borderRadius: 1 }}
               >
                 <ListItemIcon>{s.icon}</ListItemIcon>
                 <ListItemText primary={s.label} />
               </ListItemButton>
             ))}
+            <ListItemButton
+              onClick={() => {
+                setWelcomeHidden(false);
+                location.hash = WELCOME_HASH;
+              }}
+              sx={{ borderRadius: 1 }}
+            >
+              <ListItemText secondary="Show getting started" />
+            </ListItemButton>
           </List>
           <Box sx={{ flexGrow: 1, minWidth: 0 }}>
             <current.Component />
@@ -318,15 +366,41 @@ function ConnectorDialog({
     setTest("checking");
     testConnector({ id: connector?.id, url, kind, ...keyInput })
       .catch((e): TestResult => ({ ok: false, error: e.message }))
-      .then(setTest);
+      .then((r) => {
+        setTest(r);
+        // From the getting-started checklist, a good test is the finish line
+        // for step 1: save it, make it the one in use and go back to the checklist.
+        if (r.ok && hasWelcomeMarker(location.hash)) save(r);
+      });
   };
 
-  const save = async () => {
+  // Once saved, the dialog keeps the connector's id so a retry updates it
+  // instead of adding a second one.
+  const [savedId, setSavedId] = useState(connector?.id);
+
+  // From the getting-started checklist, saving also finishes step 1: make it
+  // the one in use and test it (unless a good test was just seen); a good test
+  // goes back to the checklist, a bad one stays here with the connector saved.
+  const save = async (passed?: TestResult) => {
     setSaving(true);
     setError(null);
     try {
       const input = { name, url, kind, api, ...keyInput };
-      await (connector ? updateConnector(connector.id, input) : createConnector(input));
+      const saved = await (savedId ? updateConnector(savedId, input) : createConnector(input));
+      setSavedId(saved.id);
+      const marker = hasWelcomeMarker(location.hash);
+      let result = passed;
+      if (marker) {
+        await setActiveConnector(saved.id);
+        result ??= await testConnector({ id: saved.id }).catch((e): TestResult => ({ ok: false, error: e.message }));
+      }
+      const next = afterSave({ marker, test: result });
+      if (next === "stay") {
+        setError(`Saved, but the connection test failed: ${result && !result.ok ? result.error : "no answer"}. Fix it and save again.`);
+        setSaving(false);
+        return;
+      }
+      if (next === "return") location.hash = WELCOME_HASH;
       onSaved();
     } catch (e: any) {
       setError(e.message);
@@ -467,8 +541,8 @@ function ConnectorDialog({
         <Button onClick={runTest} disabled={!ready || test === "checking"} sx={{ mr: "auto" }}>
           {test === "checking" ? "Testing…" : "Test connection"}
         </Button>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={save} disabled={!ready || saving}>
+        <Button onClick={savedId ? onSaved : onClose}>Cancel</Button>
+        <Button variant="contained" onClick={() => save()} disabled={!ready || saving}>
           Save
         </Button>
       </DialogActions>

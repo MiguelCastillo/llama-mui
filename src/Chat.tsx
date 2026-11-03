@@ -91,6 +91,7 @@ import {
   runTool,
   saveSession,
 } from "./api";
+import { pickModel } from "./modelChoice";
 import ChatSettings, { AttachmentIcon } from "./ChatSettings";
 import SessionsPanel from "./SessionsPanel";
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
@@ -468,7 +469,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setDrawerOpen(false);
     loadSession(id);
   };
-  const newChat = () => openSession(crypto.randomUUID());
+  // A new session starts on the connector's default model (see pickModel),
+  // not on whatever this tab last used; opening a saved one keeps its own.
+  const newChat = () => {
+    openSession(crypto.randomUUID());
+    const start = pickModel({ current: "", defaultModel: connector?.defaultModel, models });
+    if (start) setModel(start);
+  };
   // Cancelling a plan asks first, then stops a run (the step's request, or its
   // check) and removes the plan. The steps' messages stay in the chat, and
   // what they changed stays changed. The runner, still unwinding from the
@@ -563,15 +570,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Picking another model answers the note.
   useEffect(() => setNotLoaded(null), [model]);
 
+  // The active connector's default model, for refreshModels.
+  const defaultModelRef = useRef<string | undefined>(undefined);
   const refreshModels = (connectorId: string) =>
     listModels(connectorId)
       .then((ms) => {
         setModels(ms);
-        // Keep the current pick if this server has it; otherwise prefer a model
-        // that's already in memory so the first reply is fast.
-        setModel((cur) =>
-          ms.some((m) => m.id === cur) ? cur : ((ms.find((m) => m.status === "loaded") ?? ms[0])?.id ?? ""),
-        );
+        // See pickModel for the order.
+        setModel((cur) => pickModel({ current: cur, defaultModel: defaultModelRef.current, models: ms }));
       })
       .catch((e) => {
         // Don't offer models from a server we can't reach.
@@ -588,6 +594,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .then((l) => {
         const active = l.connectors.find((c) => c.id === l.activeId) ?? null;
         setConnector(active);
+        defaultModelRef.current = active?.defaultModel;
         if (active) refreshModels(active.id);
         else setModels([]);
       })

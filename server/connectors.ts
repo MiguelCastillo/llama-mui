@@ -21,6 +21,7 @@ const publicView = (c: Connector) => ({
   hasKey: !!c.apiKey,
   kind: kindOf(c),
   api: apiOf(c),
+  defaultModel: c.defaultModel,
 });
 
 function readApi(raw: unknown): Api {
@@ -203,6 +204,12 @@ export async function connectorRoutes({ req, res, parts, method, search }: Route
       if (kind === "anthropic") throw new HttpError(400, "Anthropic's API needs an API key");
       c.apiKey = "";
     } else if (String(body.apiKey ?? "").trim()) c.apiKey = String(body.apiKey).trim();
+    // Omitted keeps the default model; blank clears it.
+    if (body.defaultModel !== undefined) {
+      if (typeof body.defaultModel !== "string") throw new HttpError(400, "defaultModel must be a string");
+      if (body.defaultModel.trim()) c.defaultModel = body.defaultModel.trim();
+      else delete c.defaultModel;
+    }
     await save(store);
     sendJson(res, 200, publicView(c));
     return true;

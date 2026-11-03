@@ -22,6 +22,9 @@ export interface Connector {
   // llama.cpp serves both. Missing means "anthropic"; Anthropic's API is
   // always "anthropic".
   api?: Api;
+  // The model chat starts with on this server, chosen on the getting-started
+  // page or in Settings → Models. Not a secret. Missing means no choice yet.
+  defaultModel?: string;
 }
 
 export type Kind = "llama" | "anthropic";

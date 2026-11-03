@@ -182,6 +182,8 @@ export interface Connector {
   hasKey: boolean;
   kind: Kind;
   api: Api;
+  // The model chat starts with on this server, when one was chosen.
+  defaultModel?: string;
 }
 
 export interface ConnectorList {
@@ -198,6 +200,8 @@ export interface ConnectorInput {
   // Set when it's added; it doesn't change.
   kind?: Kind;
   api?: Api;
+  // Omitted keeps it; "" clears it.
+  defaultModel?: string;
 }
 
 export type TestResult = { ok: true; models: number } | { ok: false; error: string };
@@ -217,6 +221,10 @@ export const getConnectors = () => call<ConnectorList>("GET", "/api/connectors")
 export const getActiveConnectorId = () => call<{ activeId: string | null }>("GET", "/api/connectors").then((r) => r.activeId);
 export const createConnector = (input: ConnectorInput) => call<Connector>("POST", "/api/connectors", input);
 export const updateConnector = (id: string, input: ConnectorInput) => call<Connector>("PUT", `/api/connectors/${id}`, input);
+// Sets (or, with "", clears) a connector's default model. The update route
+// wants the name and address, so it's sent the connector's own.
+export const setDefaultModel = (c: Connector, defaultModel: string) =>
+  updateConnector(c.id, { name: c.name, url: c.url, defaultModel });
 export const deleteConnector = (id: string) => call<{ activeId: string | null }>("DELETE", `/api/connectors/${id}`);
 export const setActiveConnector = (id: string) => call<{ activeId: string }>("PUT", "/api/active", { id });
 export const testConnector = (input: { id?: string; url?: string; apiKey?: string; clearKey?: boolean; kind?: Kind }) =>
