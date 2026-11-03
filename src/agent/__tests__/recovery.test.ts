@@ -138,7 +138,7 @@ describe("runPlan recovery rounds", () => {
     expect(cb.planRunningRef.current).toBe(false);
   });
 
-  it("fails the step with a short note after two rounds and stops the loop", async () => {
+  it("fails the step with the check's own note after two rounds and stops the loop", async () => {
     const long = "the branch still isn't merged because main has local edits ".repeat(8).trim();
     const reply = scriptReplies([
       { text: "Merged.", command: blocked },
@@ -155,9 +155,10 @@ describe("runPlan recovery rounds", () => {
     expect(reply).toHaveBeenCalledTimes(2 + MAX_RECOVERY_ROUNDS);
     expect(mockStreamChat).toHaveBeenCalledTimes(2 + MAX_RECOVERY_ROUNDS);
     const note = planRef.current![0].note!;
+    // The note is what the check wrote, whole: no cut, no ellipsis.
     expect(long.length).toBeGreaterThan(300);
-    expect(note.length).toBeLessThanOrEqual(160);
-    expect(note.startsWith("the branch still isn't merged")).toBe(true);
+    expect(note).toBe(long);
+    expect(note).not.toContain("…");
     // The second step never started.
     expect(setStep.mock.calls.some(([id]) => id === "s2")).toBe(false);
     expect(cb.planRunningRef.current).toBe(false);

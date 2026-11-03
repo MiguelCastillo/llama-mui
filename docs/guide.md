@@ -267,8 +267,8 @@ vitest (`npm test`).
   and the plan can have a one-sentence summary of its own. The card shows the
   summary as the step's main line, with the full instruction under a
   collapsed **Details** arrow; the model still gets the instruction when the
-  step runs. Plans saved before summaries show the first 70 or so characters
-  of the instruction instead. A step with no summary, or one over 80
+  step runs. Plans saved before summaries show the whole instruction
+  instead, with no Details arrow. A step with no summary, or one over 80
   characters, is refused like any other limit.
 - **You**: before or between runs, hover a step to edit its text or remove
   it. There's no way to add a step yet; ask the model for a new plan instead.
@@ -386,8 +386,8 @@ vitest (`npm test`).
     **Answer and continue**: the step reruns, and its prompt says "You asked: …
     The user answered your question: …", since a step doesn't see its earlier
     turns.
-  - **Rounds used up**: the step gets ✗ with a short note (about 160
-    characters) and the plan stops.
+  - **Rounds used up**: the step gets ✗ with the check's own note,
+    in its own words and never cut, and the plan stops.
   - No round starts if the reply failed or you pressed **Stop**.
 - **Stopped or failed**: if you press **Stop**, or the reply fails, the step
   goes back to pending (with "The reply failed: …" if it did) and the plan

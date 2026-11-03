@@ -247,8 +247,8 @@ export function PlanView({
                       <Typography variant="body2">
                         {i + 1}. {stepLine(s)}
                       </Typography>
-                      {/* Nothing to unfold when the line already is the whole text. */}
-                      {stepLine(s) !== s.text && (
+                      {/* Nothing to unfold when the line already is the whole text (tidied, as stepLine does). */}
+                      {stepLine(s) !== s.text.replace(/\s+/g, " ").trim() && (
                         <>
                           <Box
                             component="button"

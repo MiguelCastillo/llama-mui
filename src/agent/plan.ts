@@ -77,13 +77,11 @@ export function planFromCall(args: string, old: PlanStep[], running: boolean): P
 }
 
 // The line that stands for a step in the plan: its summary, or for a plan from
-// before summaries the start of its text, cut at about this many characters.
-const STEP_LINE_CHARS = 70;
+// before summaries its whole text with the whitespace tidied. Never cut.
 export function stepLine(step: { text: string; summary?: string | null }): string {
   const summary = step.summary?.trim();
   if (summary) return summary;
-  const text = step.text.replace(/\s+/g, " ").trim();
-  return text.length > STEP_LINE_CHARS ? `${text.slice(0, STEP_LINE_CHARS).trimEnd()}…` : text;
+  return step.text.replace(/\s+/g, " ").trim();
 }
 
 // The plan's summary from an update_plan call's arguments, alongside extractContext.
@@ -236,13 +234,14 @@ function pack(own: WholeFile[], others: WholeFile[], room: number) {
   return { shown, left };
 }
 
-const REVIEW_PROMPT =
+export const REVIEW_PROMPT =
   "You check whether one step of a coding task was really done. You get the step, the changes made " +
   "during it, the reply that claims it's done, and the files it changed: some as they are now, the rest " +
   "for you to read. Read what you need with the tools (read_file takes start_line and max_lines) before " +
   "you judge. Judge only this step, from the code: code that's there counts, even if an earlier attempt " +
   "wrote it, and a claim the code doesn't back up doesn't. When you're done reading, answer with exactly " +
-  "one line: DONE, or MISSING: followed by what's still missing. A step that only needed reading or " +
+  "one line: DONE, or `MISSING: <one short plain sentence saying what is not done, no more than about " +
+  "20 words>`. Keep it short: the line is shown as you write it. A step that only needed reading or " +
   "checking is DONE if the reply reports what it found.";
 
 // Asks the model whether the step's changes do what the step says, letting
@@ -337,7 +336,7 @@ export function disputePrompt(i: number, missing: string): string {
     "The check can be wrong: it saw only parts of the changes. Before you change anything, read the files " +
     "it's about with read_file and quote, in a code block, the lines that show whether it's right. Then " +
     "end with one line: STEP NOT DONE if the check is right, or STEP DONE if the check is wrong. If the " +
-    "step isn't done, fix it first. If it is, change nothing."
+    "step isn't done, fix it first. If it is, change nothing. Say why in one short sentence before that line."
   );
 }
 
@@ -377,7 +376,7 @@ export function recoveryPrompt(i: number, missing: string, output: string): stri
     `What the commands of this step printed:\n${shown || "(nothing)"}\n\n` +
     "Work out why it's blocked from what the commands printed. Fix it with safe, reversible actions " +
     "(stash, switch branch, rerun the command). If the fix would discard someone's work or needs a " +
-    "choice, do NOT act: end with one line, `QUESTION: <your question and the options>`. Otherwise, " +
+    "choice, do NOT act: end with one line, `QUESTION: <one short sentence with the options>`. Otherwise, " +
     "fix it and end with one line saying what you changed."
   );
 }

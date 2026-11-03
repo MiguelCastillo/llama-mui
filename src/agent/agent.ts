@@ -506,9 +506,6 @@ export interface RunPlanCallbacks {
 // Rounds a blocked step gets to fix itself after the dispute retry, before it
 // fails. A round may end in a question for the user instead (status waiting).
 export const MAX_RECOVERY_ROUNDS = 2;
-// Room for the note of a step that ran out of rounds: the check's words can be long.
-const MAX_FAILED_NOTE = 160;
-const shorten = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 
 // Runs the plan's open steps in order, one turn each, and checks every step
 // before ticking it off. A step the check still calls unfinished after the
@@ -624,7 +621,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       }
       setStep(id, check.done
         ? { status: "done", ms: took() }
-        : { status: "failed", note: shorten(check.missing ?? "", MAX_FAILED_NOTE), ms: took() });
+        : { status: "failed", note: check.missing ?? "", ms: took() });
       if (!check.done) break;
     }
   } finally {

@@ -11,6 +11,7 @@ import {
   parseQuestion,
   recoveryPrompt,
   stepOutput,
+  REVIEW_PROMPT,
 } from "../plan";
 
 // ── summaries ───────────────────────────────────────────────────────────────
@@ -63,11 +64,12 @@ describe("stepLine", () => {
     expect(stepLine({ text: "Add the field", summary: "  " })).toBe("Add the field");
   });
 
-  it("cuts a long text at about 70 characters with an ellipsis", () => {
-    const line = stepLine({ text: "word ".repeat(40) });
-    expect(line.endsWith("…")).toBe(true);
-    expect(line.length).toBeLessThanOrEqual(71);
-    expect(line.startsWith("word word")).toBe(true);
+  it("is the whole long text for an old step without a summary, with no ellipsis", () => {
+    const text = "word ".repeat(40).trim();
+    const line = stepLine({ text });
+    expect(line).toBe(text);
+    expect(line.length).toBeGreaterThan(70);
+    expect(line).not.toContain("…");
   });
 
   it("joins a text's lines into one", () => {
@@ -438,6 +440,15 @@ describe("stepOutput", () => {
   });
 });
 
+// ── REVIEW_PROMPT ───────────────────────────────────────────────────────────
+
+describe("REVIEW_PROMPT", () => {
+  it("asks for one short plain sentence after MISSING, about 20 words", () => {
+    expect(REVIEW_PROMPT).toContain("MISSING: <one short plain sentence");
+    expect(REVIEW_PROMPT).toContain("no more than about 20 words");
+  });
+});
+
 // ── recoveryPrompt ──────────────────────────────────────────────────────────
 
 describe("recoveryPrompt", () => {
@@ -453,7 +464,7 @@ describe("recoveryPrompt", () => {
     expect(p).toMatch(/safe, reversible/);
     expect(p).toContain("stash");
     expect(p).toContain("do NOT act");
-    expect(p).toContain("QUESTION: <your question and the options>");
+    expect(p).toContain("QUESTION: <one short sentence with the options>");
     expect(p).toContain("one line saying what you changed");
   });
 
