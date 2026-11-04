@@ -113,9 +113,13 @@ about them changes.
 When the model asks for a path that isn't the working directory or attached,
 the reply pauses on an Allow / Deny prompt; allowing attaches it for the rest
 of the chat (never as the working directory), and denying tells the model no.
-When nothing exists at the path (the model guessed), the prompt says so and
-offers to choose the right file or folder in the system dialog instead:
-whatever you pick is attached, and the model is told to use it.
+When the path doesn't exist but its own folder does (a file the model is about
+to create, say), it is the same Allow / Deny prompt, for that folder: the file
+not being there yet is expected, and what is missing is access.
+When nothing exists at the path or in its folder (the model guessed), the
+prompt says "File not found" or "Directory not found" and offers to choose the
+right file or folder in the system dialog instead: whatever you pick is
+attached, and the model is told to use it.
 When you name something without its path ("find llama mui"), the model calls
 `locate_path` instead of guessing, and the reply pauses with the same Choose
 file / Choose folder buttons.
@@ -205,7 +209,7 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   instructions, and "Reset to default" deletes the file. Unlike the working
   directory it isn't fixed per session, so a change applies from the next
   message and makes the model reprocess the start of that chat once.
-- A path the model made up, where nothing exists, is answered with an error
+- A path the model made up, where neither it nor its folder exists, is answered with an error
   that tells it to use `locate_path` or ask you, for its first two such guesses
   in a session; only a model that keeps guessing is brought to you with the
   prompt for pointing it to the right file. Any call that works starts that

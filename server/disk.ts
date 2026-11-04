@@ -100,9 +100,18 @@ export async function resolveAllowed(scope: Scope, raw: unknown): Promise<string
     real = await realpath(abs);
   } catch (e: any) {
     if (e.code !== "ENOENT" && e.code !== "ENOTDIR") throw e;
-    // Outside the attachments, a missing path is usually a guess; the user
-    // may know where the real one is.
-    if (!roots.some((r) => isInside(abs, r)) && !(await inSessionWorktrees(abs))) throw new AccessNeeded({ path: abs, kind: null });
+    if (!roots.some((r) => isInside(abs, r)) && !(await inSessionWorktrees(abs))) {
+      // A path whose own folder exists is not a guess: the file just isn't
+      // there yet (one the model is about to create, say). What is missing is
+      // access to that folder, so ask for it, as for any folder not attached.
+      if (e.code === "ENOENT") {
+        const parent = await realpath(path.dirname(abs)).catch(() => null);
+        if (parent && (await stat(parent).catch(() => null))?.isDirectory()) await needAccess(parent);
+      }
+      // Otherwise a missing path is usually a guess; the user may know where
+      // the real one is.
+      throw new AccessNeeded({ path: abs, kind: null });
+    }
     throw new ToolError(`${given} does not exist`);
   }
   if (isSettingsFile(real)) throw new ToolError(`${given} holds this app's API keys and can't be read`);

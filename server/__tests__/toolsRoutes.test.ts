@@ -162,6 +162,29 @@ describe("the working directory in the tool context", () => {
   });
 });
 
+describe("a file that does not exist yet, in a folder that exists but is not attached", () => {
+  it("asks to allow that folder at once, not to find the file", async () => {
+    const dir = path.join(home.dir, "fresh-folder");
+    await mkdir(dir, { recursive: true });
+    const out = await read("chat-new", [], path.join(dir, "new.txt"));
+    expect(out.result).toBeUndefined();
+    expect(out.needsAccess).toMatchObject({ path: dir, kind: "folder" });
+  });
+
+  it("is a plain error once the folder is attached, with nothing to ask", async () => {
+    const dir = path.join(home.dir, "fresh-folder-2");
+    await mkdir(dir, { recursive: true });
+    const out = await read("chat-new-2", [dir], path.join(dir, "new.txt"));
+    expect(out.needsAccess).toBeUndefined();
+    expect(out.result).toContain("does not exist");
+  });
+
+  it("still asks to find it when the folder is missing too", async () => {
+    const out = await read("chat-new-3", [], path.join(home.dir, "no-such-folder", "new.txt"));
+    expect(out.result).toContain("locate_path");
+  });
+});
+
 describe("a path that does not exist, outside everything attached", () => {
   const guess = (n: number) => path.join("/home/user", `guess-${n}.ts`);
 
