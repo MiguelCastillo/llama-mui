@@ -95,20 +95,39 @@ export function countNested(node: SessionNode): number {
   return n;
 }
 
-// How many sessions the session `id` holds, for the delete question. It is the
-// tree count (countNested on its node), but never fewer than the sessions that
-// name it as their parent: with one level shown, a nested session's own
-// children sit under the top row, so its node has none.
-export function nestedHeldBy(summaries: SessionSummary[], id: string): number {
-  const find = (nodes: SessionNode[]): SessionNode | undefined => {
-    for (const n of nodes) {
-      if (n.session.id === id) return n;
-      const inner = find(n.children);
-      if (inner) return inner;
+// Every session nested under `id`, at any depth: the ones that name it as their
+// parent, the ones that name those, and so on. Parents come before their
+// children. It never includes `id`, and a parentId cycle is walked once, so it
+// always stops. Deleting a session deletes exactly these with it, on the server
+// (see the DELETE route in server/sessions.ts) and in the question the page asks.
+export function descendantIds(rows: { id: string; parentId?: string | null }[], id: string): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>([id]);
+  for (let i = -1; i < found.length; i++) {
+    const parent = i < 0 ? id : found[i];
+    for (const r of rows) {
+      if (r.parentId === parent && !seen.has(r.id)) {
+        seen.add(r.id);
+        found.push(r.id);
+      }
     }
-    return undefined;
-  };
-  const node = find(buildSessionTree(summaries));
-  const direct = summaries.filter((s) => s.parentId === id && s.id !== id).length;
-  return Math.max(node ? countNested(node) : 0, direct);
+  }
+  return found;
 }
+
+// The sessions whose delete button is off: every session in a family (a
+// top-level session and everything shown under it) while any session in that
+// family has a run in progress. A run owns its session, and deleting a parent
+// takes its nested sessions with it, so the whole family waits until it ends.
+export function deleteLockedIds(tree: SessionNode[], inProgress: ReadonlySet<string>): Set<string> {
+  const familyOf = (n: SessionNode): string[] => [n.session.id, ...n.children.flatMap(familyOf)];
+  const locked = new Set<string>();
+  for (const root of tree) {
+    const family = familyOf(root);
+    if (family.some((id) => inProgress.has(id))) for (const id of family) locked.add(id);
+  }
+  return locked;
+}
+
+// How many sessions the session `id` holds, for the delete question.
+export const nestedHeldBy = (summaries: SessionSummary[], id: string): number => descendantIds(summaries, id).length;

@@ -499,7 +499,7 @@ nothing starts again by itself: see
   attached, by the run.
 - **Cancel plan** on a running plan stops the run first and waits until it is
   over, then removes the plan; the removal is an ordinary save.
-- Deleting a session that is running stops the run first.
+- Deleting a session that is running stops the run first, and so does a run in any session nested under it: the delete takes the whole family or none of it.
 
 ### Messages to a running plan
 
@@ -732,8 +732,12 @@ step that was running when the page closed comes back as pending.
     indented under their parent, and only one level is shown: a nested session
     made inside another nested one appears under the same top-level parent. A
     small arrow on a parent hides or shows its nested sessions. Deleting a parent
-    asks first and says how many nested sessions it holds; they are kept and move
-    up to the top level. The link to the parent is saved as `parentId` in
+    asks first and says how many nested sessions it holds; they are deleted with
+    it, at any depth. While a plan is running in a session, the delete buttons
+    of its whole family (the top-level session and everything nested under it)
+    are off until it ends; the server refuses such a delete too, deleting
+    nothing. A worktree in a deleted session's folder is kept. The link to the
+    parent is saved as `parentId` in
     `session.json` and in the sessions list. Tools on/off is one setting for the
     whole app, so a nested session follows it. A plan that hasn't started
     also makes one: **Run** opens it in a nested session (see

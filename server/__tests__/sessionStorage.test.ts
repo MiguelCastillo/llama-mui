@@ -109,6 +109,38 @@ describe("session routes", () => {
     expect(await exists(path.join(sessionsDir(), "gone"))).toBe(false);
   });
 
+  it("deletes a session together with every session nested under it", async () => {
+    await call("PUT", ["fam-p"], saved("fam-p"));
+    await call("PUT", ["fam-c"], saved("fam-c", { parentId: "fam-p" }));
+    await call("PUT", ["fam-g"], saved("fam-g", { parentId: "fam-c" }));
+    await call("PUT", ["fam-x"], saved("fam-x"));
+    const del = await call("DELETE", ["fam-p"]);
+    expect(del.status).toBe(200);
+    expect(del.body).toEqual({ id: "fam-p", deleted: ["fam-g", "fam-c", "fam-p"] });
+    for (const id of ["fam-p", "fam-c", "fam-g"]) expect(await exists(sessionFile(id))).toBe(false);
+    expect(await exists(sessionFile("fam-x"))).toBe(true);
+  });
+
+  it("deleting a nested session leaves its parent and its siblings", async () => {
+    await call("PUT", ["one-p"], saved("one-p"));
+    await call("PUT", ["one-a"], saved("one-a", { parentId: "one-p" }));
+    await call("PUT", ["one-b"], saved("one-b", { parentId: "one-p" }));
+    expect((await call("DELETE", ["one-a"])).body).toEqual({ id: "one-a", deleted: ["one-a"] });
+    expect(await exists(sessionFile("one-p"))).toBe(true);
+    expect(await exists(sessionFile("one-b"))).toBe(true);
+  });
+
+  it("keeps the worktree of a nested session that is deleted with its parent", async () => {
+    await call("PUT", ["wt-p"], saved("wt-p"));
+    await call("PUT", ["wt-c"], saved("wt-c", { parentId: "wt-p" }));
+    const work = path.join(sessionsDir(), "wt-c", "worktrees", "feature", "a.txt");
+    await mkdir(path.dirname(work), { recursive: true });
+    await writeFile(work, "work\n");
+    await call("DELETE", ["wt-p"]);
+    expect(await exists(sessionFile("wt-c"))).toBe(false);
+    expect(await readFile(work, "utf8")).toBe("work\n");
+  });
+
   it("deletes session.json but keeps a worktree in the folder", async () => {
     await call("PUT", ["keeps"], saved("keeps"));
     const work = path.join(sessionsDir(), "keeps", "worktrees", "feature", "a.txt");

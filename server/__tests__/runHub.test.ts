@@ -190,6 +190,21 @@ describe("a session with a run in progress", () => {
     expect((await call("DELETE", ["run-g"])).status).toBe(200);
   });
 
+  it("refuses to delete a session while one nested under it runs, and deletes nothing", async () => {
+    await call("PUT", ["fam-a"], chat("fam-a"));
+    await call("PUT", ["fam-b"], chat("fam-b", { parentId: "fam-a" }));
+    await call("PUT", ["fam-c"], chat("fam-c", { parentId: "fam-b" }));
+    await hub.beginRun("fam-c");
+    const del = await call("DELETE", ["fam-a"]);
+    expect(del.status).toBe(409);
+    expect(del.body.error).toMatch(/nested under it/);
+    for (const id of ["fam-a", "fam-b", "fam-c"]) expect(await onDisk(id)).toMatchObject({ id });
+    await hub.endRun("fam-c");
+    const ok = await call("DELETE", ["fam-a"]);
+    expect(ok.status).toBe(200);
+    expect(ok.body.deleted).toEqual(["fam-c", "fam-b", "fam-a"]);
+  });
+
   it("keeps the run's state to plain data: no functions, nothing the page's copy added", async () => {
     await call("PUT", ["run-h"], chat("run-h"));
     await hub.beginRun("run-h", fakeRun({ ...chat("run-h") }));

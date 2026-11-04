@@ -32,6 +32,13 @@ export interface RunnerView {
   notes: { id: string; text: string; step: number }[];
 }
 
+// A run is in progress from when it starts until it ends: running, pausing,
+// paused and waiting on an ask all count. The server owns the session for that
+// whole time (it refuses to delete it, among other things).
+export function isLive(view: RunnerView | undefined | null): boolean {
+  return !!view && view.status !== "stopped";
+}
+
 // A runner needs the user when it waits on an ask, or stopped with a step
 // that asked a question (a waiting step).
 export function needsYou(view: RunnerView | undefined | null): boolean {

@@ -713,9 +713,11 @@ export function noteRevision(id: string, revision: number) {
   if (knownRevision.get(id) === revision - 1) knownRevision.set(id, revision);
 }
 
+// Deletes the session and every session nested under it; `deleted` lists them
+// all, the session last.
 export const deleteSession = (id: string) =>
-  call<{ id: string }>("DELETE", `/api/sessions/${id}`).then((r) => {
-    knownRevision.delete(id);
+  call<{ id: string; deleted?: string[] }>("DELETE", `/api/sessions/${id}`).then((r) => {
+    for (const gone of [id, ...(r.deleted ?? [])]) knownRevision.delete(gone);
     return r;
   });
 

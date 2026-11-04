@@ -11,6 +11,7 @@ import path from "node:path";
 import { sessionsDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
+import { descendantIds } from "../src/sessionTree.ts";
 import { convertWorkingDir, deleteSession, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
 
 // Other modules (and tests) have always got these from here.
@@ -57,7 +58,9 @@ let migration: Promise<void> | undefined;
 //                  summary plus `revision`. While a plan runs it goes through the
 //                  run's live session.
 //   DELETE /<id> → deletes its session.json, and its folder if nothing else is in
-//                  it; a 409 while a plan runs in it
+//                  it, together with every session nested under it (any depth);
+//                  answers { id, deleted: [ids, the session last] }. A 409, with
+//                  nothing deleted, while a plan runs in it or in any of them
 export async function sessionRoutes({ req, res, parts, method }: Route): Promise<boolean> {
   if (parts[0] !== "sessions") return false;
   // Before the first request is answered, so a list never misses a session still in the old folder.
@@ -118,8 +121,26 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
   }
   if (method === "DELETE") {
     sessionFolder(id); // a bad id is a 400
-    await hub.remove(id, () => deleteSession(id));
-    sendJson(res, 200, { id });
+    // The session goes with every session nested under it, at any depth. A run
+    // in any of them refuses the whole delete before anything is removed, so a
+    // family is never left half deleted. A worktree in a folder is still kept
+    // (see deleteSession).
+    const names = await readdir(sessionsDir).catch(() => [] as string[]);
+    const rows = (await Promise.all(names.map((n) => readSession(n).catch(() => null)))).filter((s) => s !== null).map(summaryOf);
+    const nested = descendantIds(rows, id);
+    if ([id, ...nested].some((s) => hub.liveRun(s))) {
+      throw new HttpError(
+        409,
+        nested.length === 0
+          ? "A plan is running in this session. Stop it first."
+          : "A plan is running in this session or in one nested under it. Stop it first.",
+        { reason: "run active" },
+      );
+    }
+    // The deepest first, so a parent is never left pointing at nothing.
+    const deleted = [...nested.reverse(), id];
+    for (const gone of deleted) await hub.remove(gone, () => deleteSession(gone));
+    sendJson(res, 200, { id, deleted });
     return true;
   }
   return false;

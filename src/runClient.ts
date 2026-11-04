@@ -29,7 +29,7 @@ import { applyPatch, type SessionPatch } from "../server/sessionPatch";
 import type { Answer, Ask } from "./runnerTypes";
 import { type RunnerView, needsYou } from "./runView";
 
-export { needsYou, pauseControl, type RunnerStatus, type RunnerView } from "./runView";
+export { isLive, needsYou, pauseControl, type RunnerStatus, type RunnerView } from "./runView";
 
 // What a run needs from the page to start: the choices on screen. The server
 // looks up the connector (and its key, which the page never sees), the models

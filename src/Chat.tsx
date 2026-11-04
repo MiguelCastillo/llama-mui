@@ -125,6 +125,7 @@ import {
   allViews,
   dismiss,
   getView,
+  isLive,
   needsYou,
   pause as pauseRunner,
   pauseControl,
@@ -140,7 +141,7 @@ import {
 } from "./runClient";
 import ThreadNote from "./ThreadNote";
 import { withSessionDefaults } from "./sessionDefaults";
-import { nestedHeldBy, nestedSessionFrom } from "./sessionTree";
+import { descendantIds, nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
 // and whether the Tools switch is on. Storage can be unavailable (private
@@ -569,14 +570,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // question waiting), for the dot in the sessions panel. Read again on every
   // status, ask and dismissed event, never per streamed piece; the set is only
   // replaced when it changed.
-  const attentionNow = () => new Set(allViews().filter(needsYou).map((v) => v.sessionId));
-  const [attention, setAttention] = useState<ReadonlySet<string>>(attentionNow);
+  // The sessions with a run in progress are read the same way: their delete
+  // buttons, and those of the sessions in their family, are off (see
+  // deleteLockedIds).
+  const idsWhere = (pred: (v: RunnerView) => boolean) => new Set(allViews().filter(pred).map((v) => v.sessionId));
+  const [attention, setAttention] = useState<ReadonlySet<string>>(() => idsWhere(needsYou));
+  const [inProgress, setInProgress] = useState<ReadonlySet<string>>(() => idsWhere(isLive));
   useEffect(() => {
-    const refresh = () =>
-      setAttention((prev) => {
-        const next = attentionNow();
-        return next.size === prev.size && [...next].every((id) => prev.has(id)) ? prev : next;
-      });
+    const keepIfSame = (prev: ReadonlySet<string>, next: Set<string>) =>
+      next.size === prev.size && [...next].every((id) => prev.has(id)) ? prev : next;
+    const refresh = () => {
+      setAttention((prev) => keepIfSame(prev, idsWhere(needsYou)));
+      setInProgress((prev) => keepIfSame(prev, idsWhere(isLive)));
+    };
     refresh();
     return subscribeAll(refresh);
   }, []);
@@ -789,8 +795,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // without being shown, in some browsers (the Claude app's browser pane).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const removeSession = (id: string) => setConfirmDelete(id);
-  // Deleting does not cascade: nested sessions are kept, keep their parentId,
-  // and show at the top level because their parent is gone. The Dialog says so.
+  // Deleting cascades: the session goes with every session nested under it, at
+  // any depth, and the Dialog says how many.
   const heldNested = confirmDelete ? nestedHeldBy(sessions, confirmDelete) : 0;
   // The user's name for a session is userName; an empty one clears it, and the
   // title falls back to the model's name, then the first message.
@@ -808,14 +814,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const id = confirmDelete;
     setConfirmDelete(null);
     if (!id) return;
-    // A run of this session ends first (the server won't delete a session while
-    // one runs); stopping answers once it is over.
-    (runnerActive(id) ? stopRunner(id) : Promise.resolve())
-      .catch(() => {})
+    // A run in this session, or in any session nested under it, ends first (the
+    // server won't delete a family while one runs); stopping answers once it is over.
+    const family = [id, ...descendantIds(sessions, id)];
+    Promise.all(family.filter((s) => runnerActive(s)).map((s) => stopRunner(s).catch(() => {})))
       .then(() => deleteSession(id))
-      .then(() => {
-        setSessions((ss) => ss.filter((x) => x.id !== id));
-        if (id === sessionId) openSession(crypto.randomUUID(), false);
+      .then((r) => {
+        const gone = new Set([id, ...(r.deleted ?? [])]);
+        setSessions((ss) => ss.filter((x) => !gone.has(x.id)));
+        // The open session is one of them: start a new one.
+        if (gone.has(sessionId)) openSession(crypto.randomUUID(), false);
       })
       .catch((e) => setError(e.message));
   };
@@ -1381,6 +1389,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         narrow={narrow}
         busy={false}
         attention={attention}
+        inProgress={inProgress}
         onSelect={(id) => id !== sessionId && openSession(id)}
         onNew={newChat}
         onNewNested={newNested}
@@ -1614,8 +1623,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             This can't be undone.
             {heldNested > 0 &&
               (heldNested === 1
-                ? " It holds 1 nested session. It is kept and moves up to the top level."
-                : ` It holds ${heldNested} nested sessions. They are kept and move up to the top level.`)}
+                ? " Its 1 nested session will be deleted too."
+                : ` Its ${heldNested} nested sessions will be deleted too.`)}
           </DialogContentText>
         </DialogContent>
         <DialogActions>

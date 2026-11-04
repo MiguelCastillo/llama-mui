@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment, SessionSummary } from "../api";
-import { buildSessionTree, countNested, nestedHeldBy, nestedSessionFrom } from "../sessionTree";
+import { buildSessionTree, countNested, deleteLockedIds, descendantIds, nestedHeldBy, nestedSessionFrom } from "../sessionTree";
 
 const row = (id: string, parentId?: string | null, updatedAt = 1): SessionSummary => ({
   id,
@@ -80,6 +80,47 @@ describe("countNested", () => {
     expect(countNested(none)).toBe(0);
     const [p] = buildSessionTree([row("p"), row("c1", "p"), row("c2", "p"), row("g", "c1")]);
     expect(countNested(p)).toBe(3);
+  });
+});
+
+describe("descendantIds", () => {
+  const rows = [row("p"), row("c1", "p"), row("c2", "p"), row("g", "c1"), row("gg", "g"), row("x"), row("y", "x")];
+  it("lists everything nested under a session, at any depth, parents before their children", () => {
+    expect(descendantIds(rows, "p")).toEqual(["c1", "c2", "g", "gg"]);
+    expect(descendantIds(rows, "c1")).toEqual(["g", "gg"]);
+  });
+  it("is empty for a session with none or an unknown id, and leaves other families out", () => {
+    expect(descendantIds(rows, "gg")).toEqual([]);
+    expect(descendantIds(rows, "nope")).toEqual([]);
+    expect(descendantIds(rows, "x")).toEqual(["y"]);
+  });
+  it("stops on a parentId cycle and never lists the session itself", () => {
+    expect(descendantIds([row("a", "b"), row("b", "a")], "a")).toEqual(["b"]);
+    expect(descendantIds([row("s", "s")], "s")).toEqual([]);
+  });
+});
+
+describe("deleteLockedIds", () => {
+  // Two families, p (with a child and a grandchild shown under it) and x (alone).
+  const tree = buildSessionTree([row("p"), row("c", "p"), row("g", "c"), row("x"), row("y")]);
+  const locked = (...running: string[]) => [...deleteLockedIds(tree, new Set(running))].sort();
+
+  it("locks nothing while no run is in progress", () => {
+    expect(locked()).toEqual([]);
+  });
+  it("locks the whole family when its top-level session runs", () => {
+    expect(locked("p")).toEqual(["c", "g", "p"]);
+  });
+  it("locks the whole family, parent included, when a nested session runs", () => {
+    expect(locked("c")).toEqual(["c", "g", "p"]);
+    expect(locked("g")).toEqual(["c", "g", "p"]);
+  });
+  it("leaves other families alone", () => {
+    expect(locked("x")).toEqual(["x"]);
+    expect(locked("p", "x")).toEqual(["c", "g", "p", "x"]);
+  });
+  it("ignores an id that is not listed", () => {
+    expect(locked("nope")).toEqual([]);
   });
 });
 

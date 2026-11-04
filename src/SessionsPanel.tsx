@@ -17,7 +17,7 @@ import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SubdirectoryArrowRightIcon from "@mui/icons-material/SubdirectoryArrowRight";
 import type { SessionSummary } from "./api";
-import { buildSessionTree, type SessionNode } from "./sessionTree";
+import { buildSessionTree, deleteLockedIds, type SessionNode } from "./sessionTree";
 import { useMemo, useState } from "react";
 
 const DEFAULT_WIDTH = 260;
@@ -70,6 +70,9 @@ type RowContext = {
   busy: boolean;
   // Ids of sessions whose plan is waiting on the user (see needsYou).
   attention: ReadonlySet<string>;
+  // Ids of sessions whose delete button is off: the whole family of a session
+  // with a run in progress (see deleteLockedIds).
+  deleteLocked: ReadonlySet<string>;
   // Which session is being renamed: { id, value }.
   editing: { id: string; value: string } | null;
   setEditing: (e: { id: string; value: string } | null) => void;
@@ -129,13 +132,13 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
                 </IconButton>
               </span>
             </Tooltip>
-            <Tooltip title="Delete session">
+            <Tooltip title={ctx.deleteLocked.has(s.id) ? "Can't delete while a plan is running in this session or one nested with it" : "Delete session"}>
               <span>
                 <IconButton
                   edge="end"
                   size="small"
                   aria-label={`Delete ${title}`}
-                  disabled={busy && s.id === currentId}
+                  disabled={(busy && s.id === currentId) || ctx.deleteLocked.has(s.id)}
                   onClick={() => ctx.onDelete(s.id)}
                 >
                   <DeleteOutlinedIcon fontSize="small" />
@@ -238,6 +241,7 @@ export default function SessionsPanel({
   narrow,
   busy,
   attention,
+  inProgress,
   onSelect,
   onNew,
   onNewNested,
@@ -254,6 +258,8 @@ export default function SessionsPanel({
   busy: boolean;
   // Sessions with a plan waiting on the user: they get a small dot.
   attention: ReadonlySet<string>;
+  // Sessions with a run in progress: their family can't be deleted meanwhile.
+  inProgress: ReadonlySet<string>;
   onSelect: (id: string) => void;
   onNew: () => void;
   // Make an empty session under `parentId`.
@@ -298,6 +304,7 @@ export default function SessionsPanel({
     narrow,
     busy,
     attention,
+    deleteLocked: deleteLockedIds(tree, inProgress),
     editing,
     setEditing,
     saveEdit,
