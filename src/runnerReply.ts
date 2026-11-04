@@ -146,7 +146,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     // to the server: that request is not waited for, so it could land after the
     // run had ended, as one more write to the session. The page had read the
     // session as the run left it, so its revision was then one behind, and its
-    // next save (attaching a folder in Chat settings, say) was refused as stale
+    // next save (attaching a folder in Session settings, say) was refused as stale
     // and dropped, with the message behind the dialog.
     if (result.ok && !h.getSession().modelName) {
       const name = await askForSessionName(result.messages, connector.id, model, controller.signal, connector.api, connector.kind);

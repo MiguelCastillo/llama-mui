@@ -86,7 +86,7 @@ The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 expressions over file contents). They read only the chat's working directory
 and what's attached to it.
 
-**Chat settings** (the sliders icon next to the message box) has two sections.
+**Session settings** (the sliders icon next to the message box) has two sections.
 A new chat starts with neither.
 
 - **Working directory** is the folder relative paths and `run_command` start
@@ -490,7 +490,7 @@ nothing starts again by itself: see
 - When the run ends (every step done, stopped, or failed), the page reads the
   session once more from the server. That is the session it shows and the one
   its next save is based on.
-- While a plan runs the folders can't change: **Chat settings** shows "Folders
+- While a plan runs the folders can't change: **Session settings** shows "Folders
   can't change while a plan runs. Stop it or wait until it finishes." and
   turns off choosing and clearing the working directory, and adding and
   removing attachments. The run

@@ -97,7 +97,7 @@ import {
 } from "./api";
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { pickModel } from "./modelChoice";
-import ChatSettings, { ATTACHMENTS_LOCKED_NOTE, AttachmentIcon } from "./ChatSettings";
+import SessionSettings, { ATTACHMENTS_LOCKED_NOTE, AttachmentIcon } from "./SessionSettings";
 import SessionsPanel from "./SessionsPanel";
 import EmptyChatCreature from "./EmptyChatCreature";
 import EmptyChatSuggestions from "./EmptyChatSuggestions";
@@ -241,7 +241,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // working directory; New chat clears them.
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // The working directory: where relative paths and commands start. Chosen in
-  // Chat settings, not one of the attachments; New chat clears it.
+  // Session settings, not one of the attachments; New chat clears it.
   const [workingDir, setWorkingDir] = useState<string | null>(null);
   const attachedPaths = (as: Attachment[]) => as.map((a) => a.path);
   // The working directory the system prompt names. Fixed by the session's
@@ -963,7 +963,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // Changes the open session's attachments or working directory. The folders
   // a run works in are fixed when it starts and the server owns the session
-  // until it ends, so they can't change meanwhile (Chat settings says so, too).
+  // until it ends, so they can't change meanwhile (Session settings says so, too).
   const attachmentsLocked = runActive;
   const changeAttachments = (fn: (as: Attachment[]) => Attachment[]) => {
     if (runnerActive(sessionId)) setError(ATTACHMENTS_LOCKED_NOTE);
@@ -1761,7 +1761,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       <Paper square elevation={3} sx={{ py: 2 }}>
         <Container maxWidth={false}>
           <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
-            <ChatSettings
+            <SessionSettings
               attachments={attachments}
               workingDir={workingDir}
               locked={attachmentsLocked}

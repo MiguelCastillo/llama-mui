@@ -46,7 +46,7 @@ export const ATTACHMENTS_LOCKED_NOTE = "Folders can't change while a plan or a r
 // Button next to the message box that opens this chat's settings: its working
 // directory and what's attached. Laid out like Settings, but everything here
 // belongs to this chat and New chat clears it.
-export default function ChatSettings({
+export default function SessionSettings({
   attachments,
   workingDir,
   onAttach,
@@ -81,7 +81,7 @@ export default function ChatSettings({
 
   return (
     <>
-      <Tooltip title="Chat settings: working directory and attachments">
+      <Tooltip title="Session settings: working directory and attachments">
         {/* mt centers it on a one-line input (56px). */}
         <IconButton onClick={() => setOpen(true)} sx={{ mt: 1 }}>
           <Badge badgeContent={attachments.length + (workingDir ? 1 : 0)} color="primary">
@@ -91,7 +91,7 @@ export default function ChatSettings({
       </Tooltip>
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md" fullScreen={narrow}>
         <DialogTitle sx={{ display: "flex", alignItems: "center", pr: 1 }}>
-          <Box sx={{ flexGrow: 1 }}>Chat settings</Box>
+          <Box sx={{ flexGrow: 1 }}>Session settings</Box>
           <IconButton onClick={() => setOpen(false)} aria-label="Close">
             <CloseIcon />
           </IconButton>
@@ -105,15 +105,15 @@ export default function ChatSettings({
         )}
         <DialogContent sx={{ display: "flex", gap: 3, minHeight: 360, pt: narrow ? 2 : 0 }}>
           {!narrow && (
-            <List component="nav" sx={{ width: 180, flexShrink: 0, py: 0 }}>
+            <List component="nav" sx={{ width: 240, flexShrink: 0, py: 0, alignSelf: "flex-start", display: "flex", flexDirection: "column", gap: 0.5 }}>
               {sections.map((s) => (
                 <ListItemButton
                   key={s.id}
                   selected={s.id === section}
                   onClick={() => setSection(s.id)}
-                  sx={{ borderRadius: 1 }}
+                  sx={{ borderRadius: 1, px: 2, py: 1.25 }}
                 >
-                  <ListItemIcon>{s.icon}</ListItemIcon>
+                  <ListItemIcon sx={{ minWidth: 40 }}>{s.icon}</ListItemIcon>
                   <ListItemText primary={s.label} />
                   {s.count > 0 && (
                     <Typography variant="caption" color="text.secondary">

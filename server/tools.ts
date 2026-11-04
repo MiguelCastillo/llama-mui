@@ -55,7 +55,7 @@ const GROUPS: Group[] = [
     id: "disk",
     label: "Disk",
     description:
-      "Read-only access to the files and folders attached to a chat (Chat settings, next to the message box). " +
+      "Read-only access to the files and folders attached to a chat (Session settings, next to the message box). " +
       "When the model asks for anything else, you're asked to allow it first. Nothing here can change, delete or run files.",
     instructions:
       "Relative paths are relative to the working directory, named at the end of this prompt. Other files and " +
@@ -274,7 +274,7 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
       systemPrompt: toolsSystemPrompt(promptDir, (await readInstructions()).text),
       offered: TOOLS.filter((t) => isOffered(ctx, t)).map((t) => t.name),
       update: await chatUpdate(ctx, promptDir),
-      // The working directory's only: attachments have none (see ChatSettings).
+      // The working directory's only: attachments have none (see SessionSettings).
       checkCommands: ctx.workingDir && ctx.store.checkCommands[ctx.workingDir]
         ? { [ctx.workingDir]: ctx.store.checkCommands[ctx.workingDir] }
         : {},

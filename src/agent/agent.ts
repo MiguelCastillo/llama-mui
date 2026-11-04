@@ -467,7 +467,7 @@ async function readWhole(
 
 // Runs the working directory's check command, if it has one, once the plan has
 // changed files; the result if it fails, or null. Only the working directory
-// has a check command (see Chat settings).
+// has a check command (see Session settings).
 async function failedCommand(
   planMessages: ChatMessage[],
   checkCommands: Record<string, string>,
