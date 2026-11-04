@@ -1767,13 +1767,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               locked={attachmentsLocked}
               onAttach={attach}
               onDetach={(p) => changeAttachments((as) => as.filter((x) => x.path !== p))}
-              onMakeWorkingDir={(p) => {
-                // Moved, not copied: the folder leaves the attachments, and
-                // the old working directory is not kept.
-                if (runnerActive(sessionId)) return setError(ATTACHMENTS_LOCKED_NOTE);
-                changeWorkingDir(p);
-                changeAttachments((as) => as.filter((x) => x.path !== p));
-              }}
+              onSetWorkingDir={changeWorkingDir}
               checkCommands={toolContext.checkCommands}
               onSetCheckCommand={(folder, command) =>
                 setCheckCommand(folder, command)
