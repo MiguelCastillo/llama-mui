@@ -143,6 +143,13 @@ describe("the run command's starter", () => {
     expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: null });
   });
 
+  it("has no working directory, and so no prompt folder, when a folder is only attached", async () => {
+    saved("a", { workingDir: null, attachments: [{ path: "/work/app", kind: "folder", source: "manual" }] });
+    await start("a");
+    const context = calls.find((c) => c.url === "/api/tools/context")!;
+    expect(JSON.parse(context.body)).toEqual({ workingDir: null, attachments: ["/work/app"], promptDir: null });
+  });
+
   it("holds no key anywhere: not in the run, its events, its requests or the saved session", async () => {
     saved("a");
     await start("a");

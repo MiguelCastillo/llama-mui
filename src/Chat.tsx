@@ -725,7 +725,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setDrawerOpen(false);
     loadSession(id);
   };
-  // An empty session under `parentId`, with the same working folders and model
+  // An empty session under `parentId`, with the same working directory, attachments and model
   // but none of its messages. It is saved right away (saveNow skips empty
   // sessions) so it shows in the list under its parent, then opened.
   const newNested = async (parentId: string) => {

@@ -17,6 +17,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { HttpError } = await import("../http.ts");
 const { sessionRoutes } = await import("../sessions.ts");
+const { convertWorkingDir } = await import("../sessionFile.ts");
 
 const oldDir = () => path.join(home.dir, ".llama-mui", "chats");
 const sessionsDir = () => path.join(home.dir, ".llama-mui", "sessions");
@@ -116,6 +117,116 @@ describe("session routes", () => {
     await call("DELETE", ["keeps"]);
     expect(await exists(sessionFile("keeps"))).toBe(false);
     expect(await readFile(work, "utf8")).toBe("work\n");
+  });
+});
+
+const attach = (p: string, kind: "file" | "folder") => ({ path: p, kind, source: "manual" });
+
+describe("a session saved before chats had a working directory", () => {
+  it("takes the first folder as workingDir, removes it from the attachments and keeps the others in order", () => {
+    const old = {
+      id: "s",
+      attachments: [attach("/a/file.txt", "file"), attach("/work/app", "folder"), attach("/work/other", "folder")],
+    };
+    const before = JSON.stringify(old);
+    const converted = convertWorkingDir(old);
+    expect(converted.workingDir).toBe("/work/app");
+    expect(converted.attachments).toEqual([attach("/a/file.txt", "file"), attach("/work/other", "folder")]);
+    expect(converted.id).toBe("s");
+    // The old object is left alone: the conversion builds a new one.
+    expect(JSON.stringify(old)).toBe(before);
+  });
+
+  it("takes a folder that comes first in the list, and nothing else changes in the list", () => {
+    const converted = convertWorkingDir({ attachments: [attach("/work/app", "folder"), attach("/a/file.txt", "file")] });
+    expect(converted.workingDir).toBe("/work/app");
+    expect(converted.attachments).toEqual([attach("/a/file.txt", "file")]);
+  });
+
+  it("gets null when only files are attached, and keeps them", () => {
+    const files = [attach("/a/one.txt", "file"), attach("/a/two.txt", "file")];
+    expect(convertWorkingDir({ attachments: files })).toEqual({ attachments: files, workingDir: null });
+  });
+
+  it("gets null when nothing is attached, or the attachments are missing", () => {
+    expect(convertWorkingDir({ attachments: [] })).toEqual({ attachments: [], workingDir: null });
+    expect(convertWorkingDir({ id: "s" })).toEqual({ id: "s", workingDir: null });
+  });
+
+  it("leaves a session that has workingDir alone, null included, even with a folder attached", () => {
+    const withDir = { workingDir: "/work/app", attachments: [attach("/work/other", "folder")] };
+    expect(convertWorkingDir(withDir)).toBe(withDir);
+    const withNull = { workingDir: null, attachments: [attach("/work/other", "folder")] };
+    expect(convertWorkingDir(withNull)).toBe(withNull);
+    expect(withNull.attachments).toEqual([attach("/work/other", "folder")]);
+  });
+
+  const writeOld = async (id: string) => {
+    await mkdir(path.join(sessionsDir(), id), { recursive: true });
+    await writeFile(
+      sessionFile(id),
+      JSON.stringify(saved(id, { attachments: [attach("/a/file.txt", "file"), attach("/work/app", "folder")] })),
+    );
+  };
+
+  it("is converted when read, and the file is not rewritten by reading", async () => {
+    await writeOld("wd-read");
+    const { body } = await call("GET", ["wd-read"]);
+    expect(body.workingDir).toBe("/work/app");
+    expect(body.attachments).toEqual([attach("/a/file.txt", "file")]);
+    expect(JSON.parse(await readFile(sessionFile("wd-read"), "utf8")).workingDir).toBeUndefined();
+  });
+
+  it("is saved with the conversion by the next save", async () => {
+    await writeOld("wd-put");
+    const { body } = await call("GET", ["wd-put"]);
+    expect((await call("PUT", ["wd-put"], body)).status).toBe(200);
+    const onDisk = JSON.parse(await readFile(sessionFile("wd-put"), "utf8"));
+    expect(onDisk.workingDir).toBe("/work/app");
+    expect(onDisk.attachments).toEqual([attach("/a/file.txt", "file")]);
+  });
+
+  it("is saved with the conversion by a rename too, which edits the file it read", async () => {
+    await writeOld("wd-patch");
+    expect((await call("PATCH", ["wd-patch"], { userName: "Renamed" })).status).toBe(200);
+    const onDisk = JSON.parse(await readFile(sessionFile("wd-patch"), "utf8"));
+    expect(onDisk.workingDir).toBe("/work/app");
+    expect(onDisk.attachments).toEqual([attach("/a/file.txt", "file")]);
+  });
+
+  it("keeps a working directory that was cleared: no folder comes back from the attachments", async () => {
+    await call("PUT", ["wd-cleared"], saved("wd-cleared", { workingDir: null, attachments: [attach("/work/other", "folder")] }));
+    const { body } = await call("GET", ["wd-cleared"]);
+    expect(body.workingDir).toBeNull();
+    expect(body.attachments).toEqual([attach("/work/other", "folder")]);
+  });
+});
+
+describe("replacing a chat's working directory", () => {
+  const extra = [attach("/a/file.txt", "file"), attach("/docs", "folder")];
+
+  it("leaves the attachments as they were, and the old folder is not kept as one", async () => {
+    await call("PUT", ["wd-replace"], saved("wd-replace", { workingDir: "/work/old", attachments: extra }));
+    const first = (await call("GET", ["wd-replace"])).body;
+    expect(first.workingDir).toBe("/work/old");
+
+    // What the page saves after choosing another folder.
+    expect((await call("PUT", ["wd-replace"], { ...first, workingDir: "/work/new" })).status).toBe(200);
+    const after = (await call("GET", ["wd-replace"])).body;
+    expect(after.workingDir).toBe("/work/new");
+    expect(after.attachments).toEqual(extra);
+    expect(JSON.stringify(after)).not.toContain("/work/old");
+    expect(JSON.stringify(JSON.parse(await readFile(sessionFile("wd-replace"), "utf8")))).not.toContain("/work/old");
+  });
+
+  it("clearing it leaves the attachments as they were too, and nothing takes its place", async () => {
+    await call("PUT", ["wd-clear"], saved("wd-clear", { workingDir: "/work/old", attachments: extra }));
+    const first = (await call("GET", ["wd-clear"])).body;
+    expect((await call("PUT", ["wd-clear"], { ...first, workingDir: null })).status).toBe(200);
+    const after = (await call("GET", ["wd-clear"])).body;
+    expect(after.workingDir).toBeNull();
+    // The attached folder is not promoted to a working directory by reading.
+    expect(after.attachments).toEqual(extra);
   });
 });
 

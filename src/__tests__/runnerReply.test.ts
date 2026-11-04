@@ -233,6 +233,40 @@ describe("makeReply", () => {
     expect(s.plan?.[0].status).toBe("done");
   });
 
+  // The model may ask for a folder to read (a 'Model asked' attachment). That
+  // is access to read it, never a change of where relative paths start.
+  it("adds what the model asked for as an attachment and never changes the working directory", async () => {
+    const h = makeHandle();
+    const dirs: (string | null | undefined)[] = [];
+    mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {
+      cb.attach({ path: "/asked", kind: "folder", source: "request" });
+      dirs.push(h.session().workingDir);
+      return { ok: true, messages: [user(config.text)], attached: [] };
+    });
+    await makeReply(h.handle)("go", []);
+    const s = h.session();
+    expect(s.attachments.map((a) => [a.path, a.source])).toEqual([["/docs", "user"], ["/work/x.txt", "user"], ["/asked", "request"]]);
+    expect(dirs).toEqual(["/work"]);
+    expect(s.workingDir).toBe("/work");
+    // The folder it asked for is not the prompt's folder either.
+    expect(s.promptDir).toBe("/work");
+  });
+
+  it("keeps a chat with no working directory without one when the model asks for a folder", async () => {
+    const h = makeHandle({ workingDir: null, attachments: [] });
+    mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {
+      cb.attach({ path: "/asked", kind: "folder", source: "request" });
+      return { ok: true, messages: [user(config.text)], attached: [] };
+    });
+    await makeReply(h.handle)("go", []);
+    expect(h.session().workingDir).toBeNull();
+    expect(h.session().promptDir).toBeNull();
+    expect(h.session().attachments.map((a) => a.path)).toEqual(["/asked"]);
+    // The next turn still has no working directory, with the folder attached.
+    await makeReply(h.handle)("again", []);
+    expect(mockRunTurn.mock.calls[1][0]).toMatchObject({ workingDir: null, attached: ["/asked"] });
+  });
+
   it("sends nothing and sets the error when the model isn't loaded", async () => {
     mockListModels.mockResolvedValue([{ id: "m", status: "unloaded" }]);
     const h = makeHandle();

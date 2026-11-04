@@ -83,15 +83,36 @@ session, as it does for `update_plan`, since the server never writes that file.
 
 The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 `read_file`, `find_files` (names, with `*` wildcards) and `grep` (regular
-expressions over file contents). They read only what's attached to the chat.
-**Chat settings** (the sliders icon next to the message box) lists the chat's attachments, each
-marked with whether you added it or the model asked for it, and a field to
-attach more; a new chat starts with nothing attached. The first folder you
-attach is the chat's **working directory**, marked there: relative paths and
-`run_command` start in it, and the system prompt names it. The home icon on
-another folder makes that one the working directory. When the model asks for
-a path that isn't attached, the reply pauses on an Allow / Deny prompt;
-allowing attaches it for the rest of the chat, and denying tells the model no.
+expressions over file contents). They read only the chat's working directory
+and what's attached to it.
+
+**Chat settings** (the sliders icon next to the message box) has two sections.
+A new chat starts with neither.
+
+- **Working directory** is the folder relative paths and `run_command` start
+  in, and the system prompt names it. It's a setting of the chat, separate
+  from the attachments, and it's never picked for you: attaching a folder
+  doesn't make it the working directory. Choose it with **Choose folder…**
+  (one folder; files aren't offered) or by typing its path, which must be a
+  folder. Choosing another folder replaces it, and the old one isn't kept as
+  an attachment. **Clear** removes it. The folder's **check command** (see
+  [How plans work](#how-plans-work)) is set here too. With no working
+  directory, relative paths fail with "Use an absolute path", and the model
+  is told "There's no working directory: use absolute paths." even if a
+  folder is attached.
+- **Attachments** are the extra files and folders the model may read, each
+  marked with whether you added it or the model asked for it, and a field to
+  attach more. The model can read the working directory and the attachments;
+  only the working directory is where relative paths start.
+
+Chats saved before the working directory was a setting are converted when
+they're read: their first attached folder becomes the working directory and
+leaves the attachments, and the next save writes it that way. Nothing else
+about them changes.
+
+When the model asks for a path that isn't the working directory or attached,
+the reply pauses on an Allow / Deny prompt; allowing attaches it for the rest
+of the chat (never as the working directory), and denying tells the model no.
 When nothing exists at the path (the model guessed), the prompt says so and
 offers to choose the right file or folder in the system dialog instead:
 whatever you pick is attached, and the model is told to use it.
@@ -133,7 +154,8 @@ refused if it has uncommitted changes, and keeps the branch and its commits;
 deleting a session never removes its worktrees.
 
 The **Terminal** group (`server/terminal.ts`) has `run_command`, which runs a
-shell command the model suggests, in an attached folder (or one you allow).
+shell command the model suggests, in the working directory, an attached folder
+(or one you allow). With no working directory the model has to name the `cwd`.
 The reply pauses on the command and folder with Run / Deny, and it runs only
 if you approve exactly that. It runs as you, with your login shell's
 environment (PATH and so on), network and credentials: the model can't reach GitHub, but a `git push`
@@ -313,10 +335,11 @@ vitest (`npm test`).
   decisions, constraints, and other details from the conversation that each
   step needs (since each step starts without the chat). It shows collapsed
   in the plan card.
-- Then chat runs the **check command** of each attached folder that has one,
-  once the plan has changed files. It's set per folder in **Chat settings**,
-  under the folder (for this repo, `npx tsc --noEmit -p .`), and kept for
-  that folder in every session. It runs without asking, unlike
+- Then chat runs the **check command** of the working directory, if it has
+  one, once the plan has changed files. It's set per folder in **Chat
+  settings**, in the Working directory section (for this repo,
+  `npx tsc --noEmit -p .`), and kept for that folder in every session.
+  Attached folders' check commands don't run. It runs without asking, unlike
   `run_command`: you typed it, and the model can't change it. It comes
   first because a failing typecheck or test is a fact, where the check
   below is a model's opinion, and its output says exactly what to fix:
@@ -469,7 +492,8 @@ nothing starts again by itself: see
   its next save is based on.
 - While a plan runs the folders can't change: **Chat settings** shows "Folders
   can't change while a plan runs. Stop it or wait until it finishes." and
-  turns off adding, removing and choosing the working directory. The run
+  turns off choosing and clearing the working directory, and adding and
+  removing attachments. The run
   works in the folders it started with, and the server owns the session
   until it ends. A folder the model asks to use, and you allow, is still
   attached, by the run.
@@ -703,8 +727,8 @@ step that was running when the page closed comes back as pending.
     seconds. The events hold no API keys: keys stay in `settings.json`, and the
     server never hands one to a run.
   - **Nested sessions**: the button beside the trash icon on each row makes a
-    new, empty session under that one. It keeps the same working folder
-    (attachments) and model, but none of the messages. Nested sessions show
+    new, empty session under that one. It keeps the same working directory,
+    attachments and model, but none of the messages. Nested sessions show
     indented under their parent, and only one level is shown: a nested session
     made inside another nested one appears under the same top-level parent. A
     small arrow on a parent hides or shows its nested sessions. Deleting a parent
