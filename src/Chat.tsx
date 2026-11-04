@@ -1869,7 +1869,7 @@ function Composer({
       />
       {/* Send lines up with the input's top edge; the context
           indicator sits just below it. */}
-      <Stack spacing={1.25} sx={{ flexShrink: 0, alignItems: "flex-end" }}>
+      <Stack spacing={1.25} sx={{ flexShrink: 0, alignItems: "center" }}>
         {/* Icons, with the words as tooltip and accessible label. */}
         {!onStop && (
           <Tooltip title="Send">
