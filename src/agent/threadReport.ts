@@ -82,7 +82,9 @@ export function parseReport(answer: string): string | null {
     .replace(/^["“]+|["”]+$/g, "")
     .trim();
   if (!text) return null;
-  const firstTwo = (text.match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g) ?? [text]).slice(0, 2).join("").trim();
+  // A sentence ends at . ! or ? followed by a space or the end, so "notes.txt" or
+  // "v1.2" stay whole. Sentences are joined with a space.
+  const firstTwo = (text.match(/\S.*?[.!?]+(?=\s|$)|\S.*$/g) ?? [text]).slice(0, 2).join(" ").trim();
   return clip(firstTwo || text, REPORT_MAX);
 }
 

@@ -69,6 +69,14 @@ describe("parseReport", () => {
     expect(parseReport("Did it! Really?  Yes.")).toBe("Did it! Really?");
   });
 
+  it("doesn't end a sentence at a dot inside a file name or number", () => {
+    expect(parseReport('The file was created successfully. The file out.txt contains "echo" to complete the task.')).toBe(
+      'The file was created successfully. The file out.txt contains "echo" to complete the task.',
+    );
+    expect(parseReport("Updated to v1.2 and notes.txt. Then it stopped. Extra.")).toBe("Updated to v1.2 and notes.txt. Then it stopped.");
+    expect(parseReport("Wrote a.txt and b.txt")).toBe("Wrote a.txt and b.txt");
+  });
+
   it("tidies whitespace, a label and quotes", () => {
     expect(parseReport('  Report: "It worked.\n\nAll good."  ')).toBe("It worked. All good.");
   });
