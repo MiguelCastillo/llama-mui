@@ -143,10 +143,8 @@ export default function EmptyChatOwl() {
         {/* Drawn in a 96x72 box, the branch near the bottom. The viewBox reaches 24
             up for the bubble; the negative margin keeps the box 72 tall. */}
         <svg
-          width="96"
-          height="96"
           viewBox="0 -24 96 96"
-          style={{ display: "block", marginTop: -24, overflow: "visible", pointerEvents: "none" }}
+          style={{ display: "block", width: "6rem", height: "6rem", marginTop: "-1.5rem", overflow: "visible", pointerEvents: "none" }}
         >
           {/* The branch: a slim rounded line with a couple of small leaves. */}
           <path

@@ -44,7 +44,7 @@ export default function EmptyChatSuggestions({
   const picks = useMemo(() => pickSuggestions(), []);
   const groups = useMemo(() => todoGroups(sessions ?? []), [sessions]);
   // Three are picked once and the first few shown, so resizing doesn't reshuffle.
-  const short = useMediaQuery("(max-height: 640px)");
+  const short = useMediaQuery("(max-height: 40rem)");
   const shown = picks.slice(0, visibleCount(groups.length > 0, short));
 
   return (

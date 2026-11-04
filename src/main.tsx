@@ -10,6 +10,9 @@ const SWITCH_ON = blue[200];
 // Light and dark schemes; MUI picks one from the OS setting.
 const theme = createTheme({
   colorSchemes: { light: true, dark: true },
+  // One spacing unit is 0.5rem (8px at the default size), so every p, m, gap
+  // and spacing in the app scales with the browser's font size.
+  spacing: (factor: number) => `${0.5 * factor}rem`,
   components: {
     MuiSwitch: {
       styleOverrides: {

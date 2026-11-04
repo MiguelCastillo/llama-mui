@@ -33,6 +33,25 @@ a log, and not in `session.json`. Keeping it out of `session.json` is what makes
 a session exportable by copying that one file, so code that writes session data
 must never be handed a key. The app doesn't scrub anything for you.
 
+## Styling
+
+- **Container and text sizes are rem, or relative.** Text, icons, spinners,
+  widths, heights and spacing alike, so the whole UI scales with the browser's
+  font size. Use MUI's text styles (`body1`, `body2`, `caption`) and the
+  theme's spacing units (one unit is 0.5rem), or `rem` / `em` / `%` where a
+  value has to be written out. The page's text is `body1`; don't set a
+  different size for text that sits in the chat or the plan.
+- **Borders are px.** Border widths and radii stay in px so a hairline stays
+  crisp and corners keep their shape at any font size. No need to ask.
+- **Any other px: stop and ask Miguel first.** Say what it is and why rem
+  won't do (an SVG attribute, a library prop that takes only a number); don't
+  add it quietly.
+- **Approved exceptions, already in the code:** the coordinates inside the
+  empty-chat drawings (`transformOrigin` in px, the few-pixel wobble offsets,
+  text sized inside a viewBox), which are the drawing's own units and scale
+  with it; and MUI's breakpoints, which the library takes in px. A new
+  drawing follows the same pattern; anything else is new, so ask.
+
 ## Working here
 
 - Check with `npx tsc --noEmit -p . && npx vitest run`.

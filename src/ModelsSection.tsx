@@ -262,12 +262,12 @@ export default function ModelsSection() {
                         </IconButton>
                       </Tooltip>
                     ) : (
-                      <Box sx={{ width: 34 }} />
+                      <Box sx={{ width: "2.125rem" }} />
                     )}
                     {/* The span keeps the tooltip working while the button is disabled. */}
                     {loading[m.id] ? (
-                      <Box sx={{ width: 34, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <CircularProgress size={16} />
+                      <Box sx={{ width: "2.125rem", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <CircularProgress size="1rem" />
                       </Box>
                     ) : m.status === "loaded" ? (
                       <Tooltip title="Unload model">
@@ -282,7 +282,7 @@ export default function ModelsSection() {
                         </IconButton>
                       </Tooltip>
                     ) : (
-                      <Box sx={{ width: 34 }} />
+                      <Box sx={{ width: "2.125rem" }} />
                     )}
                   </Stack>
                   {/* Short label so it stays on the model's line; the note below explains it. */}
@@ -350,7 +350,7 @@ export default function ModelsSection() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && searchQuery.trim() && !searching && handleSearch(searchQuery)}
-                  sx={{ flex: 1, minWidth: 200 }}
+                  sx={{ flex: 1, minWidth: "12.5rem" }}
                 />
                 <Button
                   variant="contained"
@@ -383,7 +383,7 @@ export default function ModelsSection() {
                               onClick={() => startDownload(r)}
                               aria-label={`Download ${r.id}`}
                             >
-                              {downloading === r.id ? <CircularProgress size={16} /> : <DownloadIcon fontSize="small" />}
+                              {downloading === r.id ? <CircularProgress size="1rem" /> : <DownloadIcon fontSize="small" />}
                             </IconButton>
                           </span>
                         </Tooltip>

@@ -68,7 +68,7 @@ export default function EmptyChatSnail() {
         justifyContent: "center",
         // Only the snail's own shapes take the pointer.
         pointerEvents: "none",
-        "--range": "min(140px, calc(50vw - 64px))",
+        "--range": "min(8.75rem, calc(50vw - 4rem))",
         color: "primary.main",
       }}
     >

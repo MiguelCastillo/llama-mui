@@ -52,7 +52,7 @@ export default function MyTodos({
         fullWidth
         maxWidth="sm"
         scroll="paper"
-        sx={{ "& .MuiDialog-paper": { mx: { xs: 1, sm: 4 }, width: { xs: "calc(100% - 16px)", sm: undefined } } }}
+        sx={{ "& .MuiDialog-paper": { mx: { xs: 1, sm: 4 }, width: { xs: "calc(100% - 1rem)", sm: undefined } } }}
       >
         <DialogTitle>
           My Todos{" "}

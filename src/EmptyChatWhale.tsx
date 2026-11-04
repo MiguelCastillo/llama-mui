@@ -67,7 +67,7 @@ export default function EmptyChatWhale() {
         justifyContent: "center",
         // Only the whale itself (its paths) takes the pointer.
         pointerEvents: "none",
-        "--range": "min(140px, calc(50vw - 64px))",
+        "--range": "min(8.75rem, calc(50vw - 4rem))",
         color: "primary.main",
       }}
     >

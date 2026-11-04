@@ -25,7 +25,7 @@ export default function ThreadNote({
       >
         <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            {view.running && <CircularProgress size={14} sx={{ flexShrink: 0 }} aria-label="Running" />}
+            {view.running && <CircularProgress size="0.875rem" sx={{ flexShrink: 0 }} aria-label="Running" />}
             <span>{threadLabel(view.status, summary)}</span>
           </Box>
           {view.report && (

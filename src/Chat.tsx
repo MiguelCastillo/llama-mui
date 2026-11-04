@@ -1431,7 +1431,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           top: 8,
           right: 8,
           zIndex: "appBar",
-          maxWidth: "calc(100% - 16px)",
+          maxWidth: "calc(100% - 1rem)",
           display: "flex",
           alignItems: "center",
           borderRadius: 2,
@@ -1463,7 +1463,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               ...(narrow ? { p: 1, pt: 1.5 } : { pl: 1.5, pr: 1 }),
             }}
           >
-            <Box sx={{ minWidth: 0, maxWidth: 160, display: narrow ? "none" : "block" }}>
+            <Box sx={{ minWidth: 0, maxWidth: "10rem", display: narrow ? "none" : "block" }}>
               <Typography variant="h6" sx={{ lineHeight: 1.2 }} noWrap>
                 Llama MUI
               </Typography>
@@ -1518,8 +1518,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                     {m.status !== "unknown" && (
                       <Box onClick={(e) => e.stopPropagation()} sx={{ flexShrink: 0 }}>
                         {modelBusy === m.id ? (
-                          <Box sx={{ width: 34, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <CircularProgress size={16} />
+                          <Box sx={{ width: "2.125rem", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <CircularProgress size="1rem" />
                           </Box>
                         ) : m.status === "loaded" || m.status === "unloaded" ? (
                           <Tooltip title={m.status === "loaded" ? "Unload model" : "Load model"}>
@@ -1533,7 +1533,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                             </IconButton>
                           </Tooltip>
                         ) : (
-                          <Box sx={{ width: 34 }} />
+                          <Box sx={{ width: "2.125rem" }} />
                         )}
                       </Box>
                     )}
@@ -1780,7 +1780,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         {/* Sticky with no height: it floats over the bottom of the chat
             without adding space under the last message. */}
         {moreBelow && messages.length > 0 && (
-          <Box sx={{ position: "sticky", bottom: 16, height: 0, display: "flex", justifyContent: "center" }}>
+          <Box sx={{ position: "sticky", bottom: "1rem", height: 0, display: "flex", justifyContent: "center" }}>
             <Tooltip title="Jump to the latest and keep following">
               <Fab size="small" color="primary" onClick={toBottom} sx={{ mt: -5 }} aria-label="Jump to the latest">
                 <KeyboardArrowDownIcon />
@@ -2187,7 +2187,7 @@ function ToolCallView({
       <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ "& .MuiAccordionSummary-content": { minWidth: 0 } }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
           {result === undefined && !stopped ? (
-            <CircularProgress size={14} sx={{ flexShrink: 0 }} />
+            <CircularProgress size="0.875rem" sx={{ flexShrink: 0 }} />
           ) : (
             <BuildOutlinedIcon fontSize="small" color={failed ? "error" : "action"} sx={{ flexShrink: 0 }} />
           )}
@@ -2213,7 +2213,7 @@ function ToolCallView({
         <Typography
           variant="body2"
           component="pre"
-          sx={{ m: 0, fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 300, overflowY: "auto" }}
+          sx={{ m: 0, fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: "18.75rem", overflowY: "auto" }}
         >
           {result ??
             (stopped
@@ -2381,7 +2381,7 @@ function FindPrompt({
         <Button size="small" variant="outlined" color="inherit" onClick={() => onDecide(false)} disabled={picking}>
           Deny
         </Button>
-        {picking && <CircularProgress size={18} />}
+        {picking && <CircularProgress size="1.125rem" />}
       </Stack>
     </Alert>
   );
@@ -2480,7 +2480,7 @@ function DiffView({ diff }: { diff: string }) {
       sx={{
         m: 0,
         p: 1,
-        maxHeight: 320,
+        maxHeight: "20rem",
         overflow: "auto",
         borderRadius: 1,
         bgcolor: "background.default",
@@ -2602,14 +2602,14 @@ function ContextIndicator({
             <CircularProgress
               variant="determinate"
               value={100}
-              size={12}
+              size="0.75rem"
               thickness={6}
               sx={{ color: "action.disabled" }}
             />
             <CircularProgress
               variant="determinate"
               value={Math.max(share * 100, 2)}
-              size={12}
+              size="0.75rem"
               thickness={6}
               color={color}
               sx={{ position: "absolute", left: 0 }}
@@ -2626,7 +2626,7 @@ function ContextIndicator({
         onClose={() => setAnchor(null)}
         anchorOrigin={{ vertical: "top", horizontal: "right" }}
         transformOrigin={{ vertical: "bottom", horizontal: "right" }}
-        slotProps={{ paper: { sx: { p: 2, width: 360, maxWidth: "calc(100vw - 32px)" } } }}
+        slotProps={{ paper: { sx: { p: 2, width: "22.5rem", maxWidth: "calc(100vw - 2rem)" } } }}
       >
         <Stack spacing={1.5}>
           {usage ? (

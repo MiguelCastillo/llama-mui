@@ -249,7 +249,7 @@ function ConnectorsSection() {
                   {c.url}
                 </Typography>
                 <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", color: "text.secondary" }}>
-                  <KeyOutlinedIcon sx={{ fontSize: 14 }} color={c.hasKey ? "success" : "disabled"} />
+                  <KeyOutlinedIcon sx={{ fontSize: "0.875rem" }} color={c.hasKey ? "success" : "disabled"} />
                   <Typography variant="caption" sx={{ whiteSpace: "nowrap" }}>
                     {c.hasKey ? "key saved" : "no key"}
                   </Typography>

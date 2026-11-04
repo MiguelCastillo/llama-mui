@@ -82,7 +82,7 @@ export default function SessionSettings({
   return (
     <>
       <Tooltip title="Session settings: working directory and attachments">
-        {/* mt centers it on a one-line input (56px). */}
+        {/* mt centers it on a one-line input (3.5rem). */}
         <IconButton onClick={() => setOpen(true)} sx={{ mt: 1 }}>
           <Badge badgeContent={attachments.length + (workingDir ? 1 : 0)} color="primary">
             <TuneIcon />
@@ -103,9 +103,9 @@ export default function SessionSettings({
             ))}
           </Tabs>
         )}
-        <DialogContent sx={{ display: "flex", gap: 3, minHeight: 360, pt: narrow ? 2 : 0 }}>
+        <DialogContent sx={{ display: "flex", gap: 3, minHeight: "22.5rem", pt: narrow ? 2 : 0 }}>
           {!narrow && (
-            <List component="nav" sx={{ width: 240, flexShrink: 0, py: 0, alignSelf: "flex-start", display: "flex", flexDirection: "column", gap: 0.5 }}>
+            <List component="nav" sx={{ width: "15rem", flexShrink: 0, py: 0, alignSelf: "flex-start", display: "flex", flexDirection: "column", gap: 0.5 }}>
               {sections.map((s) => (
                 <ListItemButton
                   key={s.id}
@@ -113,7 +113,7 @@ export default function SessionSettings({
                   onClick={() => setSection(s.id)}
                   sx={{ borderRadius: 1, px: 2, py: 1.25 }}
                 >
-                  <ListItemIcon sx={{ minWidth: 40 }}>{s.icon}</ListItemIcon>
+                  <ListItemIcon sx={{ minWidth: "2.5rem" }}>{s.icon}</ListItemIcon>
                   <ListItemText primary={s.label} />
                   {s.count > 0 && (
                     <Typography variant="caption" color="text.secondary">
@@ -232,7 +232,7 @@ function WorkingDirSection({
         >
           Choose folder…
         </Button>
-        {picking && <CircularProgress size={18} sx={{ alignSelf: "center" }} />}
+        {picking && <CircularProgress size="1.125rem" sx={{ alignSelf: "center" }} />}
       </Stack>
       <Stack
         component="form"
@@ -366,7 +366,7 @@ function AttachmentsSection({
         >
           Choose folders…
         </Button>
-        {picking && <CircularProgress size={18} sx={{ alignSelf: "center" }} />}
+        {picking && <CircularProgress size="1.125rem" sx={{ alignSelf: "center" }} />}
       </Stack>
       <Stack
         component="form"
@@ -415,7 +415,7 @@ function CheckCommandField({ command, onSave }: { command: string; onSave: (comm
       onChange={(e) => setText(e.target.value)}
       onBlur={save}
       onKeyDown={(e) => e.key === "Enter" && save()}
-      slotProps={{ input: { sx: { fontFamily: "monospace", fontSize: 13 } } }}
+      slotProps={{ input: { sx: { fontFamily: "monospace", fontSize: "0.8125rem" } } }}
       sx={{ mt: 0.5 }}
     />
   );

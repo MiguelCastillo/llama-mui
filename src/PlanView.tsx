@@ -37,7 +37,7 @@ import { stepLine } from "./agent/plan";
 
 const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
   pending: <RadioButtonUncheckedIcon fontSize="small" color="disabled" />,
-  running: <CircularProgress size={16} sx={{ m: "2px" }} />,
+  running: <CircularProgress size="1rem" sx={{ m: "0.125rem" }} />,
   done: <CheckCircleIcon fontSize="small" color="success" />,
   failed: <CancelIcon fontSize="small" color="error" />,
   disputed: <HelpOutlineIcon fontSize="small" color="warning" />,

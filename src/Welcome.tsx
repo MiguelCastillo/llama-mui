@@ -120,7 +120,7 @@ export default function Welcome() {
     });
 
   return (
-    <Stack spacing={2} sx={{ maxWidth: 560, mx: "auto", mt: { xs: 4, sm: 12 }, px: 2, pb: 4 }}>
+    <Stack spacing={2} sx={{ maxWidth: "35rem", mx: "auto", mt: { xs: 4, sm: 12 }, px: 2, pb: 4 }}>
       <Typography variant="h5" component="h1">
         Welcome to llama-mui. Two things and you're ready.
       </Typography>
@@ -154,7 +154,7 @@ export default function Welcome() {
                 spacing={1}
                 sx={{ alignItems: "center", flexWrap: "wrap", border: 1, borderColor: "divider", borderRadius: 1, p: 1 }}
               >
-                <Typography sx={{ fontFamily: kind === "llama" ? "monospace" : undefined, overflowWrap: "anywhere", flex: "1 1 200px", minWidth: 0 }}>
+                <Typography sx={{ fontFamily: kind === "llama" ? "monospace" : undefined, overflowWrap: "anywhere", flex: "1 1 12.5rem", minWidth: 0 }}>
                   {m.name ?? m.id}
                 </Typography>
                 {kind === "llama" && m.status && (
