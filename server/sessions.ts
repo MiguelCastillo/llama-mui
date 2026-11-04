@@ -11,7 +11,7 @@ import path from "node:path";
 import { sessionsDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
-import { deleteSession, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
+import { convertWorkingDir, deleteSession, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
 
 // Other modules (and tests) have always got these from here.
 export { openTodoList, sessionFolder, summaryOf } from "./sessionFile.ts";
@@ -31,7 +31,9 @@ async function migrateChats(): Promise<void> {
       const old = JSON.parse(await readFile(path.join(OLD_CHATS_DIR, name), "utf8"));
       if (old.id !== id || (await readSession(id))) continue;
       await writeSession(id, old);
-      if (JSON.stringify(await readSession(id)) === JSON.stringify(old)) await rm(path.join(OLD_CHATS_DIR, name));
+      // Reading converts a session with no workingDir (see convertWorkingDir),
+      // so the copy is compared with the old file as it reads.
+      if (JSON.stringify(await readSession(id)) === JSON.stringify(convertWorkingDir(old))) await rm(path.join(OLD_CHATS_DIR, name));
     } catch (e) {
       console.warn(`Couldn't move ${name} to sessions: ${e}`);
     }

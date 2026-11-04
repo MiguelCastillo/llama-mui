@@ -5,23 +5,22 @@
 
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
-import path from "node:path";
 import { resolveAllowed } from "./disk.ts";
-import { ToolError, type ToolSpec, fn, requireApproval } from "./toolkit.ts";
+import { type ToolContext, ToolError, type ToolSpec, fn, requireApproval } from "./toolkit.ts";
 
 const TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_OUTPUT_CHARS = 50_000;
 
-// The folder to run in: the one the model named, or else the first attached
-// folder (or the folder of an attached file).
-async function workingDir(roots: string[], raw: unknown): Promise<string> {
+// The folder to run in: the one the model named, or else the chat's working
+// directory. An attached folder is never the default.
+async function workingDir(ctx: ToolContext, raw: unknown): Promise<string> {
   if (raw) {
-    const dir = await resolveAllowed(roots, raw);
+    const dir = await resolveAllowed(ctx, raw);
     if (!(await stat(dir)).isDirectory()) throw new ToolError(`${dir} is a file; cwd must be a folder`);
     return dir;
   }
-  if (roots.length === 0) throw new ToolError("Nothing is attached to this chat; pass cwd, the folder to run in");
-  return (await stat(roots[0])).isDirectory() ? roots[0] : path.dirname(roots[0]);
+  if (!ctx.workingDir) throw new ToolError("There's no working directory; pass cwd, the folder to run in");
+  return ctx.workingDir;
 }
 
 const SHELL = process.env.SHELL || "/bin/zsh";
@@ -116,7 +115,7 @@ const runCommand: ToolSpec = {
   async run(ctx, args) {
     const command = String(args.command ?? "").trim();
     if (!command) throw new ToolError("command is required");
-    const cwd = await workingDir(ctx.attachments, args.cwd);
+    const cwd = await workingDir(ctx, args.cwd);
     requireApproval(ctx, { type: "command", command, cwd });
     return exec(command, cwd);
   },

@@ -10,6 +10,8 @@ export function withSessionDefaults(s: Session): Session {
     messages: Array.isArray(s.messages) ? closeOpenToolCalls(s.messages) : [],
     contextStart: typeof s.contextStart === "number" ? s.contextStart : 0,
     attachments: Array.isArray(s.attachments) ? s.attachments : [],
+    // Older files are converted when the server reads them (readSession).
+    workingDir: typeof s.workingDir === "string" ? s.workingDir : null,
     usage: s.usage ?? null,
     failed: s.failed ?? null,
     plan: Array.isArray(s.plan) ? s.plan : null,

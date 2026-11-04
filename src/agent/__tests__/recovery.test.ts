@@ -86,6 +86,7 @@ function setup(steps: PlanStep[], reply: RunPlanCallbacks["reply"], overrides?: 
     setAbort: vi.fn(),
     modelLoaded: vi.fn().mockResolvedValue(true),
     models: [{ id: "test-model" }] as any[],
+    workingDir: null,
     attachments: [],
     checkCommands: {},
     attachedPaths: () => [],

@@ -3,17 +3,28 @@
 
 import type { Store } from "./store.ts";
 
-// What a tool call runs with: the saved settings, the chat it came from and
-// the files and folders attached to it (already resolved and checked), and the
-// approval the user gave for this call, serialized, if any (see ApprovalNeeded).
+// What a tool call runs with: the saved settings, the chat it came from, its
+// working directory (a folder, or null) and the extra files and folders
+// attached to it (both already resolved and checked), and the approval the
+// user gave for this call, serialized, if any (see ApprovalNeeded).
 export interface ToolContext {
   store: Store;
   chatId: string;
+  // Where relative paths and run_command start. Null: the chat has none.
+  // It's also reachable by tools, but isn't repeated in `attachments`.
+  workingDir: string | null;
   attachments: string[];
   approved: string | null;
   // The session's open todos, sent by chat with each call (see server/todos.ts).
   todos: { id: string; summary: string }[];
 }
+
+// The folders and files the tools may reach: the working directory first,
+// then the attachments, each once. Only the working directory is where
+// relative paths start; everything here is just allowed (see disk.ts).
+export const reachableRoots = ({ workingDir, attachments }: Pick<ToolContext, "workingDir" | "attachments">): string[] => [
+  ...new Set([...(workingDir ? [workingDir] : []), ...attachments]),
+];
 
 export interface ToolSpec {
   name: string;

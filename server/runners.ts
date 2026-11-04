@@ -508,6 +508,7 @@ async function launch(
     setAbort: e.handle.setAbort,
     modelLoaded: async () => !e.stopRequested && resolved.modelLoaded(e.handle),
     models: env.models,
+    workingDir: session.workingDir ?? null,
     attachments: session.attachments,
     checkCommands: env.toolContext.checkCommands,
     attachedPaths,

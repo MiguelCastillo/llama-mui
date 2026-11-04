@@ -120,7 +120,7 @@ afterEach(async () => {
 
 describe("the run command's starter", () => {
   it("builds the run from the page's choices, the saved session and the server's own answers", async () => {
-    saved("a", { attachments: [{ path: "/work/app", kind: "folder", source: "manual" }] });
+    saved("a", { workingDir: "/work/app", attachments: [{ path: "/work/notes.txt", kind: "file", source: "manual" }] });
     await start("a");
 
     const env = envs[0]!;
@@ -130,17 +130,17 @@ describe("the run command's starter", () => {
     expect(env.connector).toEqual({ id: "c1", name: "Studio", url: "http://127.0.0.1:1", hasKey: true, kind: "llama", api: "openai" });
     expect(env.models.map((m) => m.id)).toEqual(["m"]);
     expect(env.toolContext).toEqual(toolContext);
-    // The tools were asked for with the session's own folders, and its working folder as the prompt's.
+    // The tools were asked for with the session's working directory and its own attachments, and the working directory as the prompt's.
     const context = calls.find((c) => c.url === "/api/tools/context")!;
-    expect(JSON.parse(context.body)).toEqual({ attachments: ["/work/app"], promptDir: "/work/app" });
+    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: "/work/app" });
     expect(hub.liveRun("a")).toMatchObject({ status: "running" });
   });
 
   it("keeps the prompt's folder a session already fixed, even none", async () => {
-    saved("a", { promptDir: null, attachments: [{ path: "/work/app", kind: "folder", source: "manual" }] });
+    saved("a", { promptDir: null, workingDir: "/work/app", attachments: [{ path: "/work/notes.txt", kind: "file", source: "manual" }] });
     await start("a");
     const context = calls.find((c) => c.url === "/api/tools/context")!;
-    expect(JSON.parse(context.body)).toEqual({ attachments: ["/work/app"], promptDir: null });
+    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: null });
   });
 
   it("holds no key anywhere: not in the run, its events, its requests or the saved session", async () => {
@@ -250,7 +250,7 @@ describe("the message command's starter for a chat reply", () => {
   });
 
   it("builds the reply's run from the page's choices and the saved session, and sends the text with its history", async () => {
-    saved("a", { plan: null, messages: history, attachments: [{ path: "/work/app", kind: "folder", source: "manual" }] });
+    saved("a", { plan: null, messages: history, workingDir: "/work/app", attachments: [{ path: "/work/notes.txt", kind: "file", source: "manual" }] });
     await chat("a", "And now?");
     await vi.waitFor(() => expect(said).toHaveLength(1));
     expect(said[0]).toEqual({ text: "And now?", before: history, planning: false });
@@ -258,7 +258,7 @@ describe("the message command's starter for a chat reply", () => {
     // The connector is the list's entry: that a key is set, not the key.
     expect(envs[0].connector).toEqual({ id: "c1", name: "Studio", url: "http://127.0.0.1:1", hasKey: true, kind: "llama", api: "openai" });
     const context = calls.find((c) => c.url === "/api/tools/context")!;
-    expect(JSON.parse(context.body)).toEqual({ attachments: ["/work/app"], promptDir: "/work/app" });
+    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: "/work/app" });
     expect(hub.liveRun("a")).toMatchObject({ kind: "turn", status: "running" });
     finishReply(true);
     await vi.waitFor(() => expect(hub.liveRun("a")).toBeNull());
@@ -327,7 +327,7 @@ describe("a plan that hasn't started", () => {
       messages: [request, { role: "assistant", content: "Here is a plan." }],
       planSummary: "Do two things",
       planAnchor: "call-1",
-      attachments: [{ path: "/work/app", kind: "folder", source: "manual" }],
+      workingDir: "/work/app", attachments: [{ path: "/work/notes.txt", kind: "file", source: "manual" }],
       ...extra,
     });
   // The run is the fake's, bound to the thread the test expects.
@@ -344,7 +344,8 @@ describe("a plan that hasn't started", () => {
     const child = fileOf("child-1");
     expect(child).toMatchObject({ id: "child-1", parentId: "p", title: "Do two things", planSummary: "Do two things", planMovedIn: false });
     expect(child.messages).toEqual([request]);
-    expect(child.attachments).toEqual([{ path: "/work/app", kind: "folder", source: "manual" }]);
+    expect(child.workingDir).toBe("/work/app");
+    expect(child.attachments).toEqual([{ path: "/work/notes.txt", kind: "file", source: "manual" }]);
     expect(child.plan.map((s: any) => s.id)).toEqual(["s1", "s2"]);
     expect(child.planId).toEqual(expect.any(String));
     expect(child.run).toMatchObject({ status: "running" });
@@ -368,7 +369,7 @@ describe("a plan that hasn't started", () => {
     await startThread("p");
     const context = calls.find((c) => c.url === "/api/tools/context")!;
     // A thread fixes its prompt folder at its own first reply, not the session's.
-    expect(JSON.parse(context.body)).toEqual({ attachments: ["/work/app"], promptDir: "/work/app" });
+    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: "/work/app" });
     expect(envs[0]!.connector!.hasKey).toBe(true);
   });
 

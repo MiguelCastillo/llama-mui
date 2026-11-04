@@ -19,7 +19,7 @@
 import { randomUUID } from "node:crypto";
 import { type Connector, type Model, type Session, type ToolContext, getConnectors, getToolContext, listModels } from "../src/api.ts";
 import { isFreshPlan, planToThread } from "../src/planThread.ts";
-import { attachedPaths, workingDirOf } from "../src/runnerReply.ts";
+import { attachedPaths } from "../src/runnerReply.ts";
 import type { RunnerEnv } from "../src/runnerTypes.ts";
 import { chooseThread } from "./chooseThread.ts";
 import type { RunOptions } from "./commands.ts";
@@ -50,10 +50,14 @@ export async function buildEnv(session: any, options: RunOptions): Promise<Runne
   }
   const attachments = Array.isArray(session.attachments) ? session.attachments : [];
   // Fixed for the session's first reply, so its system prompt never changes
-  // (see makeReply); until then it is the working folder.
-  const promptDir = session.promptDir === undefined ? workingDirOf(attachments) : session.promptDir;
+  // (see makeReply); until then it is the working directory.
+  const workingDir: string | null = typeof session.workingDir === "string" ? session.workingDir : null;
+  const promptDir = session.promptDir === undefined ? (session.workingDir ?? null) : session.promptDir;
   const models: Model[] = await ask(`couldn't ask ${connector.name} for its models`, listModels(connector.id));
-  const toolContext: ToolContext = await ask("couldn't read the tools", getToolContext(attachedPaths(attachments), promptDir));
+  const toolContext: ToolContext = await ask(
+    "couldn't read the tools",
+    getToolContext(workingDir, attachedPaths(attachments), promptDir),
+  );
   return {
     connector,
     model: options.model,

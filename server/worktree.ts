@@ -119,7 +119,7 @@ const createWorktree: ToolSpec = {
     },
   ),
   async run(ctx, args) {
-    const { given, abs } = await toAbsolute(ctx.attachments, args.repo);
+    const { given, abs } = await toAbsolute(ctx, args.repo);
     const real = await realpath(abs).catch(() => {
       throw new ToolError(`${given} does not exist`);
     });

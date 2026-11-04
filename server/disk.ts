@@ -2,7 +2,8 @@
 // the call came from, plus the route chat uses to check an attachment.
 //
 // Every path the model sends goes through resolveAllowed(), which checks it
-// against the attachments after resolving symlinks and "../", so neither can
+// against the reachable roots (the working directory and the attachments)
+// after resolving symlinks and "../", so neither can
 // reach outside. A path outside isn't refused outright: it throws
 // AccessNeeded, and chat asks the user whether to attach it, or, if nothing
 // is there, to point to the right file or folder. Walks for
@@ -16,7 +17,20 @@ import path from "node:path";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { markRead } from "./reads.ts";
 import { SETTINGS_FILE } from "./store.ts";
-import { AccessNeeded, type AttachmentTarget, LocateNeeded, ToolError, type ToolSpec, fn } from "./toolkit.ts";
+import {
+  AccessNeeded,
+  type AttachmentTarget,
+  LocateNeeded,
+  type ToolContext,
+  ToolError,
+  type ToolSpec,
+  fn,
+  reachableRoots,
+} from "./toolkit.ts";
+
+// What path checks need from a tool call: where relative paths start, and
+// what else is reachable.
+type Scope = Pick<ToolContext, "workingDir" | "attachments">;
 
 const MAX_LIST_ENTRIES = 300;
 const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
@@ -59,19 +73,14 @@ export async function inSessionWorktrees(real: string): Promise<boolean> {
 export const isSettingsFile = (p: string) => p.startsWith(SETTINGS_FILE);
 
 // The path the model sent, made absolute: ~ expanded, "../" resolved.
-// The chat's working directory: its first attachment, if that's a folder.
-// Chat sends it first (see attachedPaths in Chat.tsx). Relative paths and
-// run_command use it, and the system prompt names it (see tools.ts).
-export async function workingDirOf(roots: string[]): Promise<string | null> {
-  return roots.length && (await stat(roots[0]).catch(() => null))?.isDirectory() ? roots[0] : null;
-}
-
-export async function toAbsolute(roots: string[], raw: unknown): Promise<{ given: string; abs: string }> {
+// Relative paths start in the chat's working directory and nowhere else: an
+// attached folder is reachable, but never the place a bare name means.
+export async function toAbsolute(scope: Scope, raw: unknown): Promise<{ given: string; abs: string }> {
   const given = expandHome(String(raw ?? "").trim());
   if (!given) throw new ToolError("path is required");
   if (path.isAbsolute(given)) return { given, abs: path.resolve(given) };
-  const dir = await workingDirOf(roots);
-  if (dir) return { given, abs: path.resolve(dir, given) };
+  if (scope.workingDir) return { given, abs: path.resolve(scope.workingDir, given) };
+  const roots = reachableRoots(scope);
   throw new ToolError(roots.length ? `Use an absolute path inside one of: ${roots.join(", ")}` : "Use an absolute path");
 }
 
@@ -83,8 +92,9 @@ export async function needAccess(real: string): Promise<never> {
   throw new AccessNeeded(target);
 }
 
-export async function resolveAllowed(roots: string[], raw: unknown): Promise<string> {
-  const { given, abs } = await toAbsolute(roots, raw);
+export async function resolveAllowed(scope: Scope, raw: unknown): Promise<string> {
+  const roots = reachableRoots(scope);
+  const { given, abs } = await toAbsolute(scope, raw);
   let real: string;
   try {
     real = await realpath(abs);
@@ -168,8 +178,9 @@ function summarize(results: string[], capped: boolean, none: string): string {
   return clip(`${results.join("\n")}${note}`);
 }
 
-async function startsFor(roots: string[], raw: unknown): Promise<string[]> {
-  if (raw) return [await resolveAllowed(roots, raw)];
+async function startsFor(scope: Scope, raw: unknown): Promise<string[]> {
+  if (raw) return [await resolveAllowed(scope, raw)];
+  const roots = reachableRoots(scope);
   if (roots.length === 0) throw new ToolError("Nothing is attached to this chat yet; pass an absolute path");
   return [...roots];
 }
@@ -184,14 +195,15 @@ const listDirectory: ToolSpec = {
     "List the files and folders in a directory. Call it with no path to see what's attached to this chat.",
     { type: "object", properties: { path: { type: "string", description: "Path of the directory, absolute or relative to the working directory." } } },
   ),
-  async run({ attachments: roots }, args) {
+  async run(ctx, args) {
+    const roots = reachableRoots(ctx);
     if (!args.path) {
       const lines = await Promise.all(
         roots.map(async (r) => ((await stat(r).catch(() => null))?.isDirectory() ? `${r}/` : r)),
       );
       return roots.length ? `Attached to this chat:\n${lines.join("\n")}` : "Nothing is attached to this chat.";
     }
-    const dir = await resolveAllowed(roots, args.path);
+    const dir = await resolveAllowed(ctx, args.path);
     if (!(await stat(dir)).isDirectory()) throw new ToolError(`${dir} is a file; use read_file`);
     const entries = (await readdir(dir, { withFileTypes: true })).sort(byTypeThenName);
     const lines = await Promise.all(
@@ -225,8 +237,9 @@ const readTextFile: ToolSpec = {
       required: ["path"],
     },
   ),
-  async run({ attachments, chatId }, args) {
-    const file = await resolveAllowed(attachments, args.path);
+  async run(ctx, args) {
+    const { chatId } = ctx;
+    const file = await resolveAllowed(ctx, args.path);
     const s = await stat(file);
     if (s.isDirectory()) throw new ToolError(`${file} is a directory; use list_directory`);
     if (s.size > MAX_READ_FILE_BYTES) throw new ToolError(`${file} is ${formatSize(s.size)}, too large to read`);
@@ -262,11 +275,11 @@ const findFiles: ToolSpec = {
       required: ["pattern"],
     },
   ),
-  async run({ attachments }, args) {
+  async run(ctx, args) {
     const raw = String(args.pattern ?? "").trim();
     if (!raw) throw new ToolError("pattern is required");
     const re = namePattern(raw);
-    const w = walk(await startsFor(attachments, args.path));
+    const w = walk(await startsFor(ctx, args.path));
     const results: string[] = [];
     for await (const { full, entry } of w.files) {
       if (re.test(entry.name)) results.push(entry.isDirectory() ? `${full}/` : full);
@@ -295,7 +308,7 @@ const grep: ToolSpec = {
       required: ["pattern"],
     },
   ),
-  async run({ attachments }, args) {
+  async run(ctx, args) {
     const raw = String(args.pattern ?? "");
     if (!raw) throw new ToolError("pattern is required");
     let re: RegExp;
@@ -306,7 +319,7 @@ const grep: ToolSpec = {
     }
     const include = args.include ? namePattern(String(args.include)) : null;
 
-    const w = walk(await startsFor(attachments, args.path));
+    const w = walk(await startsFor(ctx, args.path));
     const results: string[] = [];
     for await (const { full, entry } of w.files) {
       if (!entry.isFile() || (include && !include.test(entry.name))) continue;
@@ -376,6 +389,13 @@ export async function checkAttachments(raw: unknown): Promise<string[]> {
   const given = Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string") : [];
   const resolved = await Promise.all(given.map((p) => resolveAttachment(p).catch(() => null)));
   return [...new Set(resolved.filter((r) => r !== null).map((r) => r.path))];
+}
+
+// The same for a chat's working directory: it must still exist and be a
+// folder, else the chat has none (null).
+export async function checkWorkingDir(raw: unknown): Promise<string | null> {
+  const [dir] = typeof raw === "string" ? await checkAttachments([raw]) : [];
+  return dir && (await stat(dir).catch(() => null))?.isDirectory() ? dir : null;
 }
 
 // Opens the macOS file or folder dialog and returns the POSIX paths picked,

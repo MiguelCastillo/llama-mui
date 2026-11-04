@@ -17,9 +17,23 @@ export function sessionFile(id: string): string {
   return path.join(sessionFolder(id), "session.json");
 }
 
+// A session saved before chats had an explicit working directory (no
+// `workingDir` key) used the first folder attachment as one. This is the one
+// place that rule lives: that folder becomes workingDir and leaves the
+// attachments (none: null). A session that has the key, even null, is
+// returned as it is. The next save writes the result. Pure, so it is tested
+// without files.
+export function convertWorkingDir(session: any): any {
+  if (!session || typeof session !== "object" || "workingDir" in session) return session;
+  const attachments: any[] = Array.isArray(session.attachments) ? session.attachments : [];
+  const i = attachments.findIndex((a) => a?.kind === "folder" && typeof a.path === "string");
+  if (i < 0) return { ...session, workingDir: null };
+  return { ...session, workingDir: attachments[i].path, attachments: attachments.filter((_, j) => j !== i) };
+}
+
 export async function readSession(id: string): Promise<any | null> {
   try {
-    return JSON.parse(await readFile(sessionFile(id), "utf8"));
+    return convertWorkingDir(JSON.parse(await readFile(sessionFile(id), "utf8")));
   } catch (e: any) {
     if (e.code === "ENOENT") return null;
     throw e;

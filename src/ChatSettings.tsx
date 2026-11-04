@@ -49,6 +49,7 @@ export const ATTACHMENTS_LOCKED_NOTE = "Folders can't change while a plan or a r
 // this chat and New chat clears it.
 export default function ChatSettings({
   attachments,
+  workingDir,
   onAttach,
   onDetach,
   onMakeWorkingDir,
@@ -57,6 +58,8 @@ export default function ChatSettings({
   locked = false,
 }: {
   attachments: Attachment[];
+  // The chat's working directory, which is not one of the attachments.
+  workingDir: string | null;
   onAttach: (a: Attachment) => void;
   onDetach: (path: string) => void;
   onMakeWorkingDir: (path: string) => void;
@@ -122,6 +125,7 @@ export default function ChatSettings({
             {section === "attachments" && (
               <AttachmentsSection
                 attachments={attachments}
+                workingDir={workingDir}
                 onAdd={onAttach}
                 onRemove={onDetach}
                 onMakeWorkingDir={onMakeWorkingDir}
@@ -139,10 +143,12 @@ export default function ChatSettings({
 
 // This chat's files and folders, each marked with how it got there. More can
 // be picked in the system dialog, or typed as a path, which the server checks
-// first (it must exist; ~ works). The first folder is the working directory
-// (see workingDirOf in server/disk.ts); making another one it moves it first.
+// first (it must exist; ~ works). The working directory is the chat's own
+// field (Session.workingDir); making an attached folder it moves it out of
+// the attachments and replaces the old one.
 function AttachmentsSection({
   attachments,
+  workingDir,
   onAdd,
   onRemove,
   onMakeWorkingDir,
@@ -151,6 +157,7 @@ function AttachmentsSection({
   locked,
 }: {
   attachments: Attachment[];
+  workingDir: string | null;
   onAdd: (a: Attachment) => void;
   onRemove: (path: string) => void;
   onMakeWorkingDir: (path: string) => void;
@@ -158,7 +165,6 @@ function AttachmentsSection({
   onSetCheckCommand: (folder: string, command: string) => void;
   locked: boolean;
 }) {
-  const workingDir = attachments.find((a) => a.kind === "folder")?.path;
   const [path, setPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   // True while the system dialog is open.
@@ -185,11 +191,30 @@ function AttachmentsSection({
         <Typography variant="h6">Attachments</Typography>
         <Typography variant="body2" color="text.secondary">
           The model can read these, folders with their subfolders, and asks you before changing them or reading
-          anything else. The working directory is where relative paths and commands start; the first folder you
-          attach is it, unless you pick another.
+          anything else. The working directory is where relative paths and commands start; the home button
+          makes an attached folder it.
         </Typography>
       </Box>
       {locked && <Alert severity="info">{ATTACHMENTS_LOCKED_NOTE}</Alert>}
+      {workingDir && (
+        <Box>
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+            <Box sx={{ display: "flex", color: "text.secondary" }}>
+              <AttachmentIcon kind="folder" />
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+              {workingDir}
+            </Typography>
+            <Chip size="small" color="primary" label="Working directory" sx={{ flexShrink: 0 }} />
+          </Stack>
+          <CheckCommandField
+            // Starts over when the saved command arrives or changes.
+            key={checkCommands[workingDir] ?? ""}
+            command={checkCommands[workingDir] ?? ""}
+            onSave={(c) => onSetCheckCommand(workingDir, c)}
+          />
+        </Box>
+      )}
       {attachments.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
           Nothing yet.
@@ -208,25 +233,13 @@ function AttachmentsSection({
                 <Typography variant="caption" color="text.secondary" component="div" sx={{ overflowWrap: "anywhere" }}>
                   {a.path}
                 </Typography>
-                {a.kind === "folder" && (
-                  <CheckCommandField
-                    // Starts over when the saved command arrives or changes.
-                    key={checkCommands[a.path] ?? ""}
-                    command={checkCommands[a.path] ?? ""}
-                    onSave={(c) => onSetCheckCommand(a.path, c)}
-                  />
-                )}
               </Box>
-              {a.path === workingDir ? (
-                <Chip size="small" color="primary" label="Working directory" sx={{ flexShrink: 0 }} />
-              ) : (
-                a.kind === "folder" && (
-                  <Tooltip title="Make this the working directory">
-                    <IconButton size="small" disabled={locked} onClick={() => onMakeWorkingDir(a.path)} aria-label={`Make ${a.path} the working directory`}>
-                      <HomeOutlinedIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                )
+              {a.kind === "folder" && (
+                <Tooltip title="Make this the working directory (replaces the current one)">
+                  <IconButton size="small" disabled={locked} onClick={() => onMakeWorkingDir(a.path)} aria-label={`Make ${a.path} the working directory`}>
+                    <HomeOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
               )}
               <Chip
                 size="small"

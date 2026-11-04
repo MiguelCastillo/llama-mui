@@ -41,7 +41,8 @@ function makeHandle(patch: Partial<Session> = {}) {
     model: "m",
     messages: [],
     contextStart: 0,
-    attachments: [{ path: "/work", kind: "folder", source: "user" } as any, { path: "/work/x.txt", kind: "file", source: "user" } as any],
+    workingDir: "/work",
+    attachments: [{ path: "/docs", kind: "folder", source: "user" } as any, { path: "/work/x.txt", kind: "file", source: "user" } as any],
     usage: null,
     failed: null,
     plan: [{ id: "s1", text: "One", status: "running" }],
@@ -100,13 +101,13 @@ beforeEach(() => {
 });
 
 describe("attachedPaths", () => {
-  it("puts the working folder first, once", () => {
+  it("lists the attachments in order, with no working directory among them", () => {
     expect(
       attachedPaths([
         { path: "/a/f.txt", kind: "file", source: "user" } as any,
         { path: "/a", kind: "folder", source: "user" } as any,
       ]),
-    ).toEqual(["/a", "/a/f.txt"]);
+    ).toEqual(["/a/f.txt", "/a"]);
   });
 });
 
@@ -150,26 +151,27 @@ describe("makeReply", () => {
       systemPrompt: "sys",
       toolContextUpdate: "ctx",
       seenUpdate: "",
-      attached: ["/work", "/work/x.txt"],
+      workingDir: "/work",
+      attached: ["/docs", "/work/x.txt"],
       chatId: "a",
       text: "Go",
     });
   });
 
-  it("fixes the prompt directory from the first folder, once", async () => {
+  it("fixes the prompt directory from the working directory, once", async () => {
     const h = makeHandle();
     okTurn();
     const reply = makeReply(h.handle);
     await reply("one", []);
     expect(h.session().promptDir).toBe("/work");
 
-    // Attachments change later; the prompt directory stays.
-    h.handle.edit((s) => ({ ...s, attachments: [{ path: "/other", kind: "folder", source: "user" } as any] }));
+    // The working directory changes later; the prompt directory stays.
+    h.handle.edit((s) => ({ ...s, workingDir: "/other" }));
     await reply("two", []);
     expect(h.session().promptDir).toBe("/work");
 
     // No folder at the first reply: null, and it stays null.
-    const bare = makeHandle({ attachments: [] });
+    const bare = makeHandle({ workingDir: null });
     await makeReply(bare.handle)("one", []);
     expect(bare.session().promptDir).toBeNull();
   });

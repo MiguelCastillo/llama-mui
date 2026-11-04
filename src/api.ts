@@ -424,7 +424,7 @@ export interface ToolContext {
   offered: string[];
   // What's attached and what's off, for a ChatMessage's `update`.
   update: string;
-  // The check commands of attached folders, by folder.
+  // The working directory's check command, by folder; empty if it has none.
   checkCommands: Record<string, string>;
 }
 
@@ -434,15 +434,19 @@ export interface ToolContext {
 // every session; an empty one clears it. Chat runs it after each plan step.
 export const setCheckCommand = (folder: string, command: string) =>
   call<{ folder: string; command: string }>("PUT", "/api/tools/check-command", { folder, command });
-export const runCheckCommand = (attachments: string[], folder: string) =>
+// Only the working directory has one: `folder` must be `workingDir`.
+export const runCheckCommand = (workingDir: string | null, attachments: string[], folder: string) =>
   call<{ command: string; passed: boolean; output: string }>("POST", "/api/tools/check-command", {
+    workingDir,
     attachments,
     folder,
   });
 
-// `promptDir`: the working directory the session's system prompt names.
-export const getToolContext = (attachments: string[], promptDir: string | null) =>
-  call<ToolContext>("POST", "/api/tools/context", { attachments, promptDir });
+// `workingDir`: the folder relative paths start in; `attachments`: the extra
+// files and folders (not including it). `promptDir`: the working directory the
+// session's system prompt names.
+export const getToolContext = (workingDir: string | null, attachments: string[], promptDir: string | null) =>
+  call<ToolContext>("POST", "/api/tools/context", { workingDir, attachments, promptDir });
 // The agent's own instructions (~/.llama-mui/instructions.md); Settings → Agent.
 export interface Instructions {
   text: string;
@@ -480,6 +484,9 @@ export type ToolOutcome =
 export interface ToolCallContext {
   // The chat the call is for; the server tracks which files it has read.
   chatId: string;
+  // The folder relative paths and commands start in; null is none.
+  workingDir: string | null;
+  // The extra files and folders; the working directory is not one of them.
   attachments: string[];
   // What the user allowed; the server goes ahead only if the call would
   // still do exactly that.
@@ -498,7 +505,14 @@ export interface Session {
   model: string;
   messages: ChatMessage[];
   contextStart: number;
+  // The extra files and folders the model may read. The working directory is
+  // not one of them: it is `workingDir`.
   attachments: Attachment[];
+  // The folder relative paths and commands start in: part of the chat's
+  // environment, not an attachment. null is none. A chat saved before this
+  // field has it undefined; the server converts it when it reads the chat
+  // (see convertWorkingDir in server/sessionFile.ts).
+  workingDir?: string | null;
   usage: Usage | null;
   // Failure of the last reply; see Chat.tsx. Older saved chats don't have it.
   failed: string | null;

@@ -2,7 +2,7 @@
 // Tools. Tools are on unless the user turned them off.
 
 import os from "node:os";
-import { DISK_TOOLS, checkAttachments, workingDirOf } from "./disk.ts";
+import { DISK_TOOLS, checkAttachments, checkWorkingDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { readInstructions } from "./instructions.ts";
 import { load, save } from "./store.ts";
@@ -158,10 +158,11 @@ function toolsSystemPrompt(promptDir: string | null, instructions: string): stri
 // A chat update: what changed in the session since its system prompt, which
 // chat sends after the user's next message when it differs from the last one
 // (see `update` on ChatMessage). The working directory, if it's not the one
-// the system prompt names; the other attachments; and tools that are off.
+// the system prompt names; the attachments (the working directory is not one);
+// and tools that are off.
 async function chatUpdate(ctx: ToolContext, promptDir: string | null): Promise<string> {
-  const dir = await workingDirOf(ctx.attachments);
-  const others = ctx.attachments.filter((a) => a !== dir);
+  const dir = ctx.workingDir;
+  const others = ctx.attachments;
   const off = TOOLS.filter((t) => !isOffered(ctx, t)).map((t) => t.name);
   return [
     "Chat update:",
@@ -174,6 +175,7 @@ async function chatUpdate(ctx: ToolContext, promptDir: string | null): Promise<s
 const contextFor = async (body: any): Promise<ToolContext> => ({
   store: await load(),
   chatId: String(body.chatId ?? ""),
+  workingDir: await checkWorkingDir(body.workingDir),
   attachments: await checkAttachments(body.attachments),
   // Re-serialized here so the comparison in requireApproval doesn't depend on
   // how the client formatted its JSON.
@@ -259,7 +261,8 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
     return true;
   }
 
-  // For chat: what to send the model given this chat's attachments.
+  // For chat: what to send the model given this chat's working directory and
+  // attachments.
   if (parts[1] === "context" && method === "POST") {
     const body = await readJson(req);
     const ctx = await contextFor(body);
@@ -271,9 +274,10 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
       systemPrompt: toolsSystemPrompt(promptDir, (await readInstructions()).text),
       offered: TOOLS.filter((t) => isOffered(ctx, t)).map((t) => t.name),
       update: await chatUpdate(ctx, promptDir),
-      checkCommands: Object.fromEntries(
-        ctx.attachments.filter((a) => ctx.store.checkCommands[a]).map((a) => [a, ctx.store.checkCommands[a]]),
-      ),
+      // The working directory's only: attachments have none (see ChatSettings).
+      checkCommands: ctx.workingDir && ctx.store.checkCommands[ctx.workingDir]
+        ? { [ctx.workingDir]: ctx.store.checkCommands[ctx.workingDir] }
+        : {},
     });
     return true;
   }
@@ -297,7 +301,7 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
     const body = await readJson(req);
     const ctx = await contextFor(body);
     const folder = String(body.folder ?? "");
-    const command = ctx.attachments.includes(folder) ? ctx.store.checkCommands[folder] : undefined;
+    const command = ctx.workingDir && folder === ctx.workingDir ? ctx.store.checkCommands[folder] : undefined;
     if (!command) throw new HttpError(404, "No check command for that folder");
     const output = await exec(command, folder);
     sendJson(res, 200, { command, passed: output.endsWith("[exit code 0]"), output });

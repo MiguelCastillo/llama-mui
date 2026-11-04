@@ -120,6 +120,9 @@ export interface RunTurnConfig {
   seenUpdate: string;
   history: ChatMessage[];
   forgotten: ChatMessage[];
+  // The folder relative paths and commands start in; null is none.
+  workingDir: string | null;
+  // The extra files and folders; the working directory is not one of them.
   attached: string[];
   chatId: string;
   controller: AbortController;
@@ -146,7 +149,7 @@ export async function runTurn(
   const {
     connectorId, kind, api, model, toolsOn, thinkOn, planning, planStep,
     systemPrompt, toolDefinitions, toolContextUpdate, seenUpdate,
-    history: baseHistory, forgotten, attached: attachedBase,
+    history: baseHistory, forgotten, workingDir, attached: attachedBase,
     chatId, controller, started, text,
   } = config;
   const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, setPlanSummary, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext, planSummary } = callbacks;
@@ -271,7 +274,7 @@ export async function runTurn(
             );
           }
 
-          let outcome = await runTool(call, { chatId, attachments: attached, todos: openList() });
+          let outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList() });
           while (!("result" in outcome)) {
             const answer = await askUser(outcome as any, controller.signal);
             if (controller.signal.aborted) return { ok, messages: [...forgotten, ...history], attached, error };
@@ -306,7 +309,7 @@ export async function runTurn(
               }
               attached = [...attached, target.path];
               attach({ path: target.path, kind: target.kind, source: "request" });
-              outcome = await runTool(call, { chatId, attachments: attached, todos: openList() });
+              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList() });
             } else {
               const approval = (outcome as any).needsApproval;
               if (!answer) {
@@ -321,7 +324,7 @@ export async function runTurn(
                 break;
               }
               if (approval.type === "change") diff = approval.diff;
-              outcome = await runTool(call, { chatId, attachments: attached, todos: openList(), approved: approval as Approval });
+              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), approved: approval as Approval });
             }
           }
           result = outcome.result;
@@ -442,6 +445,7 @@ import {
 async function readWhole(
   paths: string[],
   sessionId: string,
+  workingDir: string | null,
   attachments: Attachment[],
   attachedPaths: (as: Attachment[]) => string[],
 ): Promise<WholeFile[]> {
@@ -449,7 +453,7 @@ async function readWhole(
     paths.map(async (path) => {
       const call = { id: "check", name: "read_file", arguments: JSON.stringify({ path, max_lines: Number.MAX_SAFE_INTEGER }) };
       try {
-        const out = await runTool(call, { chatId: `${sessionId}:check`, attachments: attachedPaths(attachments) });
+        const out = await runTool(call, { chatId: `${sessionId}:check`, workingDir, attachments: attachedPaths(attachments) });
         if (!("result" in out)) return { path, error: "it isn't attached to this session" };
         if (out.result.startsWith("Error:")) return { path, error: out.result.slice(7).trim() };
         const text = out.result.slice(out.result.indexOf("\n") + 1);
@@ -461,23 +465,24 @@ async function readWhole(
   );
 }
 
-// Runs the check command of each attached folder that has one, once the plan
-// has changed files; the first that fails, or null.
+// Runs the working directory's check command, if it has one, once the plan has
+// changed files; the result if it fails, or null. Only the working directory
+// has a check command (see Chat settings).
 async function failedCommand(
   planMessages: ChatMessage[],
   checkCommands: Record<string, string>,
+  workingDir: string | null,
   attachments: Attachment[],
   attachedPaths: (as: Attachment[]) => string[],
   setError: (err: string | null) => void,
 ): Promise<{ command: string; output: string; passed: boolean } | null> {
+  if (!workingDir || !checkCommands[workingDir]) return null;
   if (filesChanged(planMessages).length === 0) return null;
-  for (const folder of Object.keys(checkCommands)) {
-    try {
-      const r = await runCheckCommand(attachedPaths(attachments), folder);
-      if (!r.passed) return r;
-    } catch (e: any) {
-      setError(`Couldn't run the check command for ${folder}: ${e.message}`);
-    }
+  try {
+    const r = await runCheckCommand(workingDir, attachedPaths(attachments), workingDir);
+    if (!r.passed) return r;
+  } catch (e: any) {
+    setError(`Couldn't run the check command for ${workingDir}: ${e.message}`);
   }
   return null;
 }
@@ -505,6 +510,10 @@ export interface RunPlanCallbacks {
   setAbort: (c: AbortController | null) => void;
   modelLoaded: () => Promise<boolean>;
   models: Model[];
+  // The folder relative paths and commands start in; null is none. Its check
+  // command, if it has one, runs after the plan has changed files.
+  workingDir: string | null;
+  // The extra files and folders; the working directory is not one of them.
   attachments: Attachment[];
   checkCommands: Record<string, string>;
   attachedPaths: (as: Attachment[]) => string[];
@@ -536,7 +545,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
   const {
     connector, model, abort, planRunningRef, setPlanRunning,
     messages, planRef, setStep, reply, setError, setAbort,
-    modelLoaded, models, attachments, checkCommands, attachedPaths, sessionId, thinkOn, toolDefinitions, gate,
+    modelLoaded, models, workingDir, attachments, checkCommands, attachedPaths, sessionId, thinkOn, toolDefinitions, gate,
   } = callbacks;
 
   if (!connector || !model || abort || planRunningRef.current) return;
@@ -588,11 +597,11 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       // Without fresh steps the model has the messages in its history already.
       let r = await reply(stepPrompt(steps, i, request, changed, ctx, fresh ? noted : []), msgs, { planStep: id, from });
       msgs = r.messages;
-      let failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError) : null;
+      let failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, workingDir, attachments, attachedPaths, setError) : null;
       if (failed) {
         r = await reply(commandFailedPrompt(i, failed.command, failed.output), msgs, { planStep: id, from });
         msgs = r.messages;
-        failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError) : null;
+        failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, workingDir, attachments, attachedPaths, setError) : null;
         if (failed) {
           setStep(id, { status: "failed", note: `\`${failed.command}\` still fails: ${commandSummary(failed.output)}`, ms: took() });
           break;
@@ -600,7 +609,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       }
       let check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep), {
         connector, model, setAbort, setError, modelLoaded,
-        models, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
+        models, workingDir, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
       }) : null;
       if (check && !check.done) {
         const missing = check.missing ?? "";
@@ -612,14 +621,14 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
           setStep(id, { status: disputeHolds(d) ? "disputed" : "failed", note: disputeNote(missing, d), ms: took() });
           break;
         }
-        failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError) : null;
+        failed = r.ok ? await failedCommand(msgs.filter((m) => m.planStep), checkCommands, workingDir, attachments, attachedPaths, setError) : null;
         if (failed) {
           setStep(id, { status: "failed", note: `\`${failed.command}\` fails: ${commandSummary(failed.output)}`, ms: took() });
           break;
         }
         check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep), {
           connector, model, setAbort, setError, modelLoaded,
-          models, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
+          models, workingDir, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
         }) : null;
       }
       // Still not done after the dispute retry: the step is blocked. Recovery
@@ -640,7 +649,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
           asking = true;
           break;
         }
-        failed = await failedCommand(msgs.filter((m) => m.planStep), checkCommands, attachments, attachedPaths, setError);
+        failed = await failedCommand(msgs.filter((m) => m.planStep), checkCommands, workingDir, attachments, attachedPaths, setError);
         if (failed) {
           setStep(id, { status: "failed", note: `\`${failed.command}\` fails: ${commandSummary(failed.output)}`, ms: took() });
           asking = true;
@@ -648,7 +657,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
         }
         check = await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep), {
           connector, model, setAbort, setError, modelLoaded,
-          models, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
+          models, workingDir, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
         });
       }
       // The step waits for an answer, or failed on a command: the plan stops.
@@ -679,6 +688,7 @@ export interface CheckStepDeps {
   setError: (err: string | null) => void;
   modelLoaded: () => Promise<boolean>;
   models: Model[];
+  workingDir: string | null;
   attachments: Attachment[];
   attachedPaths: (as: Attachment[]) => string[];
   sessionId: string;
@@ -692,19 +702,19 @@ export async function checkStep(
   planMessages: ChatMessage[],
   deps: CheckStepDeps,
 ): Promise<Awaited<ReturnType<typeof reviewStep>> | null> {
-  const { connector, model, setAbort, setError, modelLoaded, models, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions } =
+  const { connector, model, setAbort, setError, modelLoaded, models, workingDir, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions } =
     deps;
   if (!connector || !(await modelLoaded())) return null;
   const controller = new AbortController();
   setAbort(controller);
   try {
     const mine = filesChanged(stepMessages);
-    const own = await readWhole(mine, sessionId, attachments, attachedPaths);
-    const others = await readWhole(filesChanged(planMessages).filter((p) => !mine.includes(p)), sessionId, attachments, attachedPaths);
+    const own = await readWhole(mine, sessionId, workingDir, attachments, attachedPaths);
+    const others = await readWhole(filesChanged(planMessages).filter((p) => !mine.includes(p)), sessionId, workingDir, attachments, attachedPaths);
     const room = checkRoom(models.find((m) => m.id === model)?.contextSize);
     // The check's own reads, under the same chat id as readWhole's.
     const read = async (call: ToolCall) => {
-      const out = await runTool(call, { chatId: `${sessionId}:check`, attachments: attachedPaths(attachments) });
+      const out = await runTool(call, { chatId: `${sessionId}:check`, workingDir, attachments: attachedPaths(attachments) });
       return "result" in out ? out.result : "Error: that isn't attached to this session";
     };
     const tools = toolDefinitions.filter((d) => CHECK_TOOLS.has((d as { function: { name: string } }).function.name));

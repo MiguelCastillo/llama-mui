@@ -10,15 +10,16 @@ import path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { inSessionWorktrees, isInside, isSettingsFile, looksBinary, needAccess, toAbsolute } from "./disk.ts";
 import { markRead, requireRead } from "./reads.ts";
-import { type Approval, type ToolContext, ToolError, type ToolSpec, fn, requireApproval } from "./toolkit.ts";
+import { type Approval, type ToolContext, ToolError, type ToolSpec, fn, reachableRoots, requireApproval } from "./toolkit.ts";
 
 const MAX_WRITE_BYTES = 1024 * 1024;
 
 // Where a write lands, with symlinks resolved. The file may not exist yet;
 // then its nearest existing folder is resolved, so a symlink can't lead the
 // new file outside what's attached.
-async function resolveWritable(roots: string[], raw: unknown): Promise<string> {
-  const { given, abs } = await toAbsolute(roots, raw);
+async function resolveWritable(ctx: ToolContext, raw: unknown): Promise<string> {
+  const roots = reachableRoots(ctx);
+  const { given, abs } = await toAbsolute(ctx, raw);
   const missing: string[] = [];
   let existing = abs;
   let real: string;
@@ -99,7 +100,7 @@ const writeTextFile: ToolSpec = {
   ),
   async run(ctx, args) {
     if (typeof args.content !== "string") throw new ToolError("content is required");
-    const file = await resolveWritable(ctx.attachments, args.path);
+    const file = await resolveWritable(ctx, args.path);
     const before = await readText(file);
     if (before !== null) requireRead(ctx.chatId, file, before);
     await commit(ctx, file, before, args.content, before === null ? "create" : "overwrite");
@@ -133,7 +134,7 @@ const editTextFile: ToolSpec = {
   async run(ctx, args) {
     const oldText = String(args.old_text ?? "");
     if (!oldText) throw new ToolError("old_text is required");
-    const file = await resolveWritable(ctx.attachments, args.path);
+    const file = await resolveWritable(ctx, args.path);
     const before = await readText(file);
     if (before === null) throw new ToolError(`${file} does not exist; use write_file to create it`);
     requireRead(ctx.chatId, file, before);

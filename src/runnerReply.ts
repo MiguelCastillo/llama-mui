@@ -9,15 +9,10 @@ import { INTERRUPTED } from "./agent/helpers.ts";
 import { askForSessionName } from "./agent/sessionNaming.ts";
 import type { RunnerHandle } from "./runnerTypes.ts";
 
-// The working directory: the first attached folder (Chat settings moves
-// another one first).
-export const workingDirOf = (as: Attachment[]): string | null => as.find((a) => a.kind === "folder")?.path ?? null;
-
-// The paths the disk tools may use: the working folder first.
-export function attachedPaths(as: Attachment[]): string[] {
-  const dir = as.find((a) => a.kind === "folder")?.path;
-  return [...(dir ? [dir] : []), ...as.map((a) => a.path).filter((p) => p !== dir)];
-}
+// The paths of the attachments, the extra files and folders the disk tools
+// may use. The working directory is not one of them: it travels as its own
+// `workingDir` (see Session.workingDir).
+export const attachedPaths = (as: Attachment[]): string[] => as.map((a) => a.path);
 
 // Asks the server, fresh, whether the model is loaded, as Chat does before it
 // sends anything. A server that doesn't report status has nothing to load, and
@@ -53,7 +48,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     // Every request checks: the model may have been unloaded since the last.
     if (!(await modelLoaded(h))) return { ok: false, messages: before };
     // Fixed for the session's first reply, so its system prompt never changes.
-    h.edit((s) => (s.promptDir === undefined ? { ...s, promptDir: workingDirOf(s.attachments) } : s));
+    h.edit((s) => (s.promptDir === undefined ? { ...s, promptDir: s.workingDir ?? null } : s));
     const forgotten = before.slice(0, start);
     // Attachments and tools that are off go the same way, as `update`, and
     // only when they changed since the last one the model saw.
@@ -135,6 +130,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         seenUpdate: seen ?? "",
         history: before.slice(start),
         forgotten,
+        workingDir: now.workingDir ?? null,
         attached: attachedPaths(now.attachments),
         chatId: h.sessionId,
         controller,

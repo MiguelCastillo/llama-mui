@@ -237,15 +237,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setPlanWantedState(on);
     saveFlag(PLAN_KEY, on);
   };
-  // Files and folders this chat's disk tools may read; New chat clears them.
+  // Extra files and folders this chat's disk tools may read, besides the
+  // working directory; New chat clears them.
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  // The working directory: the first attached folder (Chat settings moves
-  // another one first). Sent first, where the server looks for it.
-  const workingDir = attachments.find((a) => a.kind === "folder")?.path ?? null;
-  const attachedPaths = (as: Attachment[]) => {
-    const dir = as.find((a) => a.kind === "folder")?.path;
-    return [...(dir ? [dir] : []), ...as.map((a) => a.path).filter((p) => p !== dir)];
-  };
+  // The working directory: where relative paths and commands start. Chosen in
+  // Chat settings, not one of the attachments; New chat clears it.
+  const [workingDir, setWorkingDir] = useState<string | null>(null);
+  const attachedPaths = (as: Attachment[]) => as.map((a) => a.path);
   // The working directory the system prompt names. Fixed by the session's
   // first message: after that a change goes in a chat update, so the system
   // prompt stays the same. Until then (undefined) it follows workingDir.
@@ -429,7 +427,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const savedKey = useRef("");
   // Not the title: it comes from the names and the first message, and a saved
   // one holds the user's name, which saves never send.
-  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planId ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos, s.parentId ?? null, s.threads ?? [], s.titleHint ?? null, s.planMovedIn ?? false]);
+  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.workingDir ?? null, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planId ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos, s.parentId ?? null, s.threads ?? [], s.titleHint ?? null, s.planMovedIn ?? false]);
 
   // The session this one is nested under (its direct parent), if any.
   const [parentId, setParentId] = useState<string | null>(null);
@@ -458,6 +456,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setMessages(s.messages);
     setContextStart(s.contextStart);
     setAttachments(s.attachments);
+    setWorkingDir(s.workingDir ?? null);
     setFixedPromptDir(s.promptDir);
     setUsage(s.usage);
     setFailed(shownFailure(s.failed, running));
@@ -601,6 +600,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       messages,
       contextStart,
       attachments,
+      workingDir,
       usage,
       failed,
       plan,
@@ -666,7 +666,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return () => clearTimeout(timer);
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
-  }, [loaded, messages, contextStart, attachments, usage, model, failed, plan, planProposal, planContext, planSummary, planId, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId, threads, titleHint, planMovedIn]);
+  }, [loaded, messages, contextStart, attachments, workingDir, usage, model, failed, plan, planProposal, planContext, planSummary, planId, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId, threads, titleHint, planMovedIn]);
 
   // Set by openSession: once that session has loaded, the chat box scrolls to
   // its plan card instead of the end.
@@ -706,6 +706,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setUsage(null);
     setContextStart(0);
     setAttachments([]);
+    setWorkingDir(null);
     setFixedPromptDir(undefined);
     setFailed(null);
     setModelName(null);
@@ -731,7 +732,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     try {
       const parent =
         parentId === sessionId
-          ? { id: sessionId, model, attachments }
+          ? { id: sessionId, model, attachments, workingDir }
           : withSessionDefaults(await getSession(parentId));
       const child = nestedSessionFrom(parent, crypto.randomUUID());
       const summary = await saveSession(child);
@@ -918,10 +919,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Settings → Tools or the attachments may have changed what's available.
   useEffect(() => {
     if (!visible) return;
-    getToolContext(attachedPaths(attachments), promptDir)
+    getToolContext(workingDir, attachedPaths(attachments), promptDir)
       .then(setToolContext)
       .catch((e) => setError(e.message));
-  }, [visible, attachments, promptDir, contextVersion]);
+  }, [visible, attachments, workingDir, promptDir, contextVersion]);
 
   // On only when the user wants tools and some are ready in this chat.
   const toolsOn = toolsWanted && toolContext.offered.length > 0;
@@ -960,13 +961,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (followingRef.current && !promptInPlan) stickToBottom();
   }, [messages, shownPending]);
 
-  // Changes the open session's attachments. The folders a run works in are
-  // fixed when it starts and the server owns the session until it ends, so
-  // they can't change meanwhile (Chat settings says so, too).
+  // Changes the open session's attachments or working directory. The folders
+  // a run works in are fixed when it starts and the server owns the session
+  // until it ends, so they can't change meanwhile (Chat settings says so, too).
   const attachmentsLocked = runActive;
   const changeAttachments = (fn: (as: Attachment[]) => Attachment[]) => {
     if (runnerActive(sessionId)) setError(ATTACHMENTS_LOCKED_NOTE);
     else setAttachments(fn);
+  };
+  // Replaces the working directory (null clears it). The old one is not kept
+  // as an attachment.
+  const changeWorkingDir = (dir: string | null) => {
+    if (runnerActive(sessionId)) setError(ATTACHMENTS_LOCKED_NOTE);
+    else setWorkingDir(dir);
   };
   const attach = (a: Attachment) => changeAttachments((as) => (as.some((x) => x.path === a.path) ? as : [...as, a]));
 
@@ -1756,12 +1763,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
             <ChatSettings
               attachments={attachments}
+              workingDir={workingDir}
               locked={attachmentsLocked}
               onAttach={attach}
               onDetach={(p) => changeAttachments((as) => as.filter((x) => x.path !== p))}
-              onMakeWorkingDir={(p) =>
-                changeAttachments((as) => [...as.filter((x) => x.path === p), ...as.filter((x) => x.path !== p)])
-              }
+              onMakeWorkingDir={(p) => {
+                // Moved, not copied: the folder leaves the attachments, and
+                // the old working directory is not kept.
+                if (runnerActive(sessionId)) return setError(ATTACHMENTS_LOCKED_NOTE);
+                changeWorkingDir(p);
+                changeAttachments((as) => as.filter((x) => x.path !== p));
+              }}
               checkCommands={toolContext.checkCommands}
               onSetCheckCommand={(folder, command) =>
                 setCheckCommand(folder, command)
