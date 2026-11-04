@@ -3,7 +3,7 @@
 // Everything runTurn reports is written into the runner's session, so the
 // session is the same whether or not Chat is showing it. No React in this file.
 
-import { type Attachment, type Session, listModels, renameSession } from "./api.ts";
+import { type Attachment, type Session, listModels } from "./api.ts";
 import { type RunPlanCallbacks, type RunTurnCallbacks, runTurn } from "./agent/agent.ts";
 import { INTERRUPTED } from "./agent/helpers.ts";
 import { askForSessionName } from "./agent/sessionNaming.ts";
@@ -145,14 +145,16 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     );
 
     // After a successful reply, ask the model to name the session if it has
-    // no name yet. The rename is saved with the next save too, since the
-    // session may not have a file yet for the rename to change.
+    // no name yet. The name goes into the run's session, which the run saves
+    // (and the list follows its save). It is not also sent as a rename request
+    // to the server: that request is not waited for, so it could land after the
+    // run had ended, as one more write to the session. The page had read the
+    // session as the run left it, so its revision was then one behind, and its
+    // next save (attaching a folder in Chat settings, say) was refused as stale
+    // and dropped, with the message behind the dialog.
     if (result.ok && !h.getSession().modelName) {
       const name = await askForSessionName(result.messages, connector.id, model, controller.signal, connector.api, connector.kind);
-      if (name) {
-        h.edit((s: Session) => ({ ...s, modelName: name, title: name }));
-        renameSession(h.sessionId, { title: name, modelName: name }).catch(() => {});
-      }
+      if (name) h.edit((s: Session) => ({ ...s, modelName: name, title: name }));
     }
 
     return { ok: result.ok, messages: result.messages, error: result.error };

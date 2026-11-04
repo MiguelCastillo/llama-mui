@@ -258,14 +258,26 @@ describe("makeReply", () => {
   });
 
   describe("naming the session", () => {
-    it("names it after the first good reply, in the session and on the server", async () => {
+    it("names it after the first good reply, in the run's session", async () => {
       mockName.mockResolvedValue("Fix the login");
       const h = makeHandle();
       okTurn();
       await makeReply(h.handle)("go", []);
       expect(mockName).toHaveBeenCalledTimes(1);
       expect(h.session()).toMatchObject({ modelName: "Fix the login", title: "Fix the login" });
-      expect(mockRename).toHaveBeenCalledWith("a", { title: "Fix the login", modelName: "Fix the login" });
+    });
+
+    // A rename request that is not waited for can land after the run has
+    // ended, as one more write that leaves the page's revision behind: its next
+    // save (attaching a folder after the reply) is then refused as stale and
+    // dropped. The run saves the name itself, so no request is sent.
+    it("sends no rename request to the server, which could write after the run ended", async () => {
+      mockName.mockResolvedValue("Fix the login");
+      const h = makeHandle();
+      okTurn();
+      await makeReply(h.handle)("go", []);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(mockRename).not.toHaveBeenCalled();
     });
 
     it("doesn't ask when the session has a name, or the reply failed", async () => {
@@ -281,19 +293,11 @@ describe("makeReply", () => {
       expect(failed.session().modelName).toBeUndefined();
     });
 
-    it("keeps the session unnamed when the model gives no name, and survives a failed rename", async () => {
+    it("keeps the session unnamed when the model gives no name", async () => {
       okTurn();
       const none = makeHandle();
       await makeReply(none.handle)("go", []);
-      expect(mockRename).not.toHaveBeenCalled();
       expect(none.session().modelName).toBeUndefined();
-
-      mockName.mockResolvedValue("A good name");
-      mockRename.mockRejectedValue(new Error("no file yet"));
-      const h = makeHandle();
-      const result = await makeReply(h.handle)("go", []);
-      expect(result.ok).toBe(true);
-      expect(h.session().modelName).toBe("A good name");
     });
   });
 });
