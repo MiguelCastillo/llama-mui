@@ -36,6 +36,16 @@ export function commandSummary(output: string): string {
 // The INTERRUPTED constant, extracted so failureLine is pure.
 export const INTERRUPTED = "interrupted";
 
+// The failure to show for a session. A run saves "interrupted" in its session
+// for as long as a request is in flight (so a reload mid-reply doesn't look
+// like a finished one); while that run is still going, the reply is streaming
+// fine and the mark is not a failure. Any other failure, and "interrupted" in a
+// session with no live run, is real.
+export function shownFailure(failed: string | null | undefined, running: boolean): string | null {
+  if (!failed) return null;
+  return running && failed === INTERRUPTED ? null : failed;
+}
+
 const MESSAGE_CUT = 160;
 
 // What happened to a failed reply, in the user's terms. `who` is the

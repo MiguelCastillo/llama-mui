@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { type ChatMessage, type ToolCall } from "../../api";
-import { shareTokens, callKey, commandSummary, INTERRUPTED, failureLine } from "../helpers";
+import { shareTokens, callKey, commandSummary, INTERRUPTED, failureLine, shownFailure } from "../helpers";
 
 // ── shareTokens ─────────────────────────────────────────────────────────────
 
@@ -129,6 +129,29 @@ describe("commandSummary", () =>
 describe("INTERRUPTED", () => {
   it("equals 'interrupted'", () => {
     expect(INTERRUPTED).toBe("interrupted");
+  });
+});
+
+// ── shownFailure ────────────────────────────────────────────────────────────
+
+describe("shownFailure", () => {
+  it("hides the interrupted mark while the run is still going", () => {
+    expect(shownFailure(INTERRUPTED, true)).toBeNull();
+  });
+
+  it("shows interrupted when no run is live (the reply really was cut off)", () => {
+    expect(shownFailure(INTERRUPTED, false)).toBe(INTERRUPTED);
+  });
+
+  it("shows a real failure even while the run is going", () => {
+    expect(shownFailure("TypeError: fetch failed", true)).toBe("TypeError: fetch failed");
+    expect(shownFailure("TypeError: fetch failed", false)).toBe("TypeError: fetch failed");
+  });
+
+  it("is null when nothing failed", () => {
+    expect(shownFailure(null, true)).toBeNull();
+    expect(shownFailure(undefined, false)).toBeNull();
+    expect(shownFailure("", false)).toBeNull();
   });
 });
 

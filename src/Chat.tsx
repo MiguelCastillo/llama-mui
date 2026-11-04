@@ -104,7 +104,7 @@ import EmptyChatSuggestions from "./EmptyChatSuggestions";
 import { settleStart, startAction, type Start, type StartAction } from "./todos";
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
-import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
+import { commandSummary, INTERRUPTED, failureLine, shownFailure } from "./agent/helpers";
 import {
   PlanView,
   checkRoom,
@@ -442,8 +442,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // `live`: the session is a run's, as it is now (see mirrorView). A step that
   // is running there really is, so it isn't reset to pending, and the model
-  // picker is left alone.
-  const applySession = (s: Session, live = false) => {
+  // picker is left alone. `running`: that run has not ended, so the
+  // "interrupted" mark it keeps while a request is in flight is not shown as
+  // a failure (see shownFailure).
+  const applySession = (s: Session, live = false, running = live) => {
     // Saved before plans had a place: pinned after the chat's last message as
     // it opens, where they showed, so later messages go below them. Counted
     // as saved, so opening the chat doesn't save it (see savedKey).
@@ -458,7 +460,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setAttachments(s.attachments);
     setFixedPromptDir(s.promptDir);
     setUsage(s.usage);
-    setFailed(s.failed ?? null);
+    setFailed(shownFailure(s.failed, running));
     setModelName(s.modelName ?? null);
     // A step that was running when the page went away didn't finish.
     changePlan(
@@ -493,7 +495,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // server saved it, and its revision is the one the next save sends) and the
   // open session is Chat's again.
   const mirrorView = (v: RunnerView) => {
-    if (v.session) applySession(v.session, true);
+    if (v.session) applySession(v.session, true, v.status !== "stopped");
     // The run's error shows as Chat's own, but only when it changes, so
     // an error of Chat's (a server that can't be reached) isn't wiped by
     // every streamed piece.
