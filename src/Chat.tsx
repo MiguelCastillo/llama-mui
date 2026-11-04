@@ -1870,15 +1870,36 @@ function Composer({
       {/* Send lines up with the input's top edge; the context
           indicator sits just below it. */}
       <Stack spacing={1.25} sx={{ flexShrink: 0, alignItems: "flex-end" }}>
+        {/* Icons, with the words as tooltip and accessible label. */}
         {!onStop && (
-          <Button variant="contained" endIcon={<SendIcon />} onClick={send} disabled={!text.trim() || disabled}>
-            Send
-          </Button>
+          <Tooltip title="Send">
+            <span>
+              <IconButton
+                aria-label="Send"
+                onClick={send}
+                disabled={!text.trim() || disabled}
+                sx={{
+                  bgcolor: "primary.main",
+                  color: "primary.contrastText",
+                  "&:hover": { bgcolor: "primary.dark" },
+                  "&.Mui-disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
+                }}
+              >
+                <SendIcon />
+              </IconButton>
+            </span>
+          </Tooltip>
         )}
         {onStop && (
-          <Button variant="outlined" color="error" startIcon={<StopIcon />} onClick={onStop}>
-            Stop
-          </Button>
+          <Tooltip title="Stop the reply">
+            <IconButton
+              aria-label="Stop"
+              onClick={onStop}
+              sx={{ border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
+            >
+              <StopIcon />
+            </IconButton>
+          </Tooltip>
         )}
         {below}
       </Stack>
