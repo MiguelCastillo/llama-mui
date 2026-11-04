@@ -203,11 +203,10 @@ describe("a chat reply run on the server", () => {
     await vi.waitFor(() => expect(hub.liveRun("a")).toBeNull());
   });
 
-  it("has no Pause, but Stop works", async () => {
+  it("can be stopped, and what streamed is kept", async () => {
     save("a");
     const started = await turn("a");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(await reasonOf(runners.pauseRun("a"))).toEqual({ status: 409, reason: "not a plan" });
     await runners.stopRun("a");
     await started.done;
     expect(hub.liveRun("a")).toBeNull();

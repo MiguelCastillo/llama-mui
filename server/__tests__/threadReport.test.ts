@@ -215,7 +215,7 @@ describe("a thread reports to its parent when its run ends", () => {
     expect(ask).not.toHaveBeenCalled();
     expect(thread()).toMatchObject({
       status: "unfinished",
-      report: { text: "You stopped it after 1 of 2 steps. Continue in the thread to go on." },
+      report: { text: "You paused it after 1 of 2 steps. Continue in the thread to go on." },
     });
   });
 

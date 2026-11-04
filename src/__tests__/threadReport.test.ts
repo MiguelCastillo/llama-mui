@@ -121,7 +121,7 @@ describe("fallbackReport", () => {
 
   it("says how far a stopped or interrupted plan got", () => {
     const steps = [step(1, "done"), step(2, "pending"), step(3, "pending")];
-    expect(fallbackReport({ steps, stopped: true })).toBe("You stopped it after 1 of 3 steps. Continue in the thread to go on.");
+    expect(fallbackReport({ steps, stopped: true })).toBe("You paused it after 1 of 3 steps. Continue in the thread to go on.");
     expect(fallbackReport({ steps, error: "Couldn't reach the server" })).toBe(
       "It stopped after 1 of 3 steps. Couldn't reach the server. Continue in the thread to try again.",
     );

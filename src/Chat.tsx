@@ -127,9 +127,6 @@ import {
   getView,
   isLive,
   needsYou,
-  pause as pauseRunner,
-  pauseControl,
-  resume as resumeRunner,
   sendChat,
   sendMessage as sendToRun,
   startRun as startRemoteRun,
@@ -755,8 +752,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const start = pickModel({ current: "", defaultModel: connector?.defaultModel, models });
     if (start) setModel(start);
   };
-  // Cancelling a plan asks first, then stops a run (the step's request, or its
-  // check) and removes the plan. The steps' messages stay in the chat, and
+  // Discarding a plan (the card offers it only while nothing runs) asks first,
+  // and removes the plan. If a run started meanwhile, it is stopped first. The steps' messages stay in the chat, and
   // what they changed stays changed. A run owns its session, so the page waits
   // until the run is over, takes the session as the run left it, and only then
   // removes the plan; that is saved like any other change.
@@ -1282,10 +1279,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   summary={planSummary}
                   context={planContext}
                   running={runActive}
-                  since={planRunning && runnerView?.status !== "paused" ? taskSince : null}
-                  control={planRunning ? pauseControl(runnerView?.status) : undefined}
-                  onPause={() => showFailure(pauseRunner(sessionId))}
-                  onResume={() => showFailure(resumeRunner(sessionId))}
+                  since={planRunning ? taskSince : null}
+                  onPause={planRunning ? () => showFailure(stopRunner(sessionId)) : undefined}
                   counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
                   onRun={runFromCard}
                   onChange={changePlan}
@@ -1600,7 +1595,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       </Paper>
 
       <Dialog open={confirmCancelPlan} onClose={() => setConfirmCancelPlan(false)} maxWidth="xs">
-        <DialogTitle>Cancel this plan?</DialogTitle>
+        <DialogTitle>Discard this plan?</DialogTitle>
         <DialogContent>
           <DialogContentText>
             {planRunning ? "This stops the step that's running and removes" : "This removes"} the plan and its
@@ -1610,7 +1605,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         <DialogActions>
           <Button onClick={() => setConfirmCancelPlan(false)}>Keep it</Button>
           <Button color="error" variant="contained" onClick={cancelPlanConfirmed}>
-            Cancel plan
+            Discard plan
           </Button>
         </DialogActions>
       </Dialog>
@@ -1795,10 +1790,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                     : "Message (Enter to send, Shift+Enter for a new line)"
               }
               onSend={send}
-              sendWithStop={planRunning}
               fill={fill}
+              // Stop here is for a reply that is streaming. A plan run is
+              // paused from its card, and the box keeps Send for messages to it.
               onStop={
-                runActive ? () => showFailure(stopRunner(sessionId)) : undefined
+                turnRunning ? () => showFailure(stopRunner(sessionId)) : undefined
               }
               disabled={!model && !planRunning}
               below={
@@ -1829,14 +1825,11 @@ function Composer({
   placeholder,
   onSend,
   onStop,
-  sendWithStop,
   disabled,
   below,
   fill,
 }: {
   placeholder: string;
-  // Keep Send beside Stop: while a plan runs, a message goes to the run.
-  sendWithStop?: boolean;
   // Text to put in the box and focus it (not sent); a new `n` is a new request.
   fill?: { text: string; n: number } | null;
   // Resolves to whether the message went; the box clears only then.
@@ -1877,7 +1870,7 @@ function Composer({
       {/* Send lines up with the input's top edge; the context
           indicator sits just below it. */}
       <Stack spacing={1.25} sx={{ flexShrink: 0, alignItems: "flex-end" }}>
-        {(!onStop || sendWithStop) && (
+        {!onStop && (
           <Button variant="contained" endIcon={<SendIcon />} onClick={send} disabled={!text.trim() || disabled}>
             Send
           </Button>

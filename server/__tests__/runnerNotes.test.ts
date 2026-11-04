@@ -100,25 +100,6 @@ describe("a message to a running plan", () => {
     expect(userMessages("a")).toHaveLength(1);
   });
 
-  it("goes to the next step while the run is paused, and is there when it resumes", async () => {
-    await start("a", 3);
-    await flush();
-    await runners.pauseRun("a");
-    finish("a", "s1");
-    await flush();
-    expect(hub.liveRun("a")!.status).toBe("paused");
-    expect(userMessages("a")).toEqual([]);
-
-    const r = await runners.sendNote("a", "Skip the tests");
-    expect(r).toMatchObject({ step: 2, stepId: "s2" });
-    // The hold is before the boundary: nothing is folded in while it holds.
-    expect(userMessages("a")).toEqual([]);
-    await runners.resumeRun("a");
-    await flush();
-    expect(promptNotes.get("a/s2")).toEqual(["Skip the tests"]);
-    expect(userMessages("a")[0]).toMatchObject({ content: "Skip the tests", seenByStep: 2 });
-  });
-
   it("keeps several messages in the order they came, all at the same boundary", async () => {
     await start("a", 3);
     await flush();
@@ -234,8 +215,8 @@ describe("closing the server", () => {
     await runners.stopAllRuns();
     expect(hub.liveRuns()).toEqual([]);
     // The step that was in flight is back to pending, noted as stopped, and saved that way.
-    expect(fileOf("a").plan[0]).toMatchObject({ status: "pending", note: "Stopped" });
+    expect(fileOf("a").plan[0]).toMatchObject({ status: "pending", note: "Paused" });
     expect(fileOf("a").run).toBeUndefined();
-    expect(fileOf("b").plan[0]).toMatchObject({ status: "pending", note: "Stopped" });
+    expect(fileOf("b").plan[0]).toMatchObject({ status: "pending", note: "Paused" });
   });
 });

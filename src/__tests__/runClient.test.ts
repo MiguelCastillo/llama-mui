@@ -6,10 +6,7 @@ import {
   dismiss,
   getView,
   needsYou,
-  pause,
-  pauseControl,
   resetRunClient,
-  resume,
   sendChat,
   sendMessage,
   startRun,
@@ -121,8 +118,8 @@ describe("the run list", () => {
     subscribeAll((e) => events.push(e));
     global().emit("snapshot", { runs: [{ id: "a", run: run() }] });
     global().emit("status", { id: "a", run: run({ streaming: true }) });
-    global().emit("status", { id: "a", run: run({ status: "pausing", streaming: true }) });
-    expect(getView("a")).toMatchObject({ status: "pausing", streaming: true });
+    global().emit("status", { id: "a", run: run({ status: "waiting", streaming: true }) });
+    expect(getView("a")).toMatchObject({ status: "waiting", streaming: true });
     expect(events.map((e) => e.kind)).toEqual(["status", "status"]);
   });
 
@@ -182,8 +179,8 @@ describe("one session's stream", () => {
     subscribe("a", (v) => views.push(v));
     global().emit("snapshot", { runs: [{ id: "a", run: run() }] });
     watch("a").emit("snapshot", { id: "a", session: session("a", { title: "old" }), revision: 1, run: run() });
-    watch("a").emit("snapshot", { id: "a", session: session("a", { title: "new" }), revision: 2, run: run({ status: "paused" }) });
-    expect(views.at(-1)).toMatchObject({ status: "paused" });
+    watch("a").emit("snapshot", { id: "a", session: session("a", { title: "new" }), revision: 2, run: run({ status: "waiting" }) });
+    expect(views.at(-1)).toMatchObject({ status: "waiting" });
     expect(views.at(-1)!.session?.title).toBe("new");
   });
 
@@ -193,9 +190,9 @@ describe("one session's stream", () => {
     subscribe("a", (v) => a.push(v));
     subscribe("b", (v) => b.push(v));
     global().emit("snapshot", { runs: [{ id: "a", run: run() }, { id: "b", run: run() }] });
-    global().emit("status", { id: "b", run: run({ status: "paused" }) });
+    global().emit("status", { id: "b", run: run({ status: "waiting" }) });
     expect(a.every((v) => v.sessionId === "a")).toBe(true);
-    expect(b.map((v) => v.status)).toEqual(["running", "paused"]);
+    expect(b.map((v) => v.status)).toEqual(["running", "waiting"]);
   });
 });
 
@@ -400,19 +397,6 @@ describe("commands", () => {
     });
   });
 
-  it("pause and resume are commands, and a run that just ended is not an error", async () => {
-    await pause("a");
-    await resume("a");
-    expect(commands().map((c) => c.path)).toEqual(["/api/sessions/a/commands/pause", "/api/sessions/a/commands/resume"]);
-    serve(() => ({ status: 409, body: { error: "No plan is running in this session.", reason: "not running" } }));
-    await expect(pause("a")).resolves.toBeUndefined();
-  });
-
-  it("any other refusal of pause is thrown", async () => {
-    serve(() => ({ status: 500, body: { error: "Broke" } }));
-    await expect(pause("a")).rejects.toMatchObject({ message: "Broke" });
-  });
-
   it("stop answers only once the run is over and its final session is in hand", async () => {
     const views: RunnerView[] = [];
     subscribe("a", (v) => views.push(v));
@@ -524,22 +508,5 @@ describe("needsYou", () => {
     expect(needsYou(view({ status: "stopped" }))).toBe(false);
     expect(needsYou(view({ status: "stopped", session: null }))).toBe(false);
     expect(needsYou(view({ status: "running", session: waiting }))).toBe(false);
-  });
-});
-
-describe("pauseControl", () => {
-  it("offers Pause only while running", () => {
-    expect(pauseControl("running")).toEqual({ text: null, button: "Pause" });
-  });
-  it("says Pausing after this step, without a button", () => {
-    expect(pauseControl("pausing")).toEqual({ text: "Pausing after this step", button: null });
-  });
-  it("says Paused and offers Resume", () => {
-    expect(pauseControl("paused")).toEqual({ text: "Paused", button: "Resume" });
-  });
-  it("offers nothing while waiting, stopped or without a run", () => {
-    for (const s of ["waiting", "stopped", undefined, null] as const) {
-      expect(pauseControl(s)).toEqual({ text: null, button: null });
-    }
   });
 });

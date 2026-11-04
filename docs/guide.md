@@ -308,7 +308,7 @@ vitest (`npm test`).
   it. The chat you left keeps a note where the plan was (see
   [Where plans show](#where-plans-show)). A plan started inside a nested
   session makes its thread under that same session.
-- **Continue**, **Resume**, **Restart** and **Answer and continue** on a
+- **Continue**, **Restart** and **Answer and continue** on a
   plan that has started run it where it is. Only a first **Run** moves to a
   thread.
 - A plan keeps running when you leave its session, and when you close or
@@ -427,8 +427,9 @@ vitest (`npm test`).
     turns.
   - **Rounds used up**: the step gets ✗ with the check's own note,
     in its own words and never cut, and the plan stops.
-  - No round starts if the reply failed or you pressed **Stop**.
-- **Stopped or failed**: if you press **Stop**, or the reply fails, the step
+  - No round starts if the reply failed or the run was stopped.
+- **Paused or failed**: if you press **Pause** on the card, or the reply
+  fails, the step
   goes back to pending (with "The reply failed: …" if it did) and the plan
   stops. **Continue** picks it up again. A step's answer is kept.
 - While a plan runs you can still send messages in its session: the message
@@ -465,13 +466,13 @@ nothing starts again by itself: see
 - The page is a view. It listens to the server's events (`src/runClient.ts`)
   and shows the session as the run changes it: the saved copy first, then the
   run's own as soon as the event stream sends it. What you press goes back as
-  an ordinary request (a command): `pause`, `resume`, `stop`, `approve` (allow
+  an ordinary request (a command): `stop` (the card's **Pause**), `approve` (allow
   or deny) and `answer` (the files or folders you picked). Each is a `POST` to
   `/api/sessions/<id>/commands/<name>`, and answers `ok` or a 409 with a plain
   reason.
 - **Two windows can't both run one plan.** The second **Run** is refused
   with "This plan is already running." The second window shows the same run,
-  and **Pause**, **Resume** and **Stop** work from either.
+  and **Pause** works from either.
 - A question a step asks (approve a change or a command, allow a folder, find
   a file) is stored in the run as plain data: what is asked and a number for
   that question. The prompt in the plan card answers it by that number, so
@@ -481,24 +482,27 @@ nothing starts again by itself: see
   sessions panel's dot ("Needs you") shows while another session is open.
 - Two plans, or a plan and a chat turn in another session, can run at the
   same time. The model server queues the requests.
-- **Pause** on the plan card shows only while the plan runs. It finishes the
-  step in flight and its check, then holds before the next step. The card
-  says "Pausing after this step", then "Paused", and the button becomes
-  **Resume**. **Stop** stays immediate: it aborts the request, and the step
-  goes back to pending with the note "Stopped".
-- Pause is a state of the run, not of a step, and isn't saved.
+- **Pause** on the plan card shows only while the plan runs, in place of
+  **Run** or **Continue**. It ends the run at once: it aborts the request, the
+  step goes back to pending with the note "Paused", and the plan stays. The run
+  is over, so a paused plan survives a server restart, and **Continue** picks
+  it up again from that step (the step starts over; earlier steps' answers are
+  kept). While a plan runs, the message box keeps **Send** (a message to the
+  run) and has no Stop; it shows **Stop** instead of Send only while a chat
+  reply streams.
 - When the run ends (every step done, stopped, or failed), the page reads the
   session once more from the server. That is the session it shows and the one
   its next save is based on.
 - While a plan runs the folders can't change: **Session settings** shows "Folders
-  can't change while a plan runs. Stop it or wait until it finishes." and
+  can't change while a plan runs. Pause the plan, stop the reply, or wait until it finishes." and
   turns off choosing and clearing the working directory, and adding and
   removing attachments. The run
   works in the folders it started with, and the server owns the session
   until it ends. A folder the model asks to use, and you allow, is still
   attached, by the run.
-- **Cancel plan** on a running plan stops the run first and waits until it is
-  over, then removes the plan; the removal is an ordinary save.
+- **Discard plan** is on the card only while nothing runs. It asks first, then
+  removes the plan; the removal is an ordinary save. If a run has started since
+  the question was asked, it is stopped first and the page waits until it is over.
 - Deleting a session that is running stops the run first, and so does a run in any session nested under it: the delete takes the whole family or none of it.
 
 ### Messages to a running plan
@@ -506,14 +510,14 @@ nothing starts again by itself: see
 Type in the message box while a plan runs and the message goes to the run
 (a `message` command), not to the model at once. A step starts with a fresh
 context, so the run folds your message in at the next step boundary: after
-**Pause** has let go and before the next step starts, it joins the chat and is
-put in that step's prompt, and in every step after it.
+the step in flight and its check are done and before the next step starts, it
+joins the chat and is put in that step's prompt, and in every step after it.
 
 - The answer comes straight away and says which step will see it. The box
   clears, and the chat shows the message with "Seen by step 3" under it once
   that step starts. Several messages before the same step all go in together.
 - Nothing is queued silently. If no step is left to see it (the last step is
-  already running, or **Stop** was pressed) the message is refused with a plain
+  already running, or **Pause** was pressed) the message is refused with a plain
   reason, and your text stays in the box: send it when the plan has finished,
   as an ordinary message.
 - A message that was accepted but whose plan ended (stopped, failed) before
@@ -542,7 +546,7 @@ in it or it is running a plan.
 - **Resend** on a failed reply cuts the failed reply off, saves the shorter
   chat, then sends the message again. A reply being written takes no second
   message: it is refused with "A reply is still streaming…" and the text stays
-  in the box. **Stop** works as before. A chat reply has no **Pause**.
+  in the box. **Stop** works as before; a chat reply has no **Pause**, only Stop.
 - The reply is made by the same code as before (`runTurn`, the naming, the
   usage and the planning turns work as they did); only where it runs changed.
 
@@ -571,10 +575,10 @@ was going (the `run` record in `session.json`), and settles each one, once:
 
 Nothing starts again by itself: a plan someone wanted to keep running could
 change files or spend a lot of time, so you decide. The plan card shows
-**Continue** (it also does after a **Stop**, since a step was stopped), and
+**Continue** (it also does after a **Pause**, since a step was paused), and
 Continue runs the plan where it is. A server that isn't restarted but is closed
 while the same program goes on (`npm run dev` after a change to its config)
-stops its runs first, as **Stop** does, so they end properly and are not left
+stops its runs first, as **Pause** does, so they end properly and are not left
 running with no server.
 
 ### Who marks a step done
@@ -602,7 +606,7 @@ there as you scroll; later messages go below it. A step's messages show under
 the step, not in the chat.
 
 - Once every step is done, the plan is finished and read-only: no step
-  buttons (rerun, edit, remove) and no **Cancel plan**. Nothing in it runs
+  buttons (rerun, edit, remove) and no **Discard plan**. Nothing in it runs
   again. To redo it, **Clone** starts a new plan with the same steps, all
   pending, at the end of the chat; the original stays as it ran. Clone shows
   only while no other plan is unfinished, since the clone would replace it,
@@ -633,7 +637,7 @@ the step, not in the chat.
   stopped the run yourself, the report is a plain sentence made from the
   steps instead (for example "Step 2 failed. Open the thread to see what
   happened."). The note shows the outcome as soon as the run ends, and the
-  report a moment later. Running the plan again (Continue, Resume or
+  report a moment later. Running the plan again (Continue or
   Restart) puts the spinner back and hides the old report until the new run
   ends.
 - If the server restarts while the thread runs, the note says **Not finished
@@ -648,12 +652,15 @@ the step, not in the chat.
   message when the chat opens, so new messages go below it. A plan whose
   turn is compacted away moves to the top, where that turn was.
 
-### Cancelling a plan
+### Pausing and discarding a plan
 
-**Cancel plan** on the card asks first, then removes the plan. If it's
-running, it stops the run first (on the server) and waits until it is over. The steps' messages stay in the chat, and
-what they changed stays changed; finished plans above it stay too. A
-finished plan can't be cancelled.
+**Pause** on the card ends a running plan at once and keeps it: the step in
+flight goes back to pending and **Continue** picks it up. A paused plan can wait
+as long as you like.
+
+**Discard plan** is for a plan that isn't running: it asks first, then removes
+the plan. The steps' messages stay in the chat, and what they changed stays
+changed; finished plans above it stay too. A finished plan can't be discarded.
 
 ### Step times
 
@@ -713,7 +720,7 @@ step that was running when the page closed comes back as pending.
     reconnects by itself). `GET /api/events` is for the list: it starts with
     the runs live now, then sends a `saved` event (the list row and the new
     revision) for each save or rename, `removed` for a delete, `status`
-    when a run starts, pauses, asks something or ends, and `thread` when a
+    when a run starts, asks something or ends, and `thread` when a
     thread's run ends and its note in the chat that started it changes (see
     [Where plans show](#where-plans-show)). The Sessions panel
     follows it, so a session saved or deleted in another window changes its

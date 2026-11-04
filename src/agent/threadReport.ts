@@ -107,7 +107,7 @@ export function fallbackReport(input: Pick<ReportInput, "steps" | "error" | "sto
   const waiting = steps.find((s) => s.status === "waiting");
   if (waiting) return `Step ${at(waiting)} stopped to ask you a question.${note(waiting)} Answer it in the thread to go on.`;
   if (steps.every((s) => s.status === "done")) return steps.length === 1 ? "The one step is done." : `All ${steps.length} steps are done.`;
-  if (input.stopped) return `You stopped it after ${count}. Continue in the thread to go on.`;
+  if (input.stopped) return `You paused it after ${count}. Continue in the thread to go on.`;
   if (input.error) return `It stopped after ${count}. ${sentence(clip(input.error, NOTE_MAX))} Continue in the thread to try again.`;
   return `${count} are done, and the plan isn't finished. Continue in the thread to go on.`;
 }

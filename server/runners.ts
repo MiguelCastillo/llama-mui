@@ -8,7 +8,7 @@
 //
 //  - One entry per session with a run. The entry holds the live Session (the
 //    hub reads it through `session`, so a rename during the run goes into it
-//    and its next save doesn't undo that), and the Pause state.
+//    and its next save doesn't undo that).
 //  - Saving goes through the hub (hub.save, debounced here), so every write
 //    bumps the revision and a page's own save is refused meanwhile.
 //  - The run's state (status, the pending ask, whether a request is in flight,
@@ -23,8 +23,6 @@
 //
 // Status is derived, in this order:
 //   waiting  an ask is pending (approval, access, location)
-//   pausing  Pause was pressed; the step in flight and its check finish first
-//   paused   the gate holds, before the next step
 //   running
 // A message from the user to the run (sendNote) is folded in before the next
 // step, never queued silently: it is acknowledged with the step that will see
@@ -32,7 +30,6 @@
 // When the run is over (for any reason) its entry is gone and the hub's run
 // record with it: the session is the page's again, and the page learns how it
 // ended from the `status` event (run null, and `error` if it went wrong).
-// Pause is only a run status: it is not saved, and no step has it.
 // A run in a thread (a session with a parent that has a note for it) ends with
 // a report to that parent: how it ended and a sentence or two (threadReport.ts).
 //
@@ -90,9 +87,6 @@ interface Entry {
   // part of the run record, so a page that connects later shows them.
   notes: hub.RunNote[];
   controller: AbortController | null;
-  // Pause was pressed; `release` is set while the gate holds.
-  pauseRequested: boolean;
-  release: ((go: boolean) => void) | null;
   stopRequested: boolean;
   ended: boolean;
   // Dropped by resetRunners (tests): nothing is reported for it.
@@ -132,7 +126,6 @@ function liveEntry(id: string): Entry {
 
 function statusOf(e: Entry): hub.RunStatus {
   if (e.ask) return "waiting";
-  if (e.pauseRequested) return e.release ? "paused" : "pausing";
   return "running";
 }
 
@@ -265,7 +258,7 @@ function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
 // ── messages to the run ──────────────────────────────────────────────────────
 
 // The step that starts next: after the one in flight, or the first open one if
-// none is (Pause holds, or a step just ended). The way runPlan picks: the first
+// none is (a step just ended). The way runPlan picks: the first
 // step that isn't done, and none at all if that one is disputed.
 function nextStep(e: Entry): { id: string; number: number } | null {
   const plan = e.session.plan ?? [];
@@ -281,7 +274,7 @@ function ack(e: Entry, note: hub.RunNote, seen: { step: number; stepId: string }
 }
 
 // A message from the user to the running plan. It is folded in at the next step
-// boundary, after the pause gate: the step that starts next gets it in its
+// boundary, after the gate: the step that starts next gets it in its
 // prompt (a step starts with a fresh context, so it would not see it
 // otherwise), and so does every step after it. The answer, and an `ack` event,
 // say which step that is, at once. Nothing is queued silently: with no step
@@ -372,7 +365,7 @@ export function startRunner(
 // new message, and `planning` is the page's planning switch (the turn only
 // writes a plan, see PLANNING_NOTE). It is a run like a plan's, with the same
 // owner, status, asks, Stop and events, but one reply long: no steps, so no
-// Pause and no messages to it (see sendNote), and nothing is reported to a
+// Pause (it only has Stop) and no messages to it (see sendNote), and nothing is reported to a
 // parent. Refused (409) if the session has a run already.
 export function startTurn(
   id: string,
@@ -417,8 +410,6 @@ async function launch(
     error: null,
     notes: [],
     controller: null,
-    pauseRequested: false,
-    release: null,
     stopRequested: false,
     ended: false,
     discarded: false,
@@ -517,18 +508,8 @@ async function launch(
     toolDefinitions: env.toolContext.definitions,
     // Messages the user sent join the chat, and the next step's prompt.
     userNotes: (step) => takeNotes(e, step),
-    // Pause holds here, before the next step; Stop ends the plan.
-    gate: () => {
-      if (e.stopRequested) return Promise.resolve(false);
-      if (!e.pauseRequested) return Promise.resolve(true);
-      return new Promise<boolean>((resolve) => {
-        e.release = (go) => {
-          e.release = null;
-          resolve(go);
-        };
-        sync(e);
-      });
-    },
+    // No step starts once the run was stopped (Pause on the card).
+    gate: () => Promise.resolve(!e.stopRequested),
   };
 
   e.done = resolved
@@ -555,14 +536,13 @@ async function end(e: Entry) {
   const stopped = e.stepAtStop && e.session.plan?.find((st) => st.id === e.stepAtStop);
   if (stopped && (stopped.status === "pending" || stopped.status === "running")) {
     const keep = stopped.answer ? { answer: stopped.answer, asked: stopped.asked } : {};
-    patchStep(e, stopped.id, { status: "pending", note: "Stopped", ...keep });
+    patchStep(e, stopped.id, { status: "pending", note: "Paused", ...keep });
   }
   dropNotes(e);
   await e.chain; // the run record is current before it goes
   e.ended = true;
   e.runningStep = null;
   e.controller = null;
-  e.release?.(false);
   e.ask?.decide(false);
   clearSaveTimers(e);
   store.delete(e.id);
@@ -575,29 +555,10 @@ async function end(e: Entry) {
 
 // ── commands ─────────────────────────────────────────────────────────────────
 
-// Pause: the step in flight and its check finish, then the run holds before
-// the next step. Pausing twice is fine.
-export async function pauseRun(id: string) {
-  const e = liveEntry(id);
-  if (e.kind === "turn") {
-    throw new HttpError(409, "A single reply can't be paused. Stop it instead.", { reason: "not a plan" });
-  }
-  if (e.pauseRequested) return;
-  e.pauseRequested = true;
-  await sync(e);
-}
-
-export async function resumeRun(id: string) {
-  const e = liveEntry(id);
-  if (!e.pauseRequested) return;
-  e.pauseRequested = false;
-  e.release?.(true);
-  await sync(e);
-}
-
-// Stop is immediate: the request is aborted, a held gate and a pending ask are
-// released. The run is over once runPlan returns; the step in flight stays
-// pending, with the note "Stopped". Answers when the run is over, or after
+// Stop is immediate (it is the card's Pause, and a reply's Stop): the request
+// is aborted and a pending ask is turned down. The run is over once runPlan
+// returns; the step in flight goes back to pending, with the note "Paused",
+// and the plan stays for `run` to pick up. Answers when the run is over, or after
 // STOP_WAIT_MS if it still isn't (it goes on stopping).
 export async function stopRun(id: string) {
   const e = liveEntry(id);
@@ -606,7 +567,6 @@ export async function stopRun(id: string) {
     e.stepAtStop = e.runningStep;
     e.controller?.abort();
     e.ask?.decide(false);
-    e.release?.(false);
     sync(e);
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -656,7 +616,6 @@ export async function resetRunners() {
     e.discarded = true;
     clearSaveTimers(e);
     e.controller?.abort();
-    e.release?.(false);
     e.ask?.decide(false);
     await hub.endRun(e.id).catch(() => {});
   }

@@ -68,9 +68,7 @@ export function PlanView({
   onCancel,
   onClone,
   prompt,
-  control,
   onPause,
-  onResume,
 }: {
   steps: PlanStep[];
   // One short sentence the model wrote on what this plan does; shown at the top.
@@ -102,12 +100,9 @@ export function PlanView({
   // folder), shown under that step: at the bottom of the chat, it meant
   // scrolling between it and the plan's progress.
   prompt?: ReactNode;
-  // The Pause control while the plan runs (see pauseControl in runView.ts): a
-  // short caption, and the button, if any. `running` stays true while paused,
-  // so the steps stay uneditable.
-  control?: { text: string | null; button: "Pause" | "Resume" | null };
+  // Pause, while the plan runs: ends the run at once, even mid-step. The plan
+  // stays, the step in flight goes back to pending, and Continue picks it up.
   onPause?: () => void;
-  onResume?: () => void;
 }) {
   // Once every step is done, nothing in the plan runs again: no rerun, edit
   // or cancel. Redoing work is a new plan, from a new message.
@@ -190,35 +185,25 @@ export function PlanView({
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
           Plan · {done} of {steps.length} done
         </Typography>
-        {control?.text && (
-          <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
-            {control.text}
-          </Typography>
-        )}
         {since != null && counter && <Box sx={{ mr: 1 }}>{counter(since)}</Box>}
-        {control?.button === "Pause" && onPause && (
-          <Button size="small" onClick={onPause} sx={{ mr: 1 }}>
+        {running && onPause && (
+          <Button size="small" onClick={onPause}>
             Pause
           </Button>
         )}
-        {control?.button === "Resume" && onResume && (
-          <Button size="small" onClick={onResume} sx={{ mr: 1 }}>
-            Resume
-          </Button>
-        )}
-        {/* Also while it runs: chat stops it first, then removes the plan. */}
+        {/* Removing the plan is for a plan that isn't running: pause it first. */}
         {onClone && readOnly && (
           <Button size="small" onClick={onClone}>
             Clone
           </Button>
         )}
-        {onCancel && !readOnly && (
+        {onCancel && !readOnly && !running && (
           <Button size="small" onClick={onCancel} sx={{ mr: unfinished ? 1 : 0 }}>
-            Cancel plan
+            Discard plan
           </Button>
         )}
-        {unfinished && onRun && (
-          <Button size="small" variant="contained" startIcon={<PlayArrowIcon />} onClick={onRun} disabled={running}>
+        {unfinished && onRun && !running && (
+          <Button size="small" variant="contained" startIcon={<PlayArrowIcon />} onClick={onRun}>
             {started ? "Continue" : "Run"}
           </Button>
         )}

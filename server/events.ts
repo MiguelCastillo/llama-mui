@@ -6,7 +6,7 @@
 //   GET /api/events                 everything, for the sessions list. First
 //                                   event `snapshot`: { runs: [{ id, run }] }, the
 //                                   runs live now. Then, as they happen: `status`
-//                                   (a run started, paused, asked, ended: data.run
+//                                   (a run started, asked, ended: data.run
 //                                   is its state, or null), `saved` (data.summary is
 //                                   the list row, data.revision the new revision),
 //                                   `removed`, `thread`. Never the chat itself.

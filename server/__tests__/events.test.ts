@@ -118,11 +118,11 @@ describe("GET /api/sessions/<id>/events", () => {
     await put("s-b", { messages: [{ role: "user", content: "old" }] });
     const live: any = { id: "s-b", title: "Chat", messages: [{ role: "user", content: "old" }, { role: "assistant", content: "newer, not saved yet" }] };
     await hub.beginRun("s-b", { session: () => live });
-    await hub.updateRun("s-b", { status: "paused" });
+    await hub.updateRun("s-b", { status: "waiting" });
     const stream = await listen("/sessions/s-b/events");
     await stream.until((e) => e.length >= 1);
     const snap = stream.events[0].data;
-    expect(snap.run).toMatchObject({ status: "paused" });
+    expect(snap.run).toMatchObject({ status: "waiting" });
     expect(snap.session.messages).toHaveLength(2);
     expect(snap.revision).toBeGreaterThan(1);
     await hub.endRun("s-b");

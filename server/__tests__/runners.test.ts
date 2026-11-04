@@ -214,200 +214,6 @@ describe("start and status", () => {
   });
 });
 
-describe("pause", () => {
-  it("holds after the step in flight, and resume continues", async () => {
-    await start("a");
-    await flush();
-
-    await runners.pauseRun("a");
-    expect(statusOf("a")).toBe("pausing");
-    // The step in flight is not interrupted.
-    expect(stepStatuses("a")).toEqual(["running", "pending", "pending"]);
-    expect(run("a")!.streaming).toBe(true);
-
-    finish("a", "s1");
-    await flush();
-    expect(statusOf("a")).toBe("paused");
-    expect(stepStatuses("a")).toEqual(["done", "pending", "pending"]);
-    expect(started).toEqual(["s1"]);
-    expect(run("a")!.streaming).toBeUndefined();
-    // Time passing doesn't start the next step.
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(started).toEqual(["s1"]);
-
-    await runners.resumeRun("a");
-    await flush();
-    expect(statusOf("a")).toBe("running");
-    expect(started).toEqual(["s1", "s2"]);
-
-    finish("a", "s2");
-    finish("a", "s3");
-    await flush();
-    expect(fileOf("a").plan.map((s: any) => s.status)).toEqual(["done", "done", "done"]);
-    expect(statuses("a")).toEqual(["running", "pausing", "paused", "running", "over"]);
-  });
-
-  it("pausing and resuming before the step ends never holds", async () => {
-    await start("a");
-    await flush();
-    await runners.pauseRun("a");
-    await runners.resumeRun("a");
-    expect(statusOf("a")).toBe("running");
-    finish("a", "s1");
-    await flush();
-    expect(started).toEqual(["s1", "s2"]);
-    expect(statusOf("a")).toBe("running");
-  });
-
-  it("pausing twice, or resuming without a pause, changes nothing", async () => {
-    await start("a");
-    await flush();
-    await runners.resumeRun("a");
-    expect(statusOf("a")).toBe("running");
-    await runners.pauseRun("a");
-    await runners.pauseRun("a");
-    expect(statusOf("a")).toBe("pausing");
-  });
-
-  it("a pause during an ask stays waiting, then pauses after the step", async () => {
-    askOn("a", "s1", approval);
-    await start("a");
-    await flush();
-    expect(statusOf("a")).toBe("waiting");
-
-    await runners.pauseRun("a");
-    expect(statusOf("a")).toBe("waiting");
-
-    await runners.answerAsk("a", run("a")!.ask!.id, true);
-    await flush();
-    expect(askedAnswer("a", "s1")).toBe(true);
-    expect(statusOf("a")).toBe("pausing");
-
-    finish("a", "s1");
-    await flush();
-    expect(statusOf("a")).toBe("paused");
-    expect(started).toEqual(["s1"]);
-  });
-
-  it("is refused for a session without a run, or one that ended", async () => {
-    expect(await reasonOf(runners.pauseRun("nope"))).toEqual({ status: 409, reason: "not running" });
-    expect(await reasonOf(runners.resumeRun("nope"))).toEqual({ status: 409, reason: "not running" });
-    await start("a", 1);
-    finish("a", "s1");
-    await flush();
-    expect(await reasonOf(runners.pauseRun("a"))).toEqual({ status: 409, reason: "not running" });
-  });
-});
-
-describe("asks", () => {
-  it("holds in waiting with the ask stored as plain data, and an answer continues", async () => {
-    askOn("a", "s1", approval);
-    await start("a");
-    await flush();
-
-    expect(statusOf("a")).toBe("waiting");
-    const ask = run("a")!.ask!;
-    expect(ask).toMatchObject({ kind: "approval", details: { name: "run_command" } });
-    expect(typeof ask.id).toBe("string");
-    // Plain data: it goes through JSON unchanged, and is in the saved file.
-    expect(JSON.parse(JSON.stringify(ask))).toEqual(ask);
-    expect(fileOf("a").run.ask).toEqual(ask);
-    expect(events.filter((e) => e.type === "ask").at(-1).data).toEqual({ ask });
-    expect(askedAnswer("a", "s1")).toBeUndefined();
-
-    await runners.answerAsk("a", ask.id, true);
-    await flush();
-    expect(askedAnswer("a", "s1")).toBe(true);
-    expect(statusOf("a")).toBe("running");
-    expect(run("a")!.ask).toBeUndefined();
-    expect(events.filter((e) => e.type === "ask").at(-1).data).toEqual({ ask: null });
-  });
-
-  it("knows an access ask and a location ask by their kind", async () => {
-    askOn("a", "s1", { needsAccess: { path: "/x", kind: "folder" } });
-    await start("a", 1);
-    await flush();
-    expect(run("a")!.ask).toMatchObject({ kind: "access", details: { path: "/x", kind: "folder" } });
-    await runners.answerAsk("a", run("a")!.ask!.id, false);
-    await flush();
-    expect(askedAnswer("a", "s1")).toBe(false);
-
-    askOn("b", "s1", { needsLocation: { description: "the notes", kind: "folder" } });
-    await start("b", 1);
-    await flush();
-    expect(run("b")!.ask).toMatchObject({ kind: "location", details: { description: "the notes", kind: "folder" } });
-  });
-
-  it("passes on what the user picked for a path", async () => {
-    askOn("a", "s1", { needsLocation: { description: "the notes", kind: "folder" } });
-    await start("a", 1);
-    await flush();
-    const picked = [{ kind: "folder", path: "/x" }] as Answer;
-    await runners.answerAsk("a", run("a")!.ask!.id, picked);
-    await flush();
-    expect(askedAnswer("a", "s1")).toEqual(picked);
-  });
-
-  it("refuses an answer of the wrong kind and keeps waiting", async () => {
-    askOn("a", "s1", { needsLocation: { description: "the notes", kind: "folder" } });
-    await start("a", 1);
-    await flush();
-    const id = run("a")!.ask!.id;
-    expect(await reasonOf(runners.answerAsk("a", id, true))).toEqual({ status: 409, reason: "wrong answer" });
-    expect(statusOf("a")).toBe("waiting");
-
-    askOn("b", "s1", approval);
-    await start("b", 1);
-    await flush();
-    expect(await reasonOf(runners.answerAsk("b", run("b")!.ask!.id, [{ kind: "file", path: "/x" }]))).toEqual({
-      status: 409,
-      reason: "wrong answer",
-    });
-    expect(statusOf("b")).toBe("waiting");
-  });
-
-  it("the first answer wins: the same ask answered again is stale", async () => {
-    askOn("a", "s1", approval);
-    await start("a", 1);
-    await flush();
-    const id = run("a")!.ask!.id;
-    await runners.answerAsk("a", id, true);
-    expect(await reasonOf(runners.answerAsk("a", id, false))).toEqual({ status: 409, reason: "stale ask" });
-    await flush();
-    expect(askedAnswer("a", "s1")).toBe(true);
-  });
-
-  it("an answer to an earlier ask is stale once the run asks again, and so is one for nothing asked", async () => {
-    askOn("a", "s1", approval);
-    askOn("a", "s2", approval);
-    await start("a", 2);
-    await flush();
-    const first = run("a")!.ask!.id;
-    await runners.answerAsk("a", first, true);
-    finish("a", "s1");
-    await flush();
-    const second = run("a")!.ask!.id;
-    expect(second).not.toBe(first);
-    expect(await reasonOf(runners.answerAsk("a", first, true))).toEqual({ status: 409, reason: "stale ask" });
-    expect(statusOf("a")).toBe("waiting");
-
-    await start("b", 1);
-    await flush();
-    expect(await reasonOf(runners.answerAsk("b", "anything", true))).toEqual({ status: 409, reason: "stale ask" });
-    expect(await reasonOf(runners.answerAsk("nope", "anything", true))).toEqual({ status: 409, reason: "not running" });
-    expect(statusOf("b")).toBe("running");
-  });
-
-  it("waits for as long as it takes", async () => {
-    askOn("a", "s1", approval);
-    await start("a");
-    await flush();
-    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-    expect(statusOf("a")).toBe("waiting");
-    expect(run("a")!.ask).toBeDefined();
-  });
-});
-
 describe("two sessions", () => {
   it("run independently", async () => {
     await start("a");
@@ -415,18 +221,15 @@ describe("two sessions", () => {
     await flush();
     expect(started).toEqual(["s1", "s1"]);
 
-    await runners.pauseRun("a");
-    finish("a", "s1");
     finish("b", "s1");
     finish("b", "s2");
     await flush();
-
-    expect(statusOf("a")).toBe("paused");
-    expect(stepStatuses("a")).toEqual(["done", "pending", "pending"]);
     expect(run("b")).toBeNull();
     expect(fileOf("b").plan.map((s: any) => s.status)).toEqual(["done", "done"]);
+    expect(statusOf("a")).toBe("running");
+    expect(stepStatuses("a")).toEqual(["running", "pending", "pending"]);
 
-    await runners.resumeRun("a");
+    finish("a", "s1");
     finish("a", "s2");
     finish("a", "s3");
     await flush();
@@ -463,14 +266,14 @@ describe("two sessions", () => {
     await start("a");
     await start("b");
     await flush();
-    await runners.pauseRun("b");
-    expect(events.filter((e) => e.id === "a" && e.type === "status").every((e) => e.data.run?.status !== "pausing")).toBe(true);
-    expect(statuses("b")).toContain("pausing");
+    await runners.stopRun("b");
+    expect(events.filter((e) => e.id === "a" && e.type === "status").every((e) => e.data.run !== null)).toBe(true);
+    expect(events.filter((e) => e.id === "b" && e.type === "status").at(-1).data).toEqual({ run: null });
   });
 });
 
 describe("stop", () => {
-  it("aborts the request, notes the step in flight 'Stopped', and answers once the run is over", async () => {
+  it("aborts the request, notes the step in flight 'Paused', and answers once the run is over", async () => {
     await start("a");
     await flush();
     await runners.stopRun("a");
@@ -478,26 +281,11 @@ describe("stop", () => {
     const saved = fileOf("a");
     const [s1, s2] = saved.plan;
     expect(s1.status).toBe("pending");
-    expect(s1.note).toBe("Stopped");
+    expect(s1.note).toBe("Paused");
     expect(s2.note).toBeUndefined();
     expect(started).toEqual(["s1"]);
     expect(saved.run).toBeUndefined();
     expect(events.filter((e) => e.type === "status").at(-1).data).toEqual({ run: null });
-  });
-
-  it("releases a pause", async () => {
-    await start("a");
-    await flush();
-    await runners.pauseRun("a");
-    finish("a", "s1");
-    await flush();
-    expect(statusOf("a")).toBe("paused");
-
-    await runners.stopRun("a");
-    expect(run("a")).toBeNull();
-    expect(fileOf("a").plan.map((s: any) => s.status)).toEqual(["done", "pending", "pending"]);
-    expect(fileOf("a").plan[1].note).toBeUndefined();
-    expect(started).toEqual(["s1"]);
   });
 
   it("releases a pending ask as a denial", async () => {
@@ -508,7 +296,7 @@ describe("stop", () => {
     await runners.stopRun("a");
     expect(askedAnswer("a", "s1")).toBe(false);
     expect(run("a")).toBeNull();
-    expect(fileOf("a").plan[0].note).toBe("Stopped");
+    expect(fileOf("a").plan[0].note).toBe("Paused");
     expect(fileOf("a").run).toBeUndefined();
   });
 

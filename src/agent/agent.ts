@@ -523,7 +523,7 @@ export interface RunPlanCallbacks {
   thinkOn: boolean;
   toolDefinitions: unknown[];
   // Awaited before each step, once the previous step and its check are done.
-  // It may hold (Pause); false ends the plan, leaving later steps pending.
+  // It may wait; false ends the plan, leaving later steps pending.
   gate?: () => Promise<boolean>;
   // Called before each step, right after the gate. Returns the messages the
   // user sent while the plan ran and no step has seen yet (user messages, in
@@ -559,9 +559,9 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       let steps = planRef.current;
       let i = steps?.findIndex((st) => st.status !== "done") ?? -1;
       if (!steps || i < 0 || steps[i].status === "disputed") break;
-      // Pause holds here, after the previous step and its check. The gate
-      // resolves false to end the plan (Stop). The plan may have changed while
-      // it held, so the next step is read again.
+      // The gate is asked after the previous step and its check. It resolves
+      // false to end the plan (it was stopped). The plan may have changed
+      // meanwhile, so the next step is read again.
       if (gate) {
         if (!(await gate())) break;
         steps = planRef.current;

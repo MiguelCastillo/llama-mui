@@ -41,7 +41,7 @@ export const AttachmentIcon = ({ kind }: { kind: Attachment["kind"] }) =>
 type SectionId = "workingDir" | "attachments";
 
 // Shown, and used as the error, when the working directory or attachments are changed while a plan or a reply runs.
-export const ATTACHMENTS_LOCKED_NOTE = "Folders can't change while a plan or a reply is running. Stop it or wait until it finishes.";
+export const ATTACHMENTS_LOCKED_NOTE = "Folders can't change while a plan or a reply is running. Pause the plan, stop the reply, or wait until it finishes.";
 
 // Button next to the message box that opens this chat's settings: its working
 // directory and what's attached. Laid out like Settings, but everything here

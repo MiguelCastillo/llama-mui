@@ -23,7 +23,7 @@ import { HttpError } from "./http.ts";
 import { readSession, revisionOf, summaryOf, writeSession } from "./sessionFile.ts";
 import { copyForEvents, diffSession } from "./sessionPatch.ts";
 
-export type RunStatus = "running" | "pausing" | "paused" | "waiting" | "stopped";
+export type RunStatus = "running" | "waiting" | "stopped";
 
 // A question the run is waiting on, as plain data. Whatever answers it stays in
 // memory; a command with this id is what resolves it.

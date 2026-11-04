@@ -81,7 +81,7 @@ describe("markInterrupted", () => {
   it("puts a message no step had seen into the chat, marked as not seen", () => {
     const out = markInterrupted(
       { plan: [step("s1", "pending")], messages: [{ role: "user", content: "Go" }] },
-      { status: "paused", startedAt: 1, notes: [{ id: "n1", text: "Use tabs", step: 1, stepId: "s1" }] },
+      { status: "waiting", startedAt: 1, notes: [{ id: "n1", text: "Use tabs", step: 1, stepId: "s1" }] },
     );
     expect(out.messages.at(-1)).toEqual({ role: "user", content: "Use tabs", notSeen: true });
     // Nothing was in flight, so the earlier failure state stays as it was.

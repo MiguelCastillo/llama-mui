@@ -29,7 +29,7 @@ import { applyPatch, type SessionPatch } from "../server/sessionPatch";
 import type { Answer, Ask } from "./runnerTypes";
 import { type RunnerView, needsYou } from "./runView";
 
-export { isLive, needsYou, pauseControl, type RunnerStatus, type RunnerView } from "./runView";
+export { isLive, needsYou, type RunnerStatus, type RunnerView } from "./runView";
 
 // What a run needs from the page to start: the choices on screen. The server
 // looks up the connector (and its key, which the page never sees), the models
@@ -367,13 +367,9 @@ export async function startRun(id: string, options: RunOptions): Promise<string>
   return sessionId;
 }
 
-// Pause: the step in flight and its check finish, then the run holds before
-// the next step.
-export const pause = (id: string) => quiet(sendCommand(id, "pause"));
-export const resume = (id: string) => quiet(sendCommand(id, "resume"));
-
-// Stop is immediate. Answers once the run is over and its final session is in
-// hand (see subscribe), so what the page does next starts from that.
+// Stop is immediate: the plan card's Pause, and a reply's Stop. The plan stays.
+// Answers once the run is over and its final session is in hand (see
+// subscribe), so what the page does next starts from that.
 export async function stop(id: string): Promise<void> {
   await quiet(sendCommand(id, "stop"));
   await waitUntil(() => !lives.has(id) && !ending.has(id), STOP_WAIT_MS);

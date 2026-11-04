@@ -10,9 +10,9 @@
 //            A plan that hasn't started moves into a new thread and runs
 //            there; the answer says which session it runs in (`sessionId`)
 //            and the page opens it.
-//   pause    after the step in flight and its check, hold before the next step
-//   resume   go on
-//   stop     end the run now; answers once it is over
+//   stop     end the run now; answers once it is over. The plan stays, the
+//            step in flight goes back to pending, and `run` picks it up. A plan
+//            card calls it Pause, a chat reply Stop.
 //   approve  { askId, allow }   yes or no to an access or approval question
 //            (a no also turns down a question that asks for a path)
 //   answer   { askId, paths: [{ path, kind }] }   the files or folders picked
@@ -115,12 +115,6 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
       extra = { sessionId: target };
       break;
     }
-    case "pause":
-      await runners.pauseRun(id);
-      break;
-    case "resume":
-      await runners.resumeRun(id);
-      break;
     case "stop":
       await runners.stopRun(id);
       break;

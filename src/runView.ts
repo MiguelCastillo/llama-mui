@@ -5,7 +5,7 @@
 import type { Session } from "./api";
 import type { Answer, Ask } from "./runnerTypes";
 
-export type RunnerStatus = "running" | "pausing" | "paused" | "waiting" | "stopped";
+export type RunnerStatus = "running" | "waiting" | "stopped";
 
 // What a listener sees. A new object after every change.
 export interface RunnerView {
@@ -32,9 +32,9 @@ export interface RunnerView {
   notes: { id: string; text: string; step: number }[];
 }
 
-// A run is in progress from when it starts until it ends: running, pausing,
-// paused and waiting on an ask all count. The server owns the session for that
-// whole time (it refuses to delete it, among other things).
+// A run is in progress from when it starts until it ends: running and waiting
+// on an ask both count. The server owns the session for that whole time (it
+// refuses to delete it, among other things).
 export function isLive(view: RunnerView | undefined | null): boolean {
   return !!view && view.status !== "stopped";
 }
@@ -45,23 +45,4 @@ export function needsYou(view: RunnerView | undefined | null): boolean {
   if (!view) return false;
   if (view.ask) return true;
   return view.status === "stopped" && !!view.session?.plan?.some((st) => st.status === "waiting");
-}
-
-// The plan card's Pause control: a short caption, and the button, if any.
-// Pause only while running; Resume while paused. While it is pausing, or
-// waiting on an ask, there is nothing to press.
-export function pauseControl(status: RunnerStatus | undefined | null): {
-  text: string | null;
-  button: "Pause" | "Resume" | null;
-} {
-  switch (status) {
-    case "running":
-      return { text: null, button: "Pause" };
-    case "pausing":
-      return { text: "Pausing after this step", button: null };
-    case "paused":
-      return { text: "Paused", button: "Resume" };
-    default:
-      return { text: null, button: null };
-  }
 }

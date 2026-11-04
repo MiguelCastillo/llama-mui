@@ -208,11 +208,11 @@ describe("a session with a run in progress", () => {
   it("keeps the run's state to plain data: no functions, nothing the page's copy added", async () => {
     await call("PUT", ["run-h"], chat("run-h"));
     await hub.beginRun("run-h", fakeRun({ ...chat("run-h") }));
-    await hub.updateRun("run-h", { status: "paused" });
+    await hub.updateRun("run-h", { status: "waiting" });
     const state = hub.liveRun("run-h")!;
     expect(JSON.parse(JSON.stringify(state))).toEqual(state);
     state.status = "stopped"; // a copy: changing it changes nothing in the hub
-    expect(hub.liveRun("run-h")!.status).toBe("paused");
+    expect(hub.liveRun("run-h")!.status).toBe("waiting");
     await hub.endRun("run-h");
   });
 });

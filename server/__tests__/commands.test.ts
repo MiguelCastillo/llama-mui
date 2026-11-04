@@ -113,19 +113,12 @@ describe("run", () => {
   });
 });
 
-describe("pause, resume and stop", () => {
-  it("pause holds after the step, resume continues, stop ends it", async () => {
+describe("stop", () => {
+  it("ends the run now and answers once it is over, keeping the plan", async () => {
     saved("a");
     await command("a", "run", options);
     await settle();
-
-    expect((await command("a", "pause")).body).toMatchObject({ ok: true });
-    expect(hub.liveRun("a")!.status).toBe("pausing");
     finish("a", "s1");
-    await vi.waitFor(() => expect(hub.liveRun("a")!.status).toBe("paused"));
-    expect(started).toEqual(["s1"]);
-
-    expect((await command("a", "resume")).status).toBe(200);
     await vi.waitFor(() => expect(started).toEqual(["s1", "s2"]));
     expect(hub.liveRun("a")!.status).toBe("running");
 
@@ -135,15 +128,18 @@ describe("pause, resume and stop", () => {
     expect(hub.liveRun("a")).toBeNull();
     expect(stopped.body.revision).toBe(fileOf("a").revision);
     expect(fileOf("a").plan.map((s: any) => s.status)).toEqual(["done", "pending"]);
-    expect(fileOf("a").plan[1].note).toBe("Stopped");
+    expect(fileOf("a").plan[1].note).toBe("Paused");
   });
 
-  it("are refused with a plain reason when nothing runs", async () => {
+  it("is refused with a plain reason when nothing runs", async () => {
     saved("a");
-    for (const name of ["pause", "resume", "stop"]) {
-      const r = await command("a", name);
-      expect(r).toMatchObject({ status: 409, body: { reason: "not running", error: "No plan is running in this session." } });
-    }
+    const r = await command("a", "stop");
+    expect(r).toMatchObject({ status: 409, body: { reason: "not running", error: "No plan is running in this session." } });
+  });
+
+  it("is the only way to end a run: pause and resume are unknown commands", async () => {
+    saved("a");
+    for (const name of ["pause", "resume"]) expect((await command("a", name)).status).toBe(404);
   });
 });
 
@@ -334,7 +330,7 @@ describe("the route", () => {
   it("answers an unknown command 404, a GET 405 and a bad id 400", async () => {
     saved("a");
     expect((await command("a", "explode")).status).toBe(404);
-    expect((await command("a", "pause", {}, "GET")).status).toBe(405);
-    expect((await command("../x", "pause")).status).toBe(400);
+    expect((await command("a", "stop", {}, "GET")).status).toBe(405);
+    expect((await command("../x", "stop")).status).toBe(400);
   });
 });
