@@ -2215,14 +2215,15 @@ function PendingPrompt({ ask, onDecide }: { ask: Ask; onDecide: (answer: Answer)
   }
   const { path, kind } = ask.needsAccess;
   if (kind) return <AccessPrompt target={{ path, kind }} onDecide={onDecide} />;
+  // A name with an extension is probably a file.
+  const likelyFile = /\.[^/]+$/.test(path);
   return (
     <FindPrompt
-      heading="The model is looking for this, but nothing is there:"
+      heading={likelyFile ? "File not found:" : "Directory not found:"}
       subject={path}
       isPath
       icon={<SearchOffIcon fontSize="small" />}
-      // A name with an extension is probably a file.
-      kinds={/\.[^/]+$/.test(path) ? ["file", "folder"] : ["folder", "file"]}
+      kinds={likelyFile ? ["file", "folder"] : ["folder", "file"]}
       onDecide={onDecide}
     />
   );
