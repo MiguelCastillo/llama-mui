@@ -117,14 +117,6 @@ export function PlanView({
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  // Steps whose instruction is shown under "Details"; collapsed by default.
-  const [shown, setShown] = useState<Set<string>>(new Set());
-  const toggleShown = (id: string) =>
-    setShown((o) => {
-      const next = new Set(o);
-      if (!next.delete(id)) next.add(id);
-      return next;
-    });
   const done = steps.filter((s) => s.status === "done").length;
   // A disputed step waits for the user, so Run would only stop on it again.
   // A waiting step (a question for the user) reruns without an answer on
@@ -165,7 +157,7 @@ export function PlanView({
   return (
     <Paper variant="outlined" sx={{ p: 1.5 }}>
       {summary && (
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+        <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
           {summary}
         </Typography>
       )}
@@ -177,15 +169,18 @@ export function PlanView({
             </Typography>
           </AccordionSummary>
           <AccordionDetails sx={{ pt: 0.75 }}>
-            <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+            <Typography variant="body1" sx={{ whiteSpace: "pre-wrap" }}>
               {context}
             </Typography>
           </AccordionDetails>
         </Accordion>
       )}
       <Stack direction="row" sx={{ alignItems: "center", mb: 1 }}>
-        <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
+        <Typography variant="body1" sx={{ flexGrow: 1, fontWeight: 500 }}>
           Plan · {done} of {steps.length} done
+          {/* The steps' times added up; with one timed step it would repeat that step's time. */}
+          {steps.filter((s) => s.ms != null).length > 1 &&
+            ` · ${formatTime(steps.reduce((sum, s) => sum + (s.ms ?? 0), 0))}`}
         </Typography>
         {since != null && counter && <Box sx={{ mr: 1 }}>{counter(since)}</Box>}
         {/* Icons, with the words as tooltip and accessible label. */}
@@ -227,6 +222,9 @@ export function PlanView({
       <Stack spacing={0.5}>
         {steps.map((s, i) => {
           const turns = details(s.id);
+          // Nothing to unfold when the line already is the whole text (tidied, as stepLine does).
+          const instruction = stepLine(s) !== s.text.replace(/\s+/g, " ").trim() ? s.text : null;
+          const expandable = !!turns || !!instruction;
           return (
             <Box key={s.id}>
               <Box
@@ -271,46 +269,16 @@ export function PlanView({
                     </Stack>
                   ) : (
                     <>
-                      <Typography variant="body2">
+                      <Typography variant="body1">
                         {i + 1}. {stepLine(s)}
+                        {/* Only a finished step has a time: running or rerunning it clears it. */}
+                        {s.ms != null && (
+                          <Typography variant="caption" color="text.secondary" component="span" sx={{ ml: 1 }}>
+                            {formatTime(s.ms)}
+                          </Typography>
+                        )}
                       </Typography>
-                      {/* Nothing to unfold when the line already is the whole text (tidied, as stepLine does). */}
-                      {stepLine(s) !== s.text.replace(/\s+/g, " ").trim() && (
-                        <>
-                          <Box
-                            component="button"
-                            type="button"
-                            onClick={() => toggleShown(s.id)}
-                            aria-expanded={shown.has(s.id)}
-                            sx={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              p: 0,
-                              border: 0,
-                              bgcolor: "transparent",
-                              color: "text.secondary",
-                              cursor: "pointer",
-                              font: "inherit",
-                              fontSize: "0.75rem",
-                            }}
-                          >
-                            {shown.has(s.id) ? <ExpandLessIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
-                            Details
-                          </Box>
-                          {shown.has(s.id) && (
-                            <Typography variant="caption" color="text.secondary" component="div" sx={{ whiteSpace: "pre-wrap" }}>
-                              {s.text}
-                            </Typography>
-                          )}
-                        </>
-                      )}
                     </>
-                  )}
-                  {/* Only a finished step has a time: running or rerunning it clears it. */}
-                  {s.ms != null && (
-                    <Typography variant="caption" color="text.secondary" component="div">
-                      {formatTime(s.ms)}
-                    </Typography>
                   )}
                   {s.status === "failed" && s.note && (
                     <Typography variant="caption" color="error.main" component="div">
@@ -383,8 +351,8 @@ export function PlanView({
                     </Tooltip>
                   </Box>
                 )}
-                {turns && (
-                  <Tooltip title={open.has(s.id) ? "Hide what happened" : "Show what happened"}>
+                {expandable && (
+                  <Tooltip title={open.has(s.id) ? "Hide details" : "Show the full instruction and what happened"}>
                     <IconButton size="small" onClick={() => toggle(s.id)} aria-expanded={open.has(s.id)}>
                       {open.has(s.id) ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
                     </IconButton>
@@ -392,8 +360,13 @@ export function PlanView({
                 )}
               </Box>
               {s.status === "running" && prompt && <InView>{prompt}</InView>}
-              {turns && open.has(s.id) && (
+              {expandable && open.has(s.id) && (
                 <Stack spacing={1} sx={{ ml: 3.5, mt: 1, mb: 1.5, pl: 1.5, borderLeft: 2, borderColor: "divider" }}>
+                  {instruction && (
+                    <Typography variant="caption" color="text.secondary" component="div" sx={{ whiteSpace: "pre-wrap" }}>
+                      {instruction}
+                    </Typography>
+                  )}
                   {turns}
                 </Stack>
               )}
@@ -401,11 +374,6 @@ export function PlanView({
           );
         })}
       </Stack>
-      {steps.some((s) => s.ms != null) && (
-        <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 1, textAlign: "right" }}>
-          Total {formatTime(steps.reduce((sum, s) => sum + (s.ms ?? 0), 0))}
-        </Typography>
-      )}
       {proposal && onProposal && <ProposalView steps={steps} proposal={proposal} onAnswer={onProposal} />}
     </Paper>
   );
@@ -456,17 +424,17 @@ function ProposalView({
   const removed = steps.filter((s) => !kept.has(s.text));
   return (
     <Box sx={{ mt: 1.5, pt: 1.5, borderTop: 1, borderColor: "divider" }}>
-      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+      <Typography variant="body1" sx={{ mb: 0.5, fontWeight: 500 }}>
         Llama suggests a change to the plan
       </Typography>
       <Stack spacing={0.25} sx={{ mb: 1 }}>
         {proposal.map((s, i) => (
-          <Typography key={s.id} variant="body2" color={old.has(s.text) ? "text.secondary" : "success.main"}>
+          <Typography key={s.id} variant="body1" color={old.has(s.text) ? "text.secondary" : "success.main"}>
             {old.has(s.text) ? " " : "+"} {i + 1}. {stepLine(s)}
           </Typography>
         ))}
         {removed.map((s) => (
-          <Typography key={s.id} variant="body2" color="error.main" sx={{ textDecoration: "line-through" }}>
+          <Typography key={s.id} variant="body1" color="error.main" sx={{ textDecoration: "line-through" }}>
             − {stepLine(s)}
           </Typography>
         ))}

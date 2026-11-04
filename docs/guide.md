@@ -291,10 +291,10 @@ vitest (`npm test`).
 - **Summaries**: every step also has a short `summary`, a to-do line of about
   8 words (at most 80 characters) such as "Make a stuck step retry twice",
   and the plan can have a one-sentence summary of its own. The card shows the
-  summary as the step's main line, with the full instruction under a
-  collapsed **Details** arrow; the model still gets the instruction when the
-  step runs. Plans saved before summaries show the whole instruction
-  instead, with no Details arrow. A step with no summary, or one over 80
+  summary as the step's main line, with the full instruction at the top of the
+  step's chevron (the same one that shows what happened); the model still gets
+  the instruction when the step runs. Plans saved before summaries show the
+  whole instruction instead, and the chevron has nothing extra to show for it. A step with no summary, or one over 80
   characters, is refused like any other limit.
 - **You**: before or between runs, hover a step to edit its text or remove
   it. There's no way to add a step yet; ask the model for a new plan instead.
@@ -669,7 +669,8 @@ changed; finished plans above it stay too. A finished plan can't be discarded.
 ### Step times
 
 A finished step (done, not done or disputed) shows how long it took in small
-print under it, and **Total** at the bottom of the plan card adds them up.
+print after its title, and the plan card's header adds them up ("Plan · 5 of 5
+done · 13m 21s") once two or more steps have a time.
 
 - A step's time runs from its "Do step" message until its check finishes: the
   reply, the check, and any retry and second check. It's wall-clock time, so

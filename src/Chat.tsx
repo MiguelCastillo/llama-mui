@@ -368,21 +368,32 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Whether the chat follows new output: while you're at the bottom. Scrolling
   // up stops it, so you can read back while a reply streams (it used to pull
   // you down on every token); scrolling back down, the arrow, or sending
-  // starts it again. The ref is for the scroll effect, which runs per token.
-  const [following, setFollowingState] = useState(true);
+  // starts it again. Only a ref: it is read by the scroll effect, which runs
+  // per token, and nothing on screen depends on it.
   const followingRef = useRef(true);
   const setFollowing = (on: boolean) => {
     followingRef.current = on;
-    setFollowingState(on);
   };
+  // Whether there is more below what is in view, which is all the arrow means.
+  // It is read from the box itself, never from what the chat was doing (see
+  // measure), so it shows as soon as there is something below, not only after
+  // scrolling up from the bottom, and it can't go stale.
+  const [moreBelow, setMoreBelow] = useState(false);
   const lastScrollTop = useRef(0);
   const fromBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight;
+  // Called on every scroll and every change in the size of the box or what is
+  // in it, which is every way the answer can change.
+  const measure = () => {
+    const el = scrollRef.current;
+    if (el) setMoreBelow(fromBottom(el) > 80);
+  };
   // Only a scroll up stops following. Output landing and the trackpad's bounce
   // at the end change the distance from the bottom too, and judging by that
   // alone flipped following off and on while you scrolled down.
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
+    measure();
     const up = el.scrollTop < lastScrollTop.current - 1;
     lastScrollTop.current = el.scrollTop;
     if (up && fromBottom(el) > 80) {
@@ -402,6 +413,23 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setFollowing(true);
     stickToBottom();
   };
+  // The content's size changing (a step folded, a message arriving) moves what
+  // is below the view without any scroll event, so it is measured the same way
+  // a scroll is. A chat that now fits follows new output again.
+  const contentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = scrollRef.current;
+    const content = contentRef.current;
+    if (!box || !content) return;
+    const recheck = () => {
+      measure();
+      if (!followingRef.current && fromBottom(box) < 80) setFollowing(true);
+    };
+    const observer = new ResizeObserver(recheck);
+    observer.observe(content);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
 
   // The saved chat this is, and the list for the chats panel. Nothing is
   // saved until the open session has loaded, so an empty screen can't
@@ -1665,7 +1693,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
       {/* Top padding keeps the first messages clear of the toolbar. */}
       <Box ref={scrollRef} onScroll={onScroll} sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3, position: "relative" }}>
-        <Container maxWidth={false}>
+        <Container maxWidth={false} ref={contentRef}>
           <Stack spacing={2}>
             {connector === null ? (
               <Stack spacing={2} sx={{ alignItems: "center", mt: 8 }}>
@@ -1751,7 +1779,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         </Container>
         {/* Sticky with no height: it floats over the bottom of the chat
             without adding space under the last message. */}
-        {!following && messages.length > 0 && (
+        {moreBelow && messages.length > 0 && (
           <Box sx={{ position: "sticky", bottom: 16, height: 0, display: "flex", justifyContent: "center" }}>
             <Tooltip title="Jump to the latest and keep following">
               <Fab size="small" color="primary" onClick={toBottom} sx={{ mt: -5 }} aria-label="Jump to the latest">
