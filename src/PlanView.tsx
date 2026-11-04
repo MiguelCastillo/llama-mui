@@ -26,6 +26,8 @@ import ReplayOutlinedIcon from "@mui/icons-material/ReplayOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import PauseIcon from "@mui/icons-material/Pause";
+import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
@@ -186,26 +188,40 @@ export function PlanView({
           Plan · {done} of {steps.length} done
         </Typography>
         {since != null && counter && <Box sx={{ mr: 1 }}>{counter(since)}</Box>}
+        {/* Icons, with the words as tooltip and accessible label. */}
         {running && onPause && (
-          <Button size="small" onClick={onPause}>
-            Pause
-          </Button>
+          <Tooltip title="Pause: ends the run now and keeps the plan">
+            <IconButton size="small" aria-label="Pause" onClick={onPause}>
+              <PauseIcon />
+            </IconButton>
+          </Tooltip>
         )}
         {/* Removing the plan is for a plan that isn't running: pause it first. */}
         {onClone && readOnly && (
-          <Button size="small" onClick={onClone}>
-            Clone
-          </Button>
+          <Tooltip title="Clone: a new plan with the same steps">
+            <IconButton size="small" aria-label="Clone" onClick={onClone}>
+              <ContentCopyOutlinedIcon />
+            </IconButton>
+          </Tooltip>
         )}
         {onCancel && !readOnly && !running && (
-          <Button size="small" onClick={onCancel} sx={{ mr: unfinished ? 1 : 0 }}>
-            Discard plan
-          </Button>
+          <Tooltip title="Discard plan">
+            <IconButton size="small" aria-label="Discard plan" onClick={onCancel} sx={{ mr: unfinished ? 0.5 : 0 }}>
+              <DeleteOutlinedIcon />
+            </IconButton>
+          </Tooltip>
         )}
         {unfinished && onRun && !running && (
-          <Button size="small" variant="contained" startIcon={<PlayArrowIcon />} onClick={onRun}>
-            {started ? "Continue" : "Run"}
-          </Button>
+          <Tooltip title={started ? "Continue the plan" : "Run the plan"}>
+            <IconButton
+              size="small"
+              aria-label={started ? "Continue" : "Run"}
+              onClick={onRun}
+              sx={{ bgcolor: "primary.main", color: "primary.contrastText", "&:hover": { bgcolor: "primary.dark" } }}
+            >
+              <PlayArrowIcon />
+            </IconButton>
+          </Tooltip>
         )}
       </Stack>
       <Stack spacing={0.5}>
