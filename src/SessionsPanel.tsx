@@ -26,7 +26,7 @@ const MAX_WIDTH = 480;
 // How far each level of nesting moves a row to the right (MUI spacing units).
 const INDENT = 1.5;
 // Room kept at the left of every row for the show/hide arrow.
-const ARROW_SLOT = 24;
+const ARROW_SLOT = "1.5rem";
 
 // Load the saved width, or default to 260.
 function loadWidth(): number {
@@ -98,55 +98,32 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
     <>
       <ListItem
         disablePadding
-        // The action buttons show on hover, except on phones (no hover).
+        // The row spans the whole list, so its hover and selected background do
+        // too; nesting is padding inside it. The action buttons take their own
+        // room on hover (the title shortens to make it), except on phones (no
+        // hover), where they always show.
         sx={{
-          ml: depth * INDENT,
+          position: "relative",
+          pl: depth * INDENT,
+          pr: 0.5,
+          borderRadius: 1,
+          bgcolor: s.id === currentId ? "action.selected" : undefined,
+          "&:hover": { bgcolor: s.id === currentId ? "action.selected" : "action.hover" },
           // A thin line down the left edge ties a nested row to its parent.
-          ...(depth > 0 && { borderLeft: 1, borderColor: "divider" }),
-          "& .MuiListItemSecondaryAction-root": { visibility: narrow ? "visible" : "hidden" },
-          "&:hover .MuiListItemSecondaryAction-root": { visibility: "visible" },
+          ...(depth > 0 && {
+            "&::before": {
+              content: '""',
+              position: "absolute",
+              top: 0,
+              bottom: 0,
+              left: `${depth * INDENT * 0.5 - 0.25}rem`,
+              borderLeft: 1,
+              borderColor: "divider",
+            },
+          }),
+          "& .row-actions": { display: narrow ? "flex" : "none" },
+          "&:hover .row-actions, &:focus-within .row-actions": { display: "flex" },
         }}
-        secondaryAction={
-          <Box sx={{ display: "flex", gap: 0.5 }}>
-            <Tooltip title="New nested session: an empty session under this one, with the same folder and model">
-              <span>
-                <IconButton
-                  size="small"
-                  aria-label={`New nested session under ${title}`}
-                  disabled={busy}
-                  onClick={() => ctx.onNewNested(s.id)}
-                >
-                  <SubdirectoryArrowRightIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Tooltip title="Rename session">
-              <span>
-                <IconButton
-                  size="small"
-                  aria-label={`Rename ${title}`}
-                  disabled={busy}
-                  onClick={() => setEditing({ id: s.id, value: title })}
-                >
-                  <EditOutlinedIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Tooltip title={ctx.deleteLocked.has(s.id) ? "Can't delete while a plan is running in this session or one nested with it" : "Delete session"}>
-              <span>
-                <IconButton
-                  edge="end"
-                  size="small"
-                  aria-label={`Delete ${title}`}
-                  disabled={(busy && s.id === currentId) || ctx.deleteLocked.has(s.id)}
-                  onClick={() => ctx.onDelete(s.id)}
-                >
-                  <DeleteOutlinedIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          </Box>
-        }
       >
         {hasChildren ? (
           <Tooltip title={isCollapsed ? "Show nested sessions" : "Hide nested sessions"}>
@@ -167,7 +144,7 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
           selected={s.id === currentId}
           disabled={busy && s.id !== currentId}
           onClick={() => ctx.onSelect(s.id)}
-          sx={{ borderRadius: 1, pl: 0.5, pr: 11 }}
+          sx={{ borderRadius: 1, pl: 0.5, py: 0.5, flex: 1, minWidth: 0, "&:hover, &.Mui-selected, &.Mui-selected:hover": { bgcolor: "transparent" } }}
         >
           {isEditing ? (
             <TextField
@@ -211,19 +188,57 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
             />
           ) : (
             <>
-              <ListItemText primary={title} secondary={ago(s.updatedAt)} slotProps={{ primary: { noWrap: true } }} />
+              <ListItemText primary={title} slotProps={{ primary: { noWrap: true } }} />
               {/* A plan here is waiting on you; the open session shows its own prompt. */}
               {s.id !== currentId && attention.has(s.id) && (
                 <Box
                   role="img"
                   aria-label="Needs you"
                   title="Needs you"
-                  sx={{ width: 8, height: 8, ml: 1, borderRadius: "50%", bgcolor: "warning.main", flexShrink: 0 }}
+                  sx={{ width: "0.5rem", height: "0.5rem", ml: 1, borderRadius: "50%", bgcolor: "warning.main", flexShrink: 0 }}
                 />
               )}
             </>
           )}
         </ListItemButton>
+        <Box className="row-actions" sx={{ gap: 0.5, flexShrink: 0, alignItems: "center" }}>
+          <Tooltip title="New nested session: an empty session under this one, with the same folder and model">
+            <span>
+              <IconButton
+                size="small"
+                aria-label={`New nested session under ${title}`}
+                disabled={busy}
+                onClick={() => ctx.onNewNested(s.id)}
+              >
+                <SubdirectoryArrowRightIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Rename session">
+            <span>
+              <IconButton
+                size="small"
+                aria-label={`Rename ${title}`}
+                disabled={busy}
+                onClick={() => setEditing({ id: s.id, value: title })}
+              >
+                <EditOutlinedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title={ctx.deleteLocked.has(s.id) ? "Can't delete while a plan is running in this session or one nested with it" : "Delete session"}>
+            <span>
+              <IconButton
+                size="small"
+                aria-label={`Delete ${title}`}
+                disabled={(busy && s.id === currentId) || ctx.deleteLocked.has(s.id)}
+                onClick={() => ctx.onDelete(s.id)}
+              >
+                <DeleteOutlinedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
       </ListItem>
       {hasChildren &&
         !isCollapsed &&
@@ -342,7 +357,7 @@ export default function SessionsPanel({
           Your sessions show up here once you send a message.
         </Typography>
       ) : (
-        <List dense sx={{ overflowY: "auto", flexGrow: 1, px: 1 }}>
+        <List dense sx={{ overflowY: "auto", flexGrow: 1, px: 1, display: "flex", flexDirection: "column", gap: 0.25 }}>
           {tree.map((node) => (
             <SessionRow key={node.session.id} node={node} depth={0} ctx={ctx} />
           ))}
