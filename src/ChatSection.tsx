@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Alert, Box, CircularProgress, List, ListItem, ListItemText, Paper, Stack, Switch, Typography } from "@mui/material";
-import { type Preferences, getPreferences, updatePreferences } from "./api";
+import type { Preferences } from "./api";
+import { usePreferences } from "./usePreferences";
 
 // Display options for the chat screen. Add a row to OPTIONS for each new
 // boolean preference.
@@ -25,25 +26,8 @@ const OPTIONS: { key: keyof Preferences; label: string; summary: string }[] = [
 ];
 
 export default function ChatSection() {
-  const [prefs, setPrefs] = useState<Preferences | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    getPreferences()
-      .then(setPrefs)
-      .catch((e) => setError(e.message));
-  }, []);
-
-  const set = (key: keyof Preferences, value: boolean) => {
-    // Flip it right away; the server's answer either confirms it or puts it back.
-    setPrefs((p) => p && { ...p, [key]: value });
-    updatePreferences({ [key]: value })
-      .then(setPrefs)
-      .catch((e) => {
-        setError(e.message);
-        getPreferences().then(setPrefs);
-      });
-  };
+  const [prefs, set] = usePreferences(setError);
 
   return (
     <Stack spacing={2}>
@@ -73,7 +57,7 @@ export default function ChatSection() {
                   <Switch
                     edge="end"
                     checked={prefs[o.key]}
-                    onChange={(e) => set(o.key, e.target.checked)}
+                    onChange={(e) => set({ [o.key]: e.target.checked })}
                     slotProps={{ input: { "aria-label": o.label } }}
                   />
                 }

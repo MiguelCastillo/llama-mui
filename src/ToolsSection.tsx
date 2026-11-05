@@ -18,15 +18,8 @@ import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
 import ChecklistOutlinedIcon from "@mui/icons-material/ChecklistOutlined";
-import {
-  type Preferences,
-  type ToolGroup,
-  getPreferences,
-  getTools,
-  setToolEnabled,
-  setToolsEnabled,
-  updatePreferences,
-} from "./api";
+import { type ToolGroup, getTools, setToolEnabled, setToolsEnabled } from "./api";
+import { usePreferences } from "./usePreferences";
 
 // Per-group icons; groups not listed here get a generic one.
 const GROUP_UI: Record<string, { icon: ReactNode }> = {
@@ -42,7 +35,7 @@ export default function ToolsSection() {
   const [error, setError] = useState<string | null>(null);
   // For the plan's own option (see FRESH_STEPS), kept with the Preferences
   // because it is a setting of how chat runs, not of one tool.
-  const [prefs, setPrefs] = useState<Preferences | null>(null);
+  const [prefs, set] = usePreferences(setError);
 
   const reload = () =>
     getTools()
@@ -51,9 +44,6 @@ export default function ToolsSection() {
 
   useEffect(() => {
     reload();
-    getPreferences()
-      .then(setPrefs)
-      .catch((e) => setError(e.message));
   }, []);
 
   const toggle = (name: string, enabled: boolean) => {
@@ -68,17 +58,6 @@ export default function ToolsSection() {
     setToolEnabled(name, enabled)
       .catch((e) => setError(e.message))
       .finally(reload);
-  };
-
-  const setFresh = (value: boolean) => {
-    // Flip it right away; the server's answer either confirms it or puts it back.
-    setPrefs((p) => p && { ...p, freshPlanSteps: value });
-    updatePreferences({ freshPlanSteps: value })
-      .then(setPrefs)
-      .catch((e) => {
-        setError(e.message);
-        getPreferences().then(setPrefs);
-      });
   };
 
   // The plan's own option only matters while plans can be made.
@@ -204,7 +183,7 @@ export default function ToolsSection() {
                           edge="end"
                           checked={prefs.freshPlanSteps}
                           disabled={!state.enabled || !planToolOn}
-                          onChange={(e) => setFresh(e.target.checked)}
+                          onChange={(e) => set({ freshPlanSteps: e.target.checked })}
                           slotProps={{ input: { "aria-label": "Fresh context for each plan step" } }}
                         />
                       </Stack>
