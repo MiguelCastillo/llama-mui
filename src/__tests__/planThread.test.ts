@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment, ChatMessage, PlanStep, PlanThread, Session } from "../api";
-import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage } from "../planThread";
+import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage, noteAskKind } from "../planThread";
 
 const step = (id: string, status: PlanStep["status"] = "pending", extra: Partial<PlanStep> = {}): PlanStep => ({
   id,
@@ -374,5 +374,18 @@ describe("finalMessage and planResult", () => {
     expect(planResult([step("1", "done"), step("2", "pending")], msgs)).toBe("");
     expect(planResult(null, msgs)).toBe("");
     expect(planResult(done, [{ role: "assistant", content: "x", planStep: "1" }])).toBe("");
+  });
+});
+
+describe("noteAskKind", () => {
+  it("lets the note carry an approval of a command or a change, and allowing a folder", () => {
+    expect(noteAskKind({ needsApproval: { type: "command", command: "git status", cwd: "/w" } } as any)).toBe("answer");
+    expect(noteAskKind({ needsAccess: { path: "/other", kind: "folder" } })).toBe("answer");
+    expect(noteAskKind({ needsAccess: { path: "/other/a.txt", kind: "file" } })).toBe("answer");
+  });
+
+  it("sends the user to the thread for a path that doesn't exist, or a file or folder to find", () => {
+    expect(noteAskKind({ needsAccess: { path: "/guess", kind: null } })).toBe("open");
+    expect(noteAskKind({ needsLocation: { description: "my notes", kind: "folder" } })).toBe("open");
   });
 });

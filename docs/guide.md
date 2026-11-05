@@ -376,8 +376,9 @@ vitest (`npm test`).
 ### Running a plan
 
 - **Run** on a plan that hasn't started (no step has run yet) doesn't run it
-  in this chat. It opens a new nested session and runs the plan there, so you
-  watch it in the thread. The thread gets the request that led to the plan
+  in this chat. It moves it into a new nested session and runs it there (a
+  thread); you stay in the chat, and the note appears where the plan was. Click
+  the note to watch the thread. The thread gets the request that led to the plan
   (the last message you sent before it, as its first message), the plan
   context and the plan, but not the rest of the chat. It has the same working
   folder and model, and is titled from the plan summary until the model names
@@ -715,6 +716,14 @@ the step, not in the chat.
   what happened, ending with a **Follow-up:** line for anything still to do
   (restart the server, run a command) or "Follow-up: none". Click the note to open the thread, with
   the chat scrolled to the plan.
+- Pressing Run does not open the thread: you stay in the chat. When the thread
+  needs you, its note shows the question with the same buttons the thread shows:
+  approve or deny a command or a file change (with the command or diff), or
+  allow a folder. The answer goes to the thread's session, the first answer wins,
+  and the prompt goes away when it is answered in another window. A question
+  the note can't show well (finding a file or folder) makes it say **Needs you**,
+  with a button that opens the thread. Open the thread and its prompt works as
+  it always did.
 - The thread reports back by itself, even if you aren't looking at the chat or
   the page was closed when the run ended; the note is up to date when you
   open it. Only the outcome and the report are sent to the chat that started

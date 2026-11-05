@@ -11,6 +11,7 @@
 //   and a `thread` event from the server applied to the notes.
 import type { ChatMessage, PlanStep, PlanThread, Session, ThreadOutcome } from "./api.ts";
 import { stepLine } from "./agent/plan.ts";
+import type { Ask } from "./runnerTypes.ts";
 import { nestedSessionFrom } from "./sessionTree.ts";
 import { newId } from "./uuid.ts";
 
@@ -196,4 +197,14 @@ export function threadLabel(status: ThreadStatus | undefined, summary: string): 
     default:
       return `Running in a thread: ${summary}`;
   }
+}
+
+// How a note shows its thread's pending question: "answer" when the note can
+// carry the prompt itself (approve or deny a command or a change, allow a
+// folder), "open" when it can't show it well (a file or folder to find), so the
+// note says it needs you and opens the thread.
+export function noteAskKind(ask: Ask): "answer" | "open" {
+  if ("needsApproval" in ask) return "answer";
+  if ("needsAccess" in ask && ask.needsAccess.kind) return "answer";
+  return "open";
 }

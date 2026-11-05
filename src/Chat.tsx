@@ -123,7 +123,7 @@ import {
   stepPrompt,
   weighDispute,
 } from "./agent/plan";
-import { applyThreadEvent, noteView, planResult, threadStatus, type ThreadStatus } from "./planThread";
+import { applyThreadEvent, noteAskKind, noteView, planResult, threadStatus, type ThreadStatus } from "./planThread";
 import {
   allViews,
   dismiss,
@@ -1162,18 +1162,22 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // The plan card's Run. This session is saved and the server is told to run
   // it. A plan that hasn't started moves into its own nested session (a
-  // thread) on the server, which runs it there, and the thread is opened (as
-  // the run has it, see loadSession); this session keeps a note where the plan
-  // was. A plan that already started (Continue, Resume, Restart), or one that
+  // thread) on the server, which runs it there; this session stays open and
+  // is read again to show the note where the plan was. The note spins, and
+  // carries the thread's questions (see threadAsks). A plan that already started (Continue, Resume, Restart), or one that
   // was just moved in, runs where it is.
   const runFromCard = async () => {
     if (!connector || !model || runnerActive(sessionId)) return;
     try {
       if (!planMovedIn && !(await modelLoaded())) return;
       const ranIn = await startRun();
-      // The server has saved this session and the thread: the rows follow its
-      // events, and this session isn't saved again (it is left as it is).
-      if (ranIn && ranIn !== sessionId) openSession(ranIn, false);
+      // The server has saved this session without the plan, and with the note
+      // for the thread: the page's copy is stale, so it is read again rather
+      // than saved over it.
+      if (ranIn && ranIn !== sessionId) {
+        savedKey.current = "";
+        loadSession(sessionId);
+      }
     } catch (e) {
       runRefused(e);
     }
@@ -1188,16 +1192,26 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // since been closed is ignored. Run events (a child starting or ending)
   // update it.
   const [threadStatuses, setThreadStatuses] = useState<Record<string, ThreadStatus | "running">>({});
+  // The question each thread is waiting on, with the way to answer it (the
+  // same as the thread's own view has, a command to the thread's session).
+  const [threadAsks, setThreadAsks] = useState<Record<string, NonNullable<RunnerView["ask"]>>>({});
   useEffect(() => {
     setThreadStatuses({});
+    setThreadAsks({});
     if (!loaded || !loadedOk.current) return;
     let current = true;
-    const fromView = (id: string, v: RunnerView) =>
+    const fromView = (id: string, v: RunnerView) => {
+      setThreadAsks((m) => {
+        const { [id]: old, ...rest } = m;
+        if (old === v.ask) return m;
+        return v.ask ? { ...rest, [id]: v.ask } : rest;
+      });
       setThreadStatuses((m) => {
         const { [id]: _old, ...rest } = m;
         if (v.status !== "stopped") return { ...rest, [id]: "running" };
         return v.session ? { ...rest, [id]: threadStatus(withSessionDefaults(v.session)) } : rest;
       });
+    };
     for (const t of threads) {
       const v = getView(t.sessionId);
       if (v) {
@@ -1215,7 +1229,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     }
     const ids = new Set(threads.map((t) => t.sessionId));
     const unsubscribe = subscribeAll((e) => {
-      if (current && e.view && ids.has(e.id)) fromView(e.id, e.view);
+      if (!current || !ids.has(e.id)) return;
+      if (e.view) fromView(e.id, e.view);
+      else setThreadAsks(({ [e.id]: _gone, ...rest }) => rest);
     });
     return () => {
       current = false;
@@ -1302,6 +1318,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           summary={t.summary}
           view={noteView(t, threadStatuses[t.sessionId])}
           onOpen={() => openSession(t.sessionId, true, t.planId ?? "")}
+          prompt={
+            threadAsks[t.sessionId] && noteAskKind(threadAsks[t.sessionId].ask) === "answer" ? (
+              <PendingPrompt ask={threadAsks[t.sessionId].ask} onDecide={threadAsks[t.sessionId].decide} />
+            ) : undefined
+          }
+          needsYou={!!threadAsks[t.sessionId] && noteAskKind(threadAsks[t.sessionId].ask) === "open"}
         />
       ),
     })),
