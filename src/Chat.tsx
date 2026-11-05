@@ -88,6 +88,7 @@ import {
   pickAttachments,
   deleteSession,
   getSession,
+  getWorktreeStatuses,
   listSessions,
   renameSession,
   runTool,
@@ -123,7 +124,7 @@ import {
   stepPrompt,
   weighDispute,
 } from "./agent/plan";
-import { applyThreadEvent, noteAskKind, noteView, planResult, threadStatus, type ThreadStatus } from "./planThread";
+import { applyThreadEvent, noteAskKind, noteView, planResult, threadStatus, worktreeLines, type ThreadStatus } from "./planThread";
 import {
   allViews,
   dismiss,
@@ -1239,6 +1240,44 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     };
   }, [loaded, sessionId]);
 
+  // Where each thread's work lives (its worktrees' branch and what isn't on
+  // main), asked of the server, which reads git. Asked when the notes first
+  // show and again whenever a thread's status changes (it started, ended),
+  // never on a timer.
+  const [threadWhere, setThreadWhere] = useState<Record<string, string[]>>({});
+  const whereKey = threads
+    .map((t) => {
+      const v = noteView(t, threadStatuses[t.sessionId]);
+      return `${t.sessionId}:${v.running ? "running" : (v.status ?? "")}`;
+    })
+    .join("|");
+  useEffect(() => {
+    if (!loaded || !loadedOk.current || threads.length === 0) return;
+    let current = true;
+    for (const t of threads) {
+      getWorktreeStatuses(t.sessionId)
+        .then((rows) => current && setThreadWhere((m) => ({ ...m, [t.sessionId]: worktreeLines(rows) })))
+        .catch(() => {});
+    }
+    return () => {
+      current = false;
+    };
+  }, [loaded, sessionId, whereKey]);
+  useEffect(() => setThreadWhere({}), [sessionId]);
+  // The same for this session's own result, when it is a thread whose plan worked in a worktree: asked once the plan has stopped running.
+  const [ownWhere, setOwnWhere] = useState<string[]>([]);
+  useEffect(() => {
+    setOwnWhere([]);
+    if (!loaded || !loadedOk.current || runActive) return;
+    let current = true;
+    getWorktreeStatuses(sessionId)
+      .then((rows) => current && setOwnWhere(worktreeLines(rows)))
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [loaded, sessionId, runActive]);
+
   // Retries the last user message, dropping the failed reply (Resend). The
   // session is saved with the messages before that message, then the server is
   // told to send it again (see chatTurn). Like a first try it isn't a planning
@@ -1324,6 +1363,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             ) : undefined
           }
           needsYou={!!threadAsks[t.sessionId] && noteAskKind(threadAsks[t.sessionId].ask) === "open"}
+          where={threadWhere[t.sessionId]}
         />
       ),
     })),
@@ -1353,6 +1393,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   summary={planSummary}
                   context={planContext}
                   result={runActive ? null : planResult(plan, messages)}
+                  where={ownWhere}
                   running={runActive}
                   since={planRunning ? taskSince : null}
                   onPause={planRunning ? () => showFailure(stopRunner(sessionId)) : undefined}

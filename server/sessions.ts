@@ -12,6 +12,7 @@ import { sessionsDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
 import { descendantIds } from "../src/sessionTree.ts";
+import { worktreeStatuses } from "./worktreeStatus.ts";
 import { convertWorkingDir, deleteSession, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
 
 // Other modules (and tests) have always got these from here.
@@ -49,6 +50,8 @@ let migration: Promise<void> | undefined;
 //                  modelName, userName, group, todos, parentId } (see summaryOf)
 //   GET /<id>    → the saved session, with its `revision` (0 if it never had one)
 //                  and `run` while a plan is running in it in this process
+//   GET /<id>/worktrees → [{ name, branch, uncommitted, unmerged, base }], one per
+//                  worktree the session created (its create_worktree calls), read from git (see worktreeStatus.ts)
 //   PUT /<id>    → saves it; the server sets createdAt, updatedAt and revision;
 //                  answers with its summary plus the new `revision`. Send the
 //                  `revision` the page loaded: if the file has moved on it answers
@@ -74,6 +77,12 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
       .map(summaryOf)
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
     sendJson(res, 200, list);
+    return true;
+  }
+  // Where the session's work lives, computed from git each time (see worktreeStatus.ts).
+  if (parts.length === 3 && parts[2] === "worktrees" && method === "GET") {
+    const session = await readSession(parts[1]);
+    sendJson(res, 200, session ? await worktreeStatuses(parts[1], session.messages) : []);
     return true;
   }
   if (parts.length !== 2) return false;

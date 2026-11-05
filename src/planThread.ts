@@ -9,7 +9,8 @@
 //   from the child's saved plan.
 // - noteView / applyThreadEvent: what a note shows (spinner, outcome, report),
 //   and a `thread` event from the server applied to the notes.
-import type { ChatMessage, PlanStep, PlanThread, Session, ThreadOutcome } from "./api.ts";
+// - worktreeLine / worktreeLines: where a thread's work lives, in words.
+import type { ChatMessage, PlanStep, PlanThread, Session, ThreadOutcome, WorktreeStatus } from "./api.ts";
 import { stepLine } from "./agent/plan.ts";
 import type { Ask } from "./runnerTypes.ts";
 import { nestedSessionFrom } from "./sessionTree.ts";
@@ -208,3 +209,21 @@ export function noteAskKind(ask: Ask): "answer" | "open" {
   if ("needsAccess" in ask && ask.needsAccess.kind) return "answer";
   return "open";
 }
+
+// Where a thread's work lives, in words, one line per worktree (see
+// server/worktreeStatus.ts for the numbers, which come from git):
+//   "In worktree ui-updates (llama/ui-updates): 5 files uncommitted, 2 commits not on main"
+//   "In worktree ui-updates (llama/ui-updates): all committed and on main"
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+export function worktreeLine(w: WorktreeStatus): string {
+  const base = w.base ?? "main";
+  const parts: string[] = [];
+  if (w.uncommitted > 0) parts.push(`${plural(w.uncommitted, "file", "files")} uncommitted`);
+  if (w.unmerged && w.unmerged > 0) parts.push(`${plural(w.unmerged, "commit", "commits")} not on ${base}`);
+  if (parts.length === 0) parts.push(w.unmerged === null ? "all committed" : `all committed and on ${base}`);
+  return `In worktree ${w.name} (${w.branch ?? "detached HEAD"}): ${parts.join(", ")}`;
+}
+
+// No worktrees: no lines, so nothing shows.
+export const worktreeLines = (rows: WorktreeStatus[] | undefined): string[] => (rows ?? []).map(worktreeLine);

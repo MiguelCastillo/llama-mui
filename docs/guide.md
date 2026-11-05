@@ -126,7 +126,10 @@ session, as it does for `update_plan`, since the server never writes that file.
 A plan's last step is told to end its reply with the result and a "Follow-up:"
 line, and once every step is done the plan card shows that reply under the
 checkmarks as **Result**, open, as text you can select and copy. It is the
-last step's reply, not the chat's last message.
+last step's reply, not the chat's last message. When the session worked in a
+git worktree, a line under the Result says where that work lives (see
+Worktrees, below: "In worktree ui-updates (llama/ui-updates): 5 files
+uncommitted, 2 commits not on main", or "all committed and on main").
 
 The **Threads** group (`server/threads.ts`) has two tools, each costing more
 than the one before. Before them, the chat's model already has the note's
@@ -229,6 +232,19 @@ like any other path. A worktree holds only what git tracks, so `node_modules`
 and ignored files aren't there, and a committed secret is. Removing one is
 refused if it has uncommitted changes, and keeps the branch and its commits;
 deleting a session never removes its worktrees.
+
+Where a session's work lives is read from git, by the server, and never written
+by a model: `GET /api/sessions/<id>/worktrees` (`server/worktreeStatus.ts`)
+answers, for each worktree the session created (found in its own `create_worktree`
+calls that succeeded, so a worktree it didn't make, or a failed call, shows
+nothing), its branch, how many files
+are uncommitted (untracked ones too) and how many commits are not on the branch
+checked out in the repo's own checkout. It is computed each time it's asked and
+stored nowhere. The thread's note in the chat that started it shows it as a line
+under the report, asked when the note shows and again when the thread's status
+changes; the thread's own Result shows it once the plan has stopped. Nothing
+shows when the session has no worktree, or its worktree was removed. A branch
+that was squash-merged still counts its commits as not on main.
 
 The **Terminal** group (`server/terminal.ts`) has `run_command`, which runs a
 shell command the model suggests, in the working directory, an attached folder

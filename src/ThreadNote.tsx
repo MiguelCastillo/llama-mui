@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Box, Button, CircularProgress, Paper, Typography } from "@mui/material";
 import { threadLabel, type NoteView } from "./planThread";
+import WorktreeLines from "./WorktreeLines";
 
 // The note where a plan moved out to its own session (a thread): one line,
 // "Running in a thread: <summary>" with a spinner while the thread's run is
@@ -16,12 +17,15 @@ export default function ThreadNote({
   onOpen,
   prompt,
   needsYou,
+  where,
 }: {
   summary: string;
   view: NoteView;
   onOpen: () => void;
   prompt?: ReactNode;
   needsYou?: boolean;
+  // Where the thread's work lives (worktreeLines); none when it used no worktree.
+  where?: string[];
 }) {
   return (
     <Paper variant="outlined" sx={{ my: 1, px: 1, py: 0.5 }}>
@@ -58,6 +62,7 @@ export default function ThreadNote({
           {view.report}
         </Typography>
       )}
+      <WorktreeLines lines={where ?? []} />
     </Paper>
   );
 }

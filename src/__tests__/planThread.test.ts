@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment, ChatMessage, PlanStep, PlanThread, Session } from "../api";
-import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage, noteAskKind } from "../planThread";
+import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage, noteAskKind, worktreeLine, worktreeLines } from "../planThread";
 
 const step = (id: string, status: PlanStep["status"] = "pending", extra: Partial<PlanStep> = {}): PlanStep => ({
   id,
@@ -387,5 +387,28 @@ describe("noteAskKind", () => {
   it("sends the user to the thread for a path that doesn't exist, or a file or folder to find", () => {
     expect(noteAskKind({ needsAccess: { path: "/guess", kind: null } })).toBe("open");
     expect(noteAskKind({ needsLocation: { description: "my notes", kind: "folder" } })).toBe("open");
+  });
+});
+
+describe("worktreeLine", () => {
+  const w = { name: "ui-updates", branch: "llama/ui-updates", uncommitted: 0, unmerged: 0, base: "main" };
+  it("says what is left", () => {
+    expect(worktreeLine({ ...w, uncommitted: 5, unmerged: 2 })).toBe(
+      "In worktree ui-updates (llama/ui-updates): 5 files uncommitted, 2 commits not on main",
+    );
+  });
+  it("says all committed and on main when nothing is left", () => {
+    expect(worktreeLine(w)).toBe("In worktree ui-updates (llama/ui-updates): all committed and on main");
+  });
+  it("uses singular and names the base branch", () => {
+    expect(worktreeLine({ ...w, uncommitted: 1, base: "develop" })).toBe("In worktree ui-updates (llama/ui-updates): 1 file uncommitted");
+    expect(worktreeLine({ ...w, unmerged: 1, base: "develop" })).toBe("In worktree ui-updates (llama/ui-updates): 1 commit not on develop");
+  });
+  it("copes with an unknown base and a detached HEAD", () => {
+    expect(worktreeLine({ ...w, unmerged: null, base: null, branch: null })).toBe("In worktree ui-updates (detached HEAD): all committed");
+  });
+  it("shows nothing without worktrees", () => {
+    expect(worktreeLines([])).toEqual([]);
+    expect(worktreeLines(undefined)).toEqual([]);
   });
 });

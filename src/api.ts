@@ -732,6 +732,15 @@ export const saveSession = (s: Session) => {
     return row;
   });
 };
+// Where the session's work lives: one row per worktree in its folder, from git.
+export interface WorktreeStatus {
+  name: string;
+  branch: string | null;
+  uncommitted: number;
+  unmerged: number | null;
+  base: string | null;
+}
+export const getWorktreeStatuses = (id: string) => call<WorktreeStatus[]>("GET", `/api/sessions/${id}/worktrees`);
 // A command to a session's run (see server/commands.ts): run, pause, resume,
 // stop, approve, answer. Answers { ok, revision }; a command that can't be done
 // is an ApiError, a 409 with a plain message and `data.reason`. `run` also says

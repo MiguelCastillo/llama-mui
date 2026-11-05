@@ -26,6 +26,7 @@ import ReplayOutlinedIcon from "@mui/icons-material/ReplayOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import WorktreeLines from "./WorktreeLines";
 import PauseIcon from "@mui/icons-material/Pause";
 import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -73,6 +74,7 @@ export function PlanView({
   prompt,
   onPause,
   result,
+  where,
 }: {
   steps: PlanStep[];
   // One short sentence the model wrote on what this plan does; shown at the top.
@@ -111,6 +113,8 @@ export function PlanView({
   // under the checkmarks, open, as text you can select and copy; it ends with
   // the follow-up (see LAST_STEP_NOTE in agent/plan.ts).
   result?: string | null;
+  // Where the work lives (worktreeLines), under the result; room for a merge button later.
+  where?: string[];
 }) {
   // Once every step is done, nothing in the plan runs again: no rerun, edit
   // or cancel. Redoing work is a new plan, from a new message.
@@ -386,6 +390,9 @@ export function PlanView({
             Result
           </Typography>
           <MarkdownRenderer content={result} />
+          <Box sx={{ mx: -1, mt: 0.5 }}>
+            <WorktreeLines lines={where ?? []} />
+          </Box>
         </Box>
       )}
       {proposal && onProposal && <ProposalView steps={steps} proposal={proposal} onAnswer={onProposal} />}
