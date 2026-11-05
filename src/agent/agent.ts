@@ -335,7 +335,7 @@ export async function runTurn(
         if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) ran.clear();
 
         if ((call.name === "add_todo" || call.name === "complete_todo") && !result.startsWith("Error:")) {
-          changeTodos(applyTodoCall(todosRef.current, call, crypto.randomUUID().slice(0, 8), Date.now()));
+          changeTodos(applyTodoCall(todosRef.current, call, newId().slice(0, 8), Date.now()));
         }
 
         if (call.name === "update_plan" && !result.startsWith("Error:")) {
@@ -438,6 +438,7 @@ import {
   type WholeFile,
   type Dispute,
 } from "./plan.ts";
+import { newId } from "../uuid.ts";
 
 // ── checkStep helpers ───────────────────────────────────────────────────────
 

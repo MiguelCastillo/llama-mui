@@ -12,6 +12,7 @@ import { eventRoutes } from "./events.ts";
 import { HttpError, type Route, sendJson } from "./http.ts";
 import { instructionRoutes } from "./instructions.ts";
 import { modelSettingRoutes } from "./models.ts";
+import { isAllowed, isPairing, phoneRoutes, setListenAddress } from "./phones.ts";
 import { preferenceRoutes } from "./preferences.ts";
 import { selfOrigin } from "./selfOrigin.ts";
 import { sessionRoutes } from "./sessions.ts";
@@ -21,6 +22,7 @@ import { recoverOnce } from "./restart.ts";
 import { stopAllRuns } from "./runners.ts";
 
 async function route(r: Route) {
+  if (await phoneRoutes(r)) return;
   if (await eventRoutes(r)) return;
   if (await connectorRoutes(r)) return;
   if (await modelAdminRoutes(r)) return;
@@ -63,7 +65,18 @@ const handler: Connect.NextHandleFunction = (req, res) => {
     method: req.method ?? "GET",
     search: url.search,
   };
-  route(r).catch((e) => {
+  // This is the one gate for everything under /api: this computer, or a phone
+  // that was paired (see phones.ts). Every route module is behind it.
+  const allowed = isPairing(r.parts, r.method) ? Promise.resolve(true) : isAllowed(req);
+  allowed
+    .then((ok) => {
+      if (ok) return route(r);
+      sendJson(res, 401, {
+        error: "This device isn't paired. On the computer running llama-mui, open Settings → Phone and scan the code.",
+        reason: "unpaired",
+      });
+    })
+    .catch((e) => {
     if (res.headersSent) return void res.end();
     sendJson(res, e instanceof HttpError ? e.status : 500, { ...(e instanceof HttpError ? e.extra : {}), error: e.message });
   });
@@ -79,7 +92,9 @@ function whenServing(httpServer: Server | null) {
   httpServer?.once("close", () => void stopAllRuns());
   if (!httpServer || "setSecureContext" in httpServer) return;
   const set = () => {
-    const origin = selfOrigin(httpServer.address());
+    const address = httpServer.address();
+    setListenAddress(address);
+    const origin = selfOrigin(address);
     if (origin) setApiOrigin(origin);
   };
   if (httpServer.listening) set();

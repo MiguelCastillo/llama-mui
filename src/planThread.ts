@@ -12,6 +12,7 @@
 import type { ChatMessage, PlanStep, PlanThread, Session, ThreadOutcome } from "./api.ts";
 import { stepLine } from "./agent/plan.ts";
 import { nestedSessionFrom } from "./sessionTree.ts";
+import { newId } from "./uuid.ts";
 
 // The message that asked for a plan: the last one the user sent (not a step's)
 // before the update_plan call that wrote it (the call whose id is `anchor`),
@@ -46,7 +47,7 @@ const TITLE_MAX = 80;
 export function planToThread(
   parent: Session,
   childId: string,
-  planId: string = parent.planId ?? crypto.randomUUID(),
+  planId: string = parent.planId ?? newId(),
 ): { parent: Session; child: Session } | null {
   if (!parent.plan || !isFreshPlan(parent.plan, parent.messages)) return null;
 

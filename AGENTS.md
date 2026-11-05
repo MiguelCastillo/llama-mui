@@ -38,6 +38,18 @@ so copying `~/.llama-mui` copies nothing usable. Keeping a key out of
 code that writes session data must never be handed a key. The app doesn't scrub
 anything for you.
 
+## Other devices
+
+The server has no login, and its tools run commands, so a device that isn't this
+computer must be paired first (`server/phones.ts`). The one gate is in
+`server/plugin.ts`: every request under `/api` is let in only from this
+computer (loopback, no proxy header) or with a paired device's cookie, and only
+`POST /api/pair` is open. A new route is behind it automatically; keep routes
+under `/api`, and don't add one that skips `isAllowed`. Page code must run over
+plain `http` at a network address (a phone's case), so don't use features that
+need a secure context without a fallback: `crypto.randomUUID` (use `newId` in
+`src/uuid.ts`) and `navigator.clipboard` (use `copyText` in `src/clipboard.ts`).
+
 ## Styling
 
 - **Container and text sizes are rem, or relative.** Text, icons, spinners,

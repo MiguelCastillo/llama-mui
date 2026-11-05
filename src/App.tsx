@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Box, CircularProgress } from "@mui/material";
+import { Alert, Box, CircularProgress, Stack, Typography } from "@mui/material";
 import Chat from "./Chat";
 import Settings from "./Settings";
 import Welcome from "./Welcome";
-import { getConnectors } from "./api";
+import { ApiError, getConnectors } from "./api";
+import Pair from "./Pair";
 import { WELCOME_HASH, hasWelcomeMarker, settingsHash, welcomeHidden, welcomeRedirect } from "./welcomeState";
 
 // Hash routes: "" is chat, "#/settings/<section>" is settings. Hash routing
@@ -25,20 +26,38 @@ export default function App() {
   const welcome = hasWelcomeMarker(hash);
 
   const onWelcome = /^#\/welcome/.test(hash);
+  // "#/pair/<code>": a phone that scanned the QR code in Settings → Phone.
+  const pairing = hash.match(/^#\/pair\/([\w-]+)/);
 
   // On load, a first-time user (no connectors, checklist not exited) goes to
   // the checklist; nothing shows until that's known. A page opened straight
   // on Settings is left alone, and later navigation never redirects.
   const [booted, setBooted] = useState(false);
+  // The server turned this device away: it isn't this computer and isn't paired.
+  const [unpaired, setUnpaired] = useState(false);
   useEffect(() => {
     getConnectors()
       .then((l) => welcomeRedirect({ connectorCount: l.connectors.length, hidden: welcomeHidden() }))
-      .catch(() => "stay" as const)
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 401) setUnpaired(true);
+        return "stay" as const;
+      })
       .then((d) => {
         if (d === "redirect" && !/^#\/(settings|welcome)/.test(location.hash)) location.replace(WELCOME_HASH);
         setBooted(true);
       });
   }, []);
+  if (pairing) return <Pair token={pairing[1]} />;
+  if (unpaired) {
+    return (
+      <Stack sx={{ alignItems: "center", p: 3, mt: 8 }}>
+        <Alert severity="info" sx={{ maxWidth: "26rem" }}>
+          <Typography variant="body1">This device isn't paired.</Typography>
+          On the computer running llama-mui, open Settings → Phone, show the QR code and scan it with this device.
+        </Alert>
+      </Stack>
+    );
+  }
   if (!booted) return <CircularProgress sx={{ display: "block", mx: "auto", mt: 12 }} />;
 
   return (

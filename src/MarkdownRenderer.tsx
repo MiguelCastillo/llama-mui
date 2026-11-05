@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import { Box, IconButton, Link, Typography } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import { copyText } from "./clipboard";
 
 // On the user's primary-colored bubble the theme's greys disappear, so code
 // is tinted darker there.
@@ -21,7 +22,7 @@ function CodeBlock({ children, tint }: { children?: ReactNode; tint: string }) {
   return (
     <Box sx={{ position: "relative", my: 1.5 }}>
       <Box component="pre" ref={ref} sx={{ m: 0, p: 1.5, pr: 5, overflowX: "auto", bgcolor: tint, borderRadius: 1, fontFamily: "monospace", fontSize: "0.85em", "& code": { bgcolor: "transparent", p: 0, fontSize: "inherit" } }}>{children}</Box>
-      <IconButton size="small" aria-label="Copy code" onClick={() => navigator.clipboard.writeText(ref.current?.innerText ?? "").catch(() => {})} sx={{ position: "absolute", top: 4, right: 4 }}>
+      <IconButton size="small" aria-label="Copy code" onClick={() => void copyText(ref.current?.innerText ?? "")} sx={{ position: "absolute", top: 4, right: 4 }}>
         <ContentCopyIcon fontSize="small" />
       </IconButton>
     </Box>

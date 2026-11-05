@@ -3,6 +3,7 @@
 // checks each step with reviewStep before ticking it off.
 
 import { type Api, type Kind, type ChatMessage, type PlanStep, type ToolCall, streamChat } from "../api.ts";
+import { newId } from "../uuid.ts";
 
 // With Plan on, a new message first gets a planning turn: the model can only
 // read and call update_plan, so it writes the plan instead of starting on the
@@ -69,7 +70,7 @@ export function planFromCall(args: string, old: PlanStep[], running: boolean): P
         reworded = undefined;
         return step;
       }
-      return withSummary({ id: crypto.randomUUID(), text, status: "pending" });
+      return withSummary({ id: newId(), text, status: "pending" });
     });
   } catch {
     return null;

@@ -24,6 +24,35 @@ served by a Vite plugin (`server/plugin.ts`) that runs under both
 can send requests to localhost, and without that check one could run the
 model's tools, commands included, on its own.
 
+**Using it from your phone.** By default the server only listens on this
+computer. Start it with `npm run dev:lan` (it runs `vite --host`) and it
+listens on your network too. Nothing else on the network is let in until it is
+paired: in **Settings → Phone**, **Show QR code** makes a code for one phone,
+good once, for five minutes. Scan it with the phone's camera; the phone opens
+llama-mui and is signed in with a cookie that lasts a year. Requests from this
+computer itself need nothing, as before; any other device's `/api` request is
+refused (401) without that cookie, and only this computer can make codes or
+manage devices (a paired phone can't pair more phones). Paired devices are
+listed in the same place with a button to sign each one out. Only a hash of
+each device's cookie is saved, in `~/.llama-mui/devices.json`; the code itself
+is kept in memory and goes after the `#` of the address, so it isn't sent to
+the server in a request line or logged. Things to know:
+
+- **It's plain `http`.** Someone on the same network could see the cookie, so
+  use it on a network you trust (your home one), not a shared Wi-Fi. For
+  anywhere else, put it behind HTTPS (Tailscale's `serve`, say): requests that
+  arrive through a proxy on this computer say who they were forwarded for and
+  are treated as another device, not as this computer, so they need pairing
+  too.
+- **Same network.** The QR code holds this computer's address on the network
+  (Settings asks which one if there are several). If the router gives it a new
+  address, make a new code; a phone paired under the old address pairs again.
+  Guest networks that stop devices reaching each other won't work.
+- **The page works over `http`.** Browsers hide `crypto.randomUUID` and the
+  clipboard from pages that aren't `https` or `localhost`, so ids come from
+  `src/uuid.ts` and Copy from `src/clipboard.ts`, which have fallbacks.
+- Choosing a folder opens the system dialog on the computer, not the phone.
+
 **Connectors** are the model servers chat talks to. Each has a **provider**,
 chosen when it's added, which decides its client, how its key is sent, and
 what else it offers:

@@ -37,6 +37,7 @@ import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
 import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
 import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
 import ChatOutlinedIcon from "@mui/icons-material/ChatOutlined";
+import SmartphoneOutlinedIcon from "@mui/icons-material/SmartphoneOutlined";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import {
   type Api,
@@ -54,6 +55,7 @@ import {
 import AgentSection from "./AgentSection";
 import ChatSection from "./ChatSection";
 import ModelsSection from "./ModelsSection";
+import PhoneSection from "./PhoneSection";
 import ToolsSection from "./ToolsSection";
 import { hasWelcomeMarker, WELCOME_HASH, afterSave, setWelcomeHidden, settingsHash, welcomeBannerStep } from "./welcomeState";
 
@@ -64,6 +66,7 @@ const SECTIONS = [
   { id: "tools", label: "Tools", icon: <BuildOutlinedIcon />, Component: ToolsSection },
   { id: "agent", label: "Agent", icon: <SmartToyOutlinedIcon />, Component: AgentSection },
   { id: "chat", label: "Chat", icon: <ChatOutlinedIcon />, Component: ChatSection },
+  { id: "phone", label: "Phone", icon: <SmartphoneOutlinedIcon />, Component: PhoneSection },
 ];
 
 export default function Settings({

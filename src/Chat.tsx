@@ -96,6 +96,8 @@ import {
 } from "./api";
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { pickModel } from "./modelChoice";
+import { copyText } from "./clipboard";
+import { newId } from "./uuid";
 import SessionSettings, { ATTACHMENTS_LOCKED_NOTE, AttachmentIcon } from "./SessionSettings";
 import SessionsPanel from "./SessionsPanel";
 import EmptyChatCreature from "./EmptyChatCreature";
@@ -154,7 +156,7 @@ function loadSessionId(): string {
   } catch {
     // Falls through to a new chat.
   }
-  return crypto.randomUUID();
+  return newId();
 }
 function saveSessionId(id: string) {
   try {
@@ -283,7 +285,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setPlanAnchor(`at:${messages.length}`);
     changePlan(
       steps.map((st) => ({
-        id: crypto.randomUUID(),
+        id: newId(),
         text: st.text,
         ...(st.summary ? { summary: st.summary } : {}),
         status: "pending" as const,
@@ -478,7 +480,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     changePlan(
       s.plan?.map((st) => ({
         ...st,
-        id: st.id ?? crypto.randomUUID(),
+        id: st.id ?? newId(),
         status: st.status === "running" && !live ? "pending" : st.status,
       })) ?? null,
     );
@@ -752,7 +754,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         parentId === sessionId
           ? { id: sessionId, model, attachments, workingDir }
           : withSessionDefaults(await getSession(parentId));
-      const child = nestedSessionFrom(parent, crypto.randomUUID());
+      const child = nestedSessionFrom(parent, newId());
       const summary = await saveSession(child);
       setSessions((ss) => [summary, ...ss.filter((x) => x.id !== summary.id)]);
       openSession(child.id);
@@ -763,7 +765,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // A new session starts on the connector's default model (see pickModel),
   // not on whatever this tab last used; opening a saved one keeps its own.
   const newChat = () => {
-    openSession(crypto.randomUUID());
+    openSession(newId());
     const start = pickModel({ current: "", defaultModel: connector?.defaultModel, models });
     if (start) setModel(start);
   };
@@ -841,7 +843,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         const gone = new Set([id, ...(r.deleted ?? [])]);
         setSessions((ss) => ss.filter((x) => !gone.has(x.id)));
         // The open session is one of them: start a new one.
-        if (gone.has(sessionId)) openSession(crypto.randomUUID(), false);
+        if (gone.has(sessionId)) openSession(newId(), false);
       })
       .catch((e) => setError(e.message));
   };
@@ -2389,7 +2391,7 @@ function ApprovalPrompt({ approval, onDecide }: { approval: Approval; onDecide: 
               <IconButton
                 size="small"
                 aria-label="Copy command"
-                onClick={() => navigator.clipboard.writeText(approval.command).catch(() => {})}
+                onClick={() => void copyText(approval.command)}
                 sx={{ position: "absolute", top: 4, right: 4 }}
               >
                 <ContentCopyIcon fontSize="small" />

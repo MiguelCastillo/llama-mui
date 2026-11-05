@@ -463,6 +463,26 @@ export const getInstructions = () => call<Instructions>("GET", "/api/instruction
 export const saveInstructions = (text: string) => call<Instructions>("PUT", "/api/instructions", { text });
 export const resetInstructions = () => call<Instructions>("DELETE", "/api/instructions");
 
+// Using llama-mui from a phone (see server/phones.ts). Managing is for the
+// computer running it; a phone only ever calls pairDevice.
+export interface PairedDevice {
+  id: string;
+  name: string;
+  pairedAt: number;
+  lastSeen: number;
+}
+export interface PhoneInfo {
+  // Whether the server listens beyond this computer (npm run dev:lan).
+  reachable: boolean;
+  port: number;
+  addresses: { name: string; address: string }[];
+  devices: PairedDevice[];
+}
+export const getPhone = () => call<PhoneInfo>("GET", "/api/phone");
+export const createPairing = () => call<{ token: string; expiresAt: number }>("POST", "/api/phone/pairing");
+export const removeDevice = (id: string) => call<{ id: string }>("DELETE", `/api/phone/devices/${id}`);
+export const pairDevice = (token: string) => call<{ ok: true; name: string }>("POST", "/api/pair", { token });
+
 // Something a tool wants to do that the user approves first: a change to a
 // file, a shell command, or a git worktree being removed (making one needs no
 // approval).
