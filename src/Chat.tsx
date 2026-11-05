@@ -1701,7 +1701,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 </Button>
               </Stack>
             ) : (
-              messages.length === 0 && (
+              // The session is still being read until `loaded`, so without it the
+              // empty-chat screen would flash before the real messages.
+              loaded && messages.length === 0 && (
                 <>
                   {/* Three quarters of the way down the chat area, near the message box:
                       placed against the scrolling box (position: relative), so it stays
