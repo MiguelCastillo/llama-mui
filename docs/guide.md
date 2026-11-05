@@ -843,6 +843,9 @@ step that was running when the page closed comes back as pending.
   page: each model's status, context and source, with ▶ / ■ to load or unload
   it. **Manage models** at the bottom opens Settings → Models, where models
   are also deleted.
+  The picker is in the toolbar at the top right, which starts expanded on a
+  wide screen and folded on a phone, so the chat is what you see first; the
+  arrow on it folds or unfolds it, and the browser remembers what you chose.
 - Models load only when you ask. A llama server in router mode would load a
   model on its own when a request names it, so before every request (a
   message, a plan step, its check, Resend) llama-mui asks the server whether

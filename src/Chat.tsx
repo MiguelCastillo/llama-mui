@@ -30,6 +30,7 @@ import {
   Typography,
   type TypographyProps,
   useMediaQuery,
+  useTheme,
 } from "@mui/material";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -345,7 +346,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // to the end: earlier messages stay on screen but aren't sent any more.
   const [contextStart, setContextStart] = useState(0);
   const [prefs, setPrefs] = useState<Preferences | null>(null);
-  const [toolbarOpen, setToolbarOpenState] = useState(() => loadFlag(TOOLBAR_KEY, true));
+  // Expanded on a wide screen the first time; on a phone it starts folded, so
+  // the chat is what you see (the model was most likely chosen already). What
+  // you choose after that is kept (see setToolbarOpen). Read from the window
+  // here, not from useMediaQuery, which answers "no" on the first render.
+  const theme = useTheme();
+  const [toolbarOpen, setToolbarOpenState] = useState(() =>
+    loadFlag(TOOLBAR_KEY, !window.matchMedia(theme.breakpoints.down("sm").replace(/^@media\s*/, "")).matches),
+  );
   const narrow = useMediaQuery((t) => t.breakpoints.down("sm"));
   // The sessions panel is a drawer below this width: beside the panel (and its
   // drag handle) the chat gets too narrow for its toolbar and message box.
