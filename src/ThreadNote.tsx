@@ -5,7 +5,7 @@ import { threadLabel, type NoteView } from "./planThread";
 // "Running in a thread: <summary>" with a spinner while the thread's run is
 // going, then "Done / Failed / Not finished in a thread: <summary>" and the
 // thread's short report under it once the run has ended (see noteView). A click
-// opens the thread.
+// on the line opens the thread; the report is plain text you can select and copy.
 export default function ThreadNote({
   summary,
   view,
@@ -23,18 +23,22 @@ export default function ThreadNote({
         disabled={view.status === "missing"}
         sx={{ textTransform: "none", justifyContent: "flex-start", textAlign: "left", width: "100%" }}
       >
-        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            {view.running && <CircularProgress size="0.875rem" sx={{ flexShrink: 0 }} aria-label="Running" />}
-            <span>{threadLabel(view.status, summary)}</span>
-          </Box>
-          {view.report && (
-            <Typography variant="caption" color="text.secondary" sx={{ textAlign: "left" }}>
-              {view.report}
-            </Typography>
-          )}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+          {view.running && <CircularProgress size="0.875rem" sx={{ flexShrink: 0 }} aria-label="Running" />}
+          <span>{threadLabel(view.status, summary)}</span>
         </Box>
       </Button>
+      {/* Outside the button, so the text can be selected and copied: a button's
+          text can't be. */}
+      {view.report && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", px: 1, pb: 0.5, textAlign: "left", userSelect: "text", whiteSpace: "pre-wrap" }}
+        >
+          {view.report}
+        </Typography>
+      )}
     </Paper>
   );
 }

@@ -110,6 +110,12 @@ export function extractContext(args: string): string | null {
   }
 }
 
+// Added to the last step: its reply is the result, and it names the follow-up.
+export const LAST_STEP_NOTE =
+  "This is the last step, so your reply is the plan's result. Say what was done and found, with the paths, branches, " +
+  'commands and numbers someone will need. End with a line starting "Follow-up:" saying what still has to happen after ' +
+  '(for example restart or refresh the server, run a command, commit, answer a question), or "Follow-up: none".';
+
 // The message that runs step i: just that step, with the plan for context.
 // Steps start with a fresh context (see runPlan), so the prompt carries what
 // a step needs from before it: the context (background the model should
@@ -147,6 +153,9 @@ export function stepPrompt(
     parts.push(`The user sent these messages while the plan was running:\n${userNotes.map((n) => `- ${n}`).join("\n")}`);
   }
   parts.push(`Do step ${i + 1} of ${steps.length}: ${steps[i].text}`);
+  // The last step's reply is the plan's result: the card shows it under the
+  // checkmarks. It ends with what is left to do, so nobody has to dig for it.
+  if (i === steps.length - 1) parts.push(LAST_STEP_NOTE);
   return parts.join("\n\n");
 }
 

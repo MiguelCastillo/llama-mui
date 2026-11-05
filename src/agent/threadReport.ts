@@ -1,6 +1,6 @@
 // The short report a thread sends back to the session that started it when its
-// plan's run ends: one or two plain sentences, written by the model that ran
-// it. Three parts, like sessionNaming.ts: the prompt, reading the answer, and a
+// plan's run ends: a short report with a Follow-up line, written by the model
+// that ran it. Three parts, like sessionNaming.ts: the prompt, reading the answer, and a
 // sentence of our own for when the model can't be asked or says nothing useful.
 // The thread's messages are only read to write the prompt; they are never copied.
 // No React in this file.
@@ -23,8 +23,8 @@ export interface ReportInput {
 }
 
 const NOTE_MAX = 200;
-const LAST_MAX = 1500;
-const REPORT_MAX = 400;
+// The report is asked to stay well under this; it is only a safety net.
+const REPORT_MAX = 1500;
 
 const clip = (text: string, max: number) => {
   const one = text.replace(/\s+/g, " ").trim();
@@ -61,31 +61,35 @@ export function reportPrompt(input: ReportInput): string {
   });
   const last = [...input.messages].reverse().find((m) => m.role === "assistant" && m.content.trim());
   const parts = [
-    "A plan was run for the user in a separate thread, and it has ended. Write a short report for the user, in one or two plain sentences: what it did, or, if it didn't finish, what went wrong and what the user needs to do next. No lists, no headings, no greeting. Reply with only the report.",
+    "A plan was run for the user in a separate thread, and it has ended. Write a short report for the chat that started it, which can't see the thread: what it did and found, or, if it didn't finish, what went wrong. " +
+      "Include the paths, branches, commands and numbers the chat will need. Then end with a line starting \"Follow-up:\" saying what still has to happen after this, by the chat or by the user " +
+      "(for example restart or refresh the server, run a command, commit, answer a question), or \"Follow-up: none\" if nothing does. " +
+      "Plain text, under about 1000 characters, no headings, no greeting. Reply with only the report.",
     ...(input.request ? [`What the user asked for:\n${clip(input.request, 600)}`] : []),
     `The plan: ${clip(input.summary, NOTE_MAX)}`,
     `Steps:\n${lines.join("\n")}`,
     ...(input.stopped ? ["The user stopped the plan."] : []),
     ...(input.error ? [`The run ended with this error: ${clip(input.error, NOTE_MAX)}`] : []),
-    ...(last ? [`The last thing the model said in the thread:\n${clip(last.content, LAST_MAX)}`] : []),
+    ...(last ? [`The last thing the model said in the thread:\n${last.content.trim()}`] : []),
   ];
   return parts.join("\n\n");
 }
 
-// The model's answer as the report: whitespace tidied, the first two sentences,
-// at most REPORT_MAX characters. Null when there is nothing in it.
+// The model's answer as the report: a label and quotes taken off, spaces
+// tidied, line breaks kept (the Follow-up line is on its own line), at most
+// REPORT_MAX characters. Null when there is nothing in it.
 export function parseReport(answer: string): string | null {
   const text = answer
-    .replace(/\s+/g, " ")
+    .split("\n")
+    .map((l) => l.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim()
     .replace(/^report:\s*/i, "")
     .replace(/^["“]+|["”]+$/g, "")
     .trim();
   if (!text) return null;
-  // A sentence ends at . ! or ? followed by a space or the end, so "notes.txt" or
-  // "v1.2" stay whole. Sentences are joined with a space.
-  const firstTwo = (text.match(/\S.*?[.!?]+(?=\s|$)|\S.*$/g) ?? [text]).slice(0, 2).join(" ").trim();
-  return clip(firstTwo || text, REPORT_MAX);
+  return text.length > REPORT_MAX ? `${text.slice(0, REPORT_MAX).trimEnd()}…` : text;
 }
 
 // A plain sentence from the steps, for when the model can't write the report:

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment, ChatMessage, PlanStep, PlanThread, Session } from "../api";
-import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus } from "../planThread";
+import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage } from "../planThread";
 
 const step = (id: string, status: PlanStep["status"] = "pending", extra: Partial<PlanStep> = {}): PlanStep => ({
   id,
@@ -323,5 +323,56 @@ describe("planRequestFor", () => {
   it("looks at the whole chat when the anchor matches nothing", () => {
     expect(planRequestFor(chat(), "nope")).toBe("and something after the plan");
     expect(planRequestFor(chat(), null)).toBe("and something after the plan");
+  });
+});
+
+describe("threadsUpdate", () => {
+  const note = (extra: Partial<PlanThread>): PlanThread => ({ sessionId: "c", summary: "Move the runners", anchor: null, ...extra });
+
+  it("says nothing while no thread has an outcome", () => {
+    expect(threadsUpdate(undefined)).toBe("");
+    expect(threadsUpdate([])).toBe("");
+    expect(threadsUpdate([note({})])).toBe("");
+  });
+
+  it("lists each ended thread with its outcome and report", () => {
+    const text = threadsUpdate([
+      note({ status: "done", report: { text: "All three steps passed.\nBranch llama/runners.", at: 1 } }),
+      note({ sessionId: "d", summary: "Rename the tool", status: "failed" }),
+      note({ sessionId: "e", summary: "Still going" }),
+    ]);
+    expect(text).toBe(
+      [
+        "Plans that ran in their own sessions (threads), and how they ended:",
+        "- done: Move the runners",
+        "  Report: All three steps passed. Branch llama/runners.",
+        "- failed: Rename the tool",
+      ].join("\n"),
+    );
+  });
+});
+
+describe("finalMessage and planResult", () => {
+  const msgs: ChatMessage[] = [
+    { role: "assistant", content: "step 1 done", planStep: "1" },
+    { role: "assistant", content: "All done.\nFollow-up: restart the server.", planStep: "2" },
+    { role: "assistant", content: "   ", planStep: "2" },
+    { role: "user", content: "and now something else" },
+    { role: "assistant", content: "a later chat reply" },
+  ];
+
+  it("finalMessage is the last assistant message with text, whole", () => {
+    expect(finalMessage(msgs)).toBe("a later chat reply");
+    expect(finalMessage(msgs.slice(0, 3))).toBe("All done.\nFollow-up: restart the server.");
+    expect(finalMessage([])).toBe("");
+    expect(finalMessage(undefined)).toBe("");
+  });
+
+  it("planResult is the last step's last words, once the plan is done", () => {
+    const done = [step("1", "done"), step("2", "done")];
+    expect(planResult(done, msgs)).toBe("All done.\nFollow-up: restart the server.");
+    expect(planResult([step("1", "done"), step("2", "pending")], msgs)).toBe("");
+    expect(planResult(null, msgs)).toBe("");
+    expect(planResult(done, [{ role: "assistant", content: "x", planStep: "1" }])).toBe("");
   });
 });

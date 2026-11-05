@@ -17,6 +17,10 @@ export interface ToolContext {
   approved: string | null;
   // The session's open todos, sent by chat with each call (see server/todos.ts).
   todos: { id: string; summary: string }[];
+  // The connector and model of the reply this call is part of, for a tool that
+  // has to ask a model. Missing when the caller didn't say.
+  connectorId?: string;
+  model?: string;
 }
 
 // The folders and files the tools may reach: the working directory first,

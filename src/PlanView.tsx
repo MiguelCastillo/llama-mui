@@ -34,6 +34,7 @@ import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
 import DoneIcon from "@mui/icons-material/Done";
 import { type PlanStep } from "./api";
 import { stepLine } from "./agent/plan";
+import MarkdownRenderer from "./MarkdownRenderer";
 
 const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
   pending: <RadioButtonUncheckedIcon fontSize="small" color="disabled" />,
@@ -71,6 +72,7 @@ export function PlanView({
   onClone,
   prompt,
   onPause,
+  result,
 }: {
   steps: PlanStep[];
   // One short sentence the model wrote on what this plan does; shown at the top.
@@ -105,6 +107,10 @@ export function PlanView({
   // Pause, while the plan runs: ends the run at once, even mid-step. The plan
   // stays, the step in flight goes back to pending, and Continue picks it up.
   onPause?: () => void;
+  // The plan's result: the model's last words once every step is done. Shown
+  // under the checkmarks, open, as text you can select and copy; it ends with
+  // the follow-up (see LAST_STEP_NOTE in agent/plan.ts).
+  result?: string | null;
 }) {
   // Once every step is done, nothing in the plan runs again: no rerun, edit
   // or cancel. Redoing work is a new plan, from a new message.
@@ -374,6 +380,14 @@ export function PlanView({
           );
         })}
       </Stack>
+      {result && steps.every((s) => s.status === "done") && (
+        <Box sx={{ mt: 1.5, pt: 1.5, borderTop: 1, borderColor: "divider", userSelect: "text" }}>
+          <Typography variant="body1" sx={{ fontWeight: 500, mb: 0.5 }}>
+            Result
+          </Typography>
+          <MarkdownRenderer content={result} />
+        </Box>
+      )}
       {proposal && onProposal && <ProposalView steps={steps} proposal={proposal} onAnswer={onProposal} />}
     </Paper>
   );

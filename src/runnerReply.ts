@@ -7,6 +7,7 @@ import { type Attachment, type Session, listModels } from "./api.ts";
 import { type RunPlanCallbacks, type RunTurnCallbacks, runTurn } from "./agent/agent.ts";
 import { INTERRUPTED } from "./agent/helpers.ts";
 import { askForSessionName } from "./agent/sessionNaming.ts";
+import { threadsUpdate } from "./planThread.ts";
 import type { RunnerHandle } from "./runnerTypes.ts";
 
 // The paths of the attachments, the extra files and folders the disk tools
@@ -131,7 +132,9 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         planStep,
         systemPrompt: toolContext.systemPrompt,
         toolDefinitions: toolContext.definitions,
-        toolContextUpdate: toolContext.update,
+        // How the chat's threads ended goes the same way: when one ends, the next
+        // message carries it.
+        toolContextUpdate: [toolContext.update, threadsUpdate(now.threads)].filter(Boolean).join("\n\n"),
         seenUpdate: seen ?? "",
         history: before.slice(start),
         forgotten,

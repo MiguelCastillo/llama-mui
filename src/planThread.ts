@@ -140,6 +140,47 @@ export function applyThreadEvent(threads: PlanThread[], e: ThreadEvent): PlanThr
   });
 }
 
+// What the model of the chat that started the threads is told about them, so it
+// knows how each plan went: one line per thread whose run has ended, with the
+// report under it. Empty when none has ended (a thread still running, or with
+// no outcome yet, is left out so the text only changes when there is news).
+const OUTCOME_WORDS: Record<ThreadOutcome, string> = {
+  done: "done",
+  failed: "failed",
+  unfinished: "not finished",
+};
+
+export function threadsUpdate(threads: PlanThread[] | undefined): string {
+  const ended = (threads ?? []).filter((t) => t.status);
+  if (ended.length === 0) return "";
+  return [
+    "Plans that ran in their own sessions (threads), and how they ended:",
+    ...ended.map(
+      (t) =>
+        `- ${OUTCOME_WORDS[t.status!]}: ${t.summary}` +
+        (t.report?.text ? `\n  Report: ${t.report.text.replace(/\s*\n\s*/g, " ")}` : ""),
+    ),
+  ].join("\n");
+}
+
+// The thread's own last words: the last assistant message that has any text,
+// whole; "" when there is none. The note shows it on request and read_thread
+// gives it to the chat's model.
+export function finalMessage(messages: ChatMessage[] | undefined): string {
+  const last = [...(messages ?? [])].reverse().find((m) => m?.role === "assistant" && typeof m.content === "string" && m.content.trim());
+  return last ? last.content.trim() : "";
+}
+
+// A finished plan's result: the last words the model said in its last step
+// (the messages that step's turn made), whole; "" when the plan isn't finished
+// or that step said nothing. Not the chat's last message, which may be a
+// reply to something said after the plan.
+export function planResult(steps: PlanStep[] | null | undefined, messages: ChatMessage[]): string {
+  if (!steps || steps.length === 0 || !steps.every((s) => s.status === "done")) return "";
+  const id = steps[steps.length - 1].id;
+  return finalMessage(messages.filter((m) => m.planStep === id));
+}
+
 // The note's line, in plain words. Before the status is known (undefined) the
 // thread is shown as running.
 export function threadLabel(status: ThreadStatus | undefined, summary: string): string {

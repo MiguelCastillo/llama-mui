@@ -183,6 +183,18 @@ describe("makeReply", () => {
     expect((mockRunTurn.mock.calls[0][0] as RunTurnConfig).seenUpdate).toBe("ctx");
   });
 
+  it("tells the model how the chat's threads ended, in the context update", async () => {
+    const h = makeHandle({
+      threads: [{ sessionId: "c", summary: "Move the runners", anchor: null, status: "done", report: { text: "All steps passed.", at: 1 } }],
+    });
+    okTurn();
+    await makeReply(h.handle)("go", []);
+    const update = (mockRunTurn.mock.calls[0][0] as RunTurnConfig).toolContextUpdate;
+    expect(update).toContain("ctx");
+    expect(update).toContain("- done: Move the runners");
+    expect(update).toContain("Report: All steps passed.");
+  });
+
   it("hands asks to the runner, and the runner's own refs to the turn", async () => {
     const h = makeHandle();
     okTurn();

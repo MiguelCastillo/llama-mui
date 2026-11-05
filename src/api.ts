@@ -520,6 +520,10 @@ export interface ToolCallContext {
   // The session's open todos, for list_todos and complete_todo (the server
   // can't see the session; see server/todos.ts).
   todos?: { id: string; summary: string }[];
+  // The connector and model the reply runs on, for a tool that has to ask a model
+  // (summarize_thread; see server/threads.ts).
+  connectorId?: string;
+  model?: string;
 }
 export const runTool = (c: ToolCall, context: ToolCallContext) =>
   call<ToolOutcome>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments, ...context });

@@ -274,7 +274,7 @@ export async function runTurn(
             );
           }
 
-          let outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList() });
+          let outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model });
           while (!("result" in outcome)) {
             const answer = await askUser(outcome as any, controller.signal);
             if (controller.signal.aborted) return { ok, messages: [...forgotten, ...history], attached, error };
@@ -309,7 +309,7 @@ export async function runTurn(
               }
               attached = [...attached, target.path];
               attach({ path: target.path, kind: target.kind, source: "request" });
-              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList() });
+              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model });
             } else {
               const approval = (outcome as any).needsApproval;
               if (!answer) {
@@ -324,7 +324,7 @@ export async function runTurn(
                 break;
               }
               if (approval.type === "change") diff = approval.diff;
-              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), approved: approval as Approval });
+              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model, approved: approval as Approval });
             }
           }
           result = outcome.result;

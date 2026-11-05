@@ -123,7 +123,7 @@ import {
   stepPrompt,
   weighDispute,
 } from "./agent/plan";
-import { applyThreadEvent, noteView, threadStatus, type ThreadStatus } from "./planThread";
+import { applyThreadEvent, noteView, planResult, threadStatus, type ThreadStatus } from "./planThread";
 import {
   allViews,
   dismiss,
@@ -1330,6 +1330,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   steps={plan}
                   summary={planSummary}
                   context={planContext}
+                  result={runActive ? null : planResult(plan, messages)}
                   running={runActive}
                   since={planRunning ? taskSince : null}
                   onPause={planRunning ? () => showFailure(stopRunner(sessionId)) : undefined}

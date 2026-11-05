@@ -123,6 +123,33 @@ far (`context`, written in the same call, so a thread started later has it), `li
 (`todos`), so copying that file carries them; chat applies each call to the
 session, as it does for `update_plan`, since the server never writes that file.
 
+A plan's last step is told to end its reply with the result and a "Follow-up:"
+line, and once every step is done the plan card shows that reply under the
+checkmarks as **Result**, open, as text you can select and copy. It is the
+last step's reply, not the chat's last message.
+
+The **Threads** group (`server/threads.ts`) has two tools, each costing more
+than the one before. Before them, the chat's model already has the note's
+report and the "Chat update" with each ended thread's outcome. `read_thread`
+gives the thread's steps and its final message, whole, with no request to a
+model. If that isn't enough, `summarize_thread` asks the thread for a summary
+(it costs money: the whole thread goes to a model). The thread's own model is given the whole record of the thread (what was said,
+every tool call and its result) in one request with no tools, and asked to
+write what the chat needs: what was done and found, decided, the paths and
+branches, and what is left, ending with a "Follow-up:" line for what still has
+to happen (restart or refresh the server, run a command, commit, answer a
+question) or "Follow-up: none". The model can say in `focus` what it most needs
+("the branch name and what failed"). So the chat gets a summary as long as it
+needs to be, never the thread's raw messages and never a cut of them, and
+nothing is written to the thread. It works only on threads this chat started
+(found from the chat's saved session, not from anything the model passes); with
+several it asks which, and a running thread answers that it is still running.
+If the request fails (the model is unloaded, or it takes over three minutes),
+the answer gives the steps and the short report and says the summary couldn't
+be written. The thread's model is the thread's own, asked through the chat's
+server. This is how the model gets more than the short report in the note and
+the "Chat update".
+
 The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 `read_file`, `find_files` (names, with `*` wildcards) and `grep` (regular
 expressions over file contents). They read only the chat's working directory
@@ -684,16 +711,26 @@ the step, not in the chat.
   the plan summary. When the run ends, the spinner goes away and the note
   says how it ended: **Done in a thread** (every step done), **Failed in a
   thread** (a step failed, or one didn't pass its check) or **Not finished in
-  a thread** (stopped, or waiting for you). Under it is a report of one or
-  two sentences about what happened. Click the note to open the thread, with
+  a thread** (stopped, or waiting for you). Under it is a short report of
+  what happened, ending with a **Follow-up:** line for anything still to do
+  (restart the server, run a command) or "Follow-up: none". Click the note to open the thread, with
   the chat scrolled to the plan.
 - The thread reports back by itself, even if you aren't looking at the chat or
   the page was closed when the run ended; the note is up to date when you
   open it. Only the outcome and the report are sent to the chat that started
   the thread; the thread's messages stay in the thread.
+- The report is plain text under the note: select it and copy it as you would
+  any text (the line above it is the button that opens the thread).
+- The chat's model is told how each ended thread went: its next message carries
+  a "Chat update" with the outcome and report of every thread that has one, so
+  you can say "go on from what the thread found" and it knows. (Like the other
+  parts of the update, it is only sent when tools are on, and only when it
+  changed since the model last saw it.)
 - The report is written by the model that ran the plan, in one more request
-  with no tools, once the run has ended. It says what the plan did, or what
-  went wrong and what it needs from you. If that request fails, or you
+  with no tools, once the run has ended. It is shown the thread's last message
+  whole. It says what the plan did and found, or what went wrong, with the paths
+  and commands needed, and ends with the follow-up (at most about 1500
+  characters; a longer answer is cut there). If that request fails, or you
   stopped the run yourself, the report is a plain sentence made from the
   steps instead (for example "Step 2 failed. Open the thread to see what
   happened."). The note shows the outcome as soon as the run ends, and the

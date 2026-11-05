@@ -20,6 +20,7 @@ import {
 } from "./toolkit.ts";
 import { FETCH_TOOLS } from "./fetch.ts";
 import { PLAN_TOOLS, planInstructions } from "./plan.ts";
+import { THREAD_TOOLS, threadInstructions } from "./threads.ts";
 import { TODO_TOOLS, todoInstructions } from "./todos.ts";
 import { TERMINAL_TOOLS, exec } from "./terminal.ts";
 import { WEB_TOOLS } from "./web.ts";
@@ -51,6 +52,14 @@ const GROUPS: Group[] = [
       "Things you want to come back to. When you ask, the model saves one in the session; My Todos, on the " +
       "empty chat, lists them across sessions and starts one where it was saved.",
     instructions: todoInstructions,
+  },
+  {
+    id: "threads",
+    label: "Threads",
+    description:
+      "When a plan runs in its own session (a thread), the chat that started it gets a short report. This lets " +
+      "the model ask the thread's own model for a fuller summary when you ask about the result.",
+    instructions: threadInstructions,
   },
   {
     id: "disk",
@@ -120,6 +129,7 @@ const GROUPS: Group[] = [
 const TOOLS: ToolSpec[] = [
   ...PLAN_TOOLS,
   ...TODO_TOOLS,
+  ...THREAD_TOOLS,
   ...DISK_TOOLS,
   ...WRITE_TOOLS,
   ...WORKTREE_TOOLS,
@@ -185,6 +195,8 @@ const contextFor = async (body: any): Promise<ToolContext> => ({
   // Re-serialized here so the comparison in requireApproval doesn't depend on
   // how the client formatted its JSON.
   approved: body.approved && typeof body.approved === "object" ? JSON.stringify(body.approved) : null,
+  connectorId: typeof body.connectorId === "string" ? body.connectorId : undefined,
+  model: typeof body.model === "string" ? body.model : undefined,
   todos: Array.isArray(body.todos)
     ? body.todos
         .filter((t: any) => typeof t?.id === "string" && typeof t?.summary === "string")

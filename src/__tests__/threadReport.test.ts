@@ -18,15 +18,17 @@ describe("reportPrompt", () => {
     { role: "assistant", content: "   " },
   ];
 
-  it("asks for one or two plain sentences and names what was asked, the plan and each step", () => {
+  it("asks for a short report with a Follow-up line and names what was asked, the plan and each step", () => {
     const prompt = reportPrompt({
       summary: "Do two things",
       request: "Please do two things",
       steps: [step(1, "done"), step(2, "failed", { note: "npm test failed" })],
       messages,
     });
-    expect(prompt).toMatch(/one or two plain sentences/);
-    expect(prompt).toMatch(/what went wrong and what the user needs to do/);
+    expect(prompt).toMatch(/under about 1000 characters/);
+    expect(prompt).toContain('"Follow-up:"');
+    expect(prompt).toContain("restart or refresh the server");
+    expect(prompt).toContain('"Follow-up: none"');
     expect(prompt).toContain("What the user asked for:\nPlease do two things");
     expect(prompt).toContain("The plan: Do two things");
     expect(prompt).toContain("1. Do thing 1: done");
@@ -52,39 +54,32 @@ describe("reportPrompt", () => {
     expect(prompt).not.toContain("The last thing");
   });
 
-  it("keeps long text short", () => {
+  it("shortens a step's note but gives the model's last words whole", () => {
+    const last = "y ".repeat(5000).trim();
     const prompt = reportPrompt({
       summary: "S",
       steps: [step(1, "failed", { note: "x".repeat(5000) })],
-      messages: [{ role: "assistant", content: "y".repeat(10_000) }],
+      messages: [{ role: "assistant", content: last }],
     });
-    expect(prompt.length).toBeLessThan(2500);
+    expect(prompt).not.toContain("x".repeat(400));
+    expect(prompt).toContain(last);
   });
 });
 
 describe("parseReport", () => {
-  it("keeps the first two sentences", () => {
-    expect(parseReport("It did A. It did B. It did C.")).toBe("It did A. It did B.");
-    expect(parseReport("Only one.")).toBe("Only one.");
-    expect(parseReport("Did it! Really?  Yes.")).toBe("Did it! Really?");
+  it("keeps all of it, line breaks included", () => {
+    const text = "It did A. It did B. It did C.\nFollow-up: restart the server.";
+    expect(parseReport(text)).toBe(text);
   });
 
-  it("doesn't end a sentence at a dot inside a file name or number", () => {
-    expect(parseReport('The file was created successfully. The file out.txt contains "echo" to complete the task.')).toBe(
-      'The file was created successfully. The file out.txt contains "echo" to complete the task.',
-    );
-    expect(parseReport("Updated to v1.2 and notes.txt. Then it stopped. Extra.")).toBe("Updated to v1.2 and notes.txt. Then it stopped.");
-    expect(parseReport("Wrote a.txt and b.txt")).toBe("Wrote a.txt and b.txt");
+  it("tidies spaces, blank lines, a label and quotes", () => {
+    expect(parseReport('  Report: "It  worked.  \n\n\n\nFollow-up: none"  ')).toBe("It worked.\n\nFollow-up: none");
   });
 
-  it("tidies whitespace, a label and quotes", () => {
-    expect(parseReport('  Report: "It worked.\n\nAll good."  ')).toBe("It worked. All good.");
-  });
-
-  it("keeps an answer with no full stop, and cuts a very long one", () => {
-    expect(parseReport("It worked")).toBe("It worked");
-    const long = parseReport(`${"word ".repeat(200)}end.`)!;
-    expect(long.length).toBeLessThanOrEqual(401);
+  it("cuts only an answer longer than the limit, and marks it", () => {
+    expect(parseReport("w".repeat(1400))).toHaveLength(1400);
+    const long = parseReport(`${"word ".repeat(400)}end.`)!;
+    expect(long.length).toBeLessThanOrEqual(1501);
     expect(long.endsWith("…")).toBe(true);
   });
 

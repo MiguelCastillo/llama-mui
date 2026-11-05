@@ -313,13 +313,26 @@ describe("stepPrompt", () => {
         asked: "Discard or stash your edit?",
         answer: "stash it",
       },
+      { id: "3", text: "Delete the branch", status: "pending" },
     ];
     const prompt = stepPrompt(steps, 1);
     expect(prompt).toContain("You asked: Discard or stash your edit?");
     expect(prompt).toContain("The user answered your question: stash it");
     expect(prompt.indexOf("You asked:")).toBeLessThan(prompt.indexOf("The user answered"));
-    expect(prompt.indexOf("The user answered")).toBeLessThan(prompt.indexOf("Do step 2 of 2"));
-    expect(prompt.split("\n").pop()?.trim()).toBe("Do step 2 of 2: Merge y into main");
+    expect(prompt.indexOf("The user answered")).toBeLessThan(prompt.indexOf("Do step 2 of 3"));
+    expect(prompt.split("\n").pop()?.trim()).toBe("Do step 2 of 3: Merge y into main");
+  });
+
+  it("tells the last step, and only the last, to end with the result and a Follow-up line", () => {
+    const steps: PlanStep[] = [
+      { id: "1", text: "One", status: "done" },
+      { id: "2", text: "Two", status: "pending" },
+    ];
+    expect(stepPrompt(steps, 0)).not.toContain("Follow-up:");
+    const last = stepPrompt(steps, 1);
+    expect(last).toContain("This is the last step");
+    expect(last).toContain('"Follow-up: none"');
+    expect(last.indexOf("Do step 2 of 2")).toBeLessThan(last.indexOf("This is the last step"));
   });
 
   it("gives the answer of the step being run only, not of other steps", () => {
