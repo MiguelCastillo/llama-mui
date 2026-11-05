@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { markRead } from "./reads.ts";
+import { KEYS_FILE, SECRET_KEY_FILE } from "./secrets.ts";
 import { SETTINGS_FILE } from "./store.ts";
 import {
   AccessNeeded,
@@ -69,8 +70,9 @@ export async function inSessionWorktrees(real: string): Promise<boolean> {
   return false;
 }
 
-// settings.json holds API keys, so no tool may read it even inside an attached folder.
-export const isSettingsFile = (p: string) => p.startsWith(SETTINGS_FILE);
+// settings.json, the encrypted .keys and the key that unlocks them are about
+// API keys, so no tool may read them even inside an attached folder.
+export const isSettingsFile = (p: string) => [SETTINGS_FILE, KEYS_FILE, SECRET_KEY_FILE].some((f) => p.startsWith(f));
 
 // The path the model sent, made absolute: ~ expanded, "../" resolved.
 // Relative paths start in the chat's working directory and nowhere else: an

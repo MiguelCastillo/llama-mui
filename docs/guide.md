@@ -7,7 +7,17 @@ and [AGENTS.md](../AGENTS.md) is for changing the code.
 
 Settings are saved in `~/.llama-mui/settings.json`, outside the project and
 readable only by you (older versions kept `settings.json` in the project
-folder; it's moved on first start). They're
+folder; it's moved on first start). The servers' API keys are not in that file:
+they are encrypted (AES-256-GCM) in `~/.llama-mui/.keys`, and the random key
+that unlocks them is in `~/.config/llama-mui/secret.key` (under
+`AppData\Roaming\llama-mui` on Windows), outside `~/.llama-mui`, so copying or
+backing up `~/.llama-mui` doesn't copy usable keys. On a server or in a
+container, set `LLAMA_MUI_SECRET_KEY` (32 random bytes, base64) instead of the
+file. Like `ssh` with a private key, llama-mui refuses a `secret.key` that other
+users can read and tells you the `chmod 600` to run. If the unlocking key is
+lost, Settings asks for the keys again; keys from an older `settings.json` are
+moved into `.keys` and checked on the first start. This doesn't stop a program
+running as you that can read both places. They're
 served by a Vite plugin (`server/plugin.ts`) that runs under both
 `npm run dev` and `npm run preview`. It refuses requests from other websites
 (by their `Origin` and `Sec-Fetch-Site` headers): any page open in your browser
@@ -133,7 +143,7 @@ file / Choose folder buttons.
 The server re-checks the attachments on every call, and every path the model
 sends is checked against them after resolving symlinks and `../`. Searches
 skip symlinks, so they stay inside what's attached. `settings.json` itself
-can't be attached, read or searched.
+can't be attached, read or searched, nor can `.keys` or `secret.key`.
 
 The **Write** group (`server/write.ts`) has `write_file` (create a file or
 replace all of it) and `edit_file` (replace exact text in a file). They work
@@ -145,7 +155,7 @@ existing file can only be changed once the model has read it in this chat,
 and only if it hasn't changed since, so the model can't overwrite changes it
 never saw; it's told to read the file again. The server keeps track of these
 reads in memory, so after a dev server restart the model reads files again
-before changing them. Files can't be deleted, and `settings.json` can't be
+before changing them. Files can't be deleted, and `settings.json`, `.keys` and `secret.key` can't be
 written.
 
 The **Worktrees** group (`server/worktree.ts`) has `create_worktree` and
@@ -742,7 +752,7 @@ step that was running when the page closed comes back as pending.
     messages from the first one that differs, at most about ten a second),
     `ack` (the step that will see a message you sent to the run),
     `thread`, `saved` and `removed`. A quiet connection gets a comment line every 15
-    seconds. The events hold no API keys: keys stay in `settings.json`, and the
+    seconds. The events hold no API keys: keys stay encrypted in `.keys`, and the
     server never hands one to a run.
   - **Nested sessions**: the button beside the trash icon on each row makes a
     new, empty session under that one. It keeps the same working directory,

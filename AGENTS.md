@@ -19,19 +19,24 @@ works, and this file says how to change it.
   check goes. Today's stand-ins:
   - the path checks and access prompts in `server/disk.ts` and `server/write.ts`,
     including the `sessions/<id>/worktrees` exception;
-  - the `settings.json` block (`isSettingsFile`);
+  - the block on `settings.json`, `.keys` and the key file (`isSettingsFile`);
   - the home-folder rule in `create_worktree`, and the approval `remove_worktree` asks for.
 
   Don't add to this list without saying so here.
 
 ## API keys
 
-A saved key lives in `settings.json` and in the headers of requests to its own
-server, and nowhere else: not in a response to the browser (it's only told
-whether a connector has one, `hasKey`), not in a prompt or a tool result, not in
-a log, and not in `session.json`. Keeping it out of `session.json` is what makes
-a session exportable by copying that one file, so code that writes session data
-must never be handed a key. The app doesn't scrub anything for you.
+A saved key lives encrypted in `~/.llama-mui/.keys` (AES-256-GCM, `server/secrets.ts`)
+and in the headers of requests to its own server, and nowhere else: not in
+`settings.json` (older versions kept it there; `load()` moves it out and checks
+it first), not in a response to the browser (it's only told whether a connector
+has one, `hasKey`), not in a prompt or a tool result, not in a log, and not in
+`session.json`. The key that unlocks `.keys` is random and lives outside
+`~/.llama-mui`, in `~/.config/llama-mui/secret.key` (or `LLAMA_MUI_SECRET_KEY`),
+so copying `~/.llama-mui` copies nothing usable. Keeping a key out of
+`session.json` is what makes a session exportable by copying that one file, so
+code that writes session data must never be handed a key. The app doesn't scrub
+anything for you.
 
 ## Styling
 
@@ -57,8 +62,9 @@ must never be handed a key. The app doesn't scrub anything for you.
 - Check with `npx tsc --noEmit -p . && npx vitest run`.
 - Tests never touch the real `~/.llama-mui`: they point `os.homedir` at a temp
   folder before importing anything (see `server/__tests__/worktree.test.ts`).
-- Don't open `~/.llama-mui/settings.json`; it holds the API keys.
-- Where data lives: `~/.llama-mui/settings.json`, and for each session
+- Don't open `~/.llama-mui/.keys` or `~/.config/llama-mui/secret.key`; they hold the API keys.
+  Leave `settings.json` alone too: older versions kept the keys in it.
+- Where data lives: `~/.llama-mui/settings.json` (and `.keys`), and for each session
   `~/.llama-mui/sessions/<id>/session.json` with its `worktrees/` beside it.
 - Git commands that write (`commit`, `branch`, `reset`) are the user's to run in
   some setups; give the command as one line and let them run it.

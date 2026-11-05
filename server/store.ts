@@ -1,11 +1,14 @@
-// The app's saved settings: llama servers (with their keys), which tools are
-// turned off, per-model options, and chat display preferences. Lives in
+// The app's saved settings: llama servers, which tools are turned off,
+// per-model options, and chat display preferences. Lives in
 // ~/.llama-mui/settings.json, next to the saved sessions, readable only by you;
-// only this server code touches it.
+// only this server code touches it. The servers' API keys are not in that file:
+// they are encrypted in ~/.llama-mui/.keys (see secrets.ts). A Connector has
+// its `apiKey` in memory, filled in by load() and taken out again by save().
 
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { openKeys, sealKeys } from "./secrets.ts";
 
 export interface Connector {
   id: string;
@@ -93,25 +96,81 @@ const empty = (): Store => ({
   checkCommands: {},
 });
 
-export async function load(): Promise<Store> {
+// Ids of connectors whose saved key wouldn't open when a store was loaded, by
+// store: save() keeps their entries instead of erasing a key that is only
+// locked (say, LLAMA_MUI_SECRET_KEY wasn't set this time).
+const locked = new WeakMap<Store, string[]>();
+
+// Settings from the file, before the keys are put back (and with any key an
+// older version left in the file, which load() moves out).
+async function readSettings(): Promise<any> {
   try {
-    const raw = JSON.parse(await readFile(SETTINGS_FILE, "utf8"));
-    const base = empty();
-    // Merge preferences key by key so ones added later get their defaults.
-    // The recent working directories were briefly kept here; they have their own file now.
-    delete raw.recentFolders;
-    return { ...base, ...raw, preferences: { ...base.preferences, ...raw.preferences } };
+    return JSON.parse(await readFile(SETTINGS_FILE, "utf8"));
   } catch (e: any) {
     if (e.code !== "ENOENT") throw e;
   }
   // Nothing in ~/.llama-mui yet: bring over the old file, if there is one.
-  return (await moveOldSettings()) ? load() : empty();
+  return (await moveOldSettings()) ? readSettings() : null;
 }
 
-// Write-then-rename so a crash mid-write can't leave a truncated file.
-export async function save(store: Store): Promise<void> {
+async function writeSettings(store: Store): Promise<void> {
   await mkdir(path.dirname(SETTINGS_FILE), { recursive: true, mode: 0o700 });
   const tmp = `${SETTINGS_FILE}.tmp`;
-  await writeFile(tmp, JSON.stringify(store, null, 2) + "\n", { mode: 0o600 });
+  // The keys stay out of the file.
+  const bare = { ...store, connectors: store.connectors.map(({ apiKey: _key, ...c }) => c) };
+  await writeFile(tmp, JSON.stringify(bare, null, 2) + "\n", { mode: 0o600 });
   await rename(tmp, SETTINGS_FILE);
+}
+
+// Loads and saves run one at a time. Two requests at once would otherwise both
+// move an old file's keys, or write the same temporary file.
+let queue: Promise<unknown> = Promise.resolve();
+function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+  const run = queue.then(fn, fn);
+  queue = run.catch(() => {});
+  return run;
+}
+
+export const load = (): Promise<Store> => exclusive(loadNow);
+
+async function loadNow(): Promise<Store> {
+  const raw = await readSettings();
+  if (!raw) return empty();
+  const base = empty();
+  // The recent working directories were briefly kept here; they have their own file now.
+  delete raw.recentFolders;
+  const connectors: any[] = Array.isArray(raw.connectors) ? raw.connectors : [];
+  const { keys, locked: lockedIds } = await openKeys();
+  // Keys an older version left in the file: moved into .keys, read back to
+  // check, and only then taken out of the file. They win over what .keys holds,
+  // since only a version that didn't know about .keys could have written them.
+  const legacy = connectors.filter((c) => typeof c.apiKey === "string" && c.apiKey);
+  if (legacy.length > 0) {
+    const merged = { ...keys, ...Object.fromEntries(legacy.map((c) => [c.id, c.apiKey])) };
+    await sealKeys(merged, lockedIds);
+    const back = (await openKeys()).keys;
+    if (legacy.some((c) => back[c.id] !== c.apiKey)) throw new Error("Couldn't check the API keys after encrypting them; settings.json was left as it was.");
+    Object.assign(keys, merged);
+    await writeSettings({ ...base, ...raw, connectors, preferences: { ...base.preferences, ...raw.preferences } });
+  }
+  // Merge preferences key by key so ones added later get their defaults.
+  const store: Store = {
+    ...base,
+    ...raw,
+    connectors: connectors.map((c) => ({ ...c, apiKey: keys[c.id] ?? "" })),
+    preferences: { ...base.preferences, ...raw.preferences },
+  };
+  locked.set(store, lockedIds);
+  return store;
+}
+
+// Write-then-rename so a crash mid-write can't leave a truncated file. The keys
+// are sealed first: a failure there leaves settings.json as it was.
+export const save = (store: Store): Promise<void> => exclusive(() => saveNow(store));
+
+async function saveNow(store: Store): Promise<void> {
+  const keys = Object.fromEntries(store.connectors.filter((c) => c.apiKey).map((c) => [c.id, c.apiKey]));
+  const ids = new Set(store.connectors.map((c) => c.id));
+  await sealKeys(keys, (locked.get(store) ?? []).filter((id) => ids.has(id)));
+  await writeSettings(store);
 }
