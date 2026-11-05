@@ -93,6 +93,8 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
       askUser: h.askUser,
       attach: (a) =>
         h.edit((s) => (s.attachments.some((x) => x.path === a.path) ? s : { ...s, attachments: [...s.attachments, a] })),
+      // Only a chat with none; one that has a working directory keeps it.
+      setWorkingDir: (path) => h.edit((s) => (s.workingDir ? s : { ...s, workingDir: path })),
       setPlanProposal: (planProposal) => h.edit((s) => ({ ...s, planProposal })),
       setPastPlans: (fn) => h.edit((s) => ({ ...s, pastPlans: fn(s.pastPlans ?? []) })),
       setPlanAnchor: (planAnchor) => h.edit((s) => ({ ...s, planAnchor })),

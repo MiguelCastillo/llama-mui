@@ -209,7 +209,7 @@ const contextFor = async (body: any): Promise<ToolContext> => ({
 type Outcome =
   | { result: string }
   | { needsAccess: AccessRequest }
-  | { needsLocation: { description: string; kind: AttachmentTarget["kind"] } }
+  | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }
   | { needsApproval: Approval };
 
 // A path the model made up, where nothing exists, is first answered with an

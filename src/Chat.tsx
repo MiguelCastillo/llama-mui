@@ -17,6 +17,8 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  Checkbox,
+  FormControlLabel,
   Divider,
   Fab,
   IconButton,
@@ -65,6 +67,7 @@ import {
   type Attachment,
   type AccessRequest,
   type AttachmentTarget,
+  type Picked,
   type Approval,
   type ToolContext,
   type PastPlan,
@@ -86,6 +89,7 @@ import {
   loadModel,
   unloadModel,
   pickAttachments,
+  getRecentFolders,
   deleteSession,
   getSession,
   getWorktreeStatuses,
@@ -108,6 +112,7 @@ import EmptyChatSuggestions from "./EmptyChatSuggestions";
 import { settleStart, startAction, type Start, type StartAction } from "./todos";
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
+import RecentFolders from "./RecentFolders";
 import { commandSummary, INTERRUPTED, failureLine, shownFailure } from "./agent/helpers";
 import {
   PlanView,
@@ -192,9 +197,9 @@ function saveFlag(key: string, value: boolean) {
 // or, for a path, the files or folders they picked in its place.
 type Ask =
   | { needsAccess: AccessRequest }
-  | { needsLocation: { description: string; kind: AttachmentTarget["kind"] } }
+  | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }
   | { needsApproval: Approval };
-type Answer = boolean | AttachmentTarget[];
+type Answer = boolean | Picked[];
 
 // A model stuck in a loop repeats itself: the third identical call (same tool,
 // same arguments) in one reply isn't run, and the model answers with what it
@@ -2352,7 +2357,7 @@ function ToolCallView({
 function PendingPrompt({ ask, onDecide }: { ask: Ask; onDecide: (answer: Answer) => void }) {
   if ("needsApproval" in ask) return <ApprovalPrompt approval={ask.needsApproval} onDecide={onDecide} />;
   if ("needsLocation" in ask) {
-    const { description, kind } = ask.needsLocation;
+    const { description, kind, canSetWorkingDir } = ask.needsLocation;
     return (
       <FindPrompt
         heading={`The model needs you to find this ${kind}:`}
@@ -2360,6 +2365,7 @@ function PendingPrompt({ ask, onDecide }: { ask: Ask; onDecide: (answer: Answer)
         isPath={false}
         icon={<TravelExploreIcon fontSize="small" />}
         kinds={kind === "file" ? ["file", "folder"] : ["folder", "file"]}
+        canSetWorkingDir={canSetWorkingDir}
         onDecide={onDecide}
       />
     );
@@ -2448,6 +2454,7 @@ function FindPrompt({
   isPath,
   icon,
   kinds,
+  canSetWorkingDir = false,
   onDecide,
 }: {
   heading: string;
@@ -2457,16 +2464,36 @@ function FindPrompt({
   icon: ReactNode;
   // Which pick buttons to offer, the likelier first.
   kinds: AttachmentTarget["kind"][];
+  // The chat has no working directory, so a folder chosen here can become it.
+  canSetWorkingDir?: boolean;
   onDecide: (answer: Answer) => void;
 }) {
   const [picking, setPicking] = useState(false);
+  const [asWorkingDir, setAsWorkingDir] = useState(true);
+  // What the checkbox says goes with a chosen folder; a file is just attached.
+  const decide = (picked: AttachmentTarget[]) =>
+    onDecide(canSetWorkingDir && asWorkingDir ? picked.map((p) => (p.kind === "folder" ? { ...p, asWorkingDir: true } : p)) : picked);
   const [error, setError] = useState<string | null>(null);
+  // The folders chosen lately, the same list Session settings offers, when a
+  // folder is what's wanted. Choosing one answers the prompt.
+  const [recent, setRecent] = useState<string[]>([]);
+  const wantsFolder = kinds[0] === "folder";
+  useEffect(() => {
+    if (!wantsFolder) return;
+    let current = true;
+    getRecentFolders()
+      .then((r) => current && setRecent(r.folders))
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [wantsFolder]);
   // Cancelling the dialog leaves the prompt up.
   const pick = (kind: AttachmentTarget["kind"]) => {
     setPicking(true);
     setError(null);
     pickAttachments(kind)
-      .then((picked) => picked.length && onDecide(picked))
+      .then((picked) => picked.length && decide(picked))
       .catch((e) => setError(e.message))
       .finally(() => setPicking(false));
   };
@@ -2480,8 +2507,17 @@ function FindPrompt({
         {subject}
       </Typography>
       <Typography variant="caption" color="text.secondary" component="div">
-        Choose it and it's attached to this session; the model then uses that path.
+        {canSetWorkingDir && asWorkingDir
+          ? "Choose a folder and it becomes this session's working directory; the model then uses that path."
+          : "Choose it and it's attached to this session; the model then uses that path."}
       </Typography>
+      {canSetWorkingDir && (
+        <FormControlLabel
+          sx={{ display: "flex", mt: 0.5 }}
+          control={<Checkbox size="small" checked={asWorkingDir} onChange={(e) => setAsWorkingDir(e.target.checked)} />}
+          label={<Typography variant="body2">Make it the working directory</Typography>}
+        />
+      )}
       {error && (
         <Typography variant="caption" color="error" component="div">
           {error}
@@ -2506,6 +2542,11 @@ function FindPrompt({
         </Button>
         {picking && <CircularProgress size="1.125rem" />}
       </Stack>
+      {wantsFolder && recent.length > 0 && (
+        <Box sx={{ mt: 1.5 }}>
+          <RecentFolders folders={recent} disabled={picking} onChoose={(path) => decide([{ path, kind: "folder" }])} />
+        </Box>
+      )}
     </Alert>
   );
 }

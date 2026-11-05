@@ -264,6 +264,29 @@ describe("makeReply", () => {
     expect(s.promptDir).toBe("/work");
   });
 
+  // The other way a folder arrives: the user ticked "Make it the working
+  // directory" in the find-this-folder prompt (see Picked).
+  it("sets the working directory when the user chose a folder as one, and only in a chat with none", async () => {
+    const bare = makeHandle({ workingDir: null, attachments: [] });
+    mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {
+      cb.setWorkingDir("/chosen");
+      return { ok: true, messages: [user(config.text)], attached: [] };
+    });
+    await makeReply(bare.handle)("go", []);
+    expect(bare.session().workingDir).toBe("/chosen");
+    // It is not also an attachment, and the prompt's folder stays what it was at the first reply.
+    expect(bare.session().attachments).toEqual([]);
+    expect(bare.session().promptDir).toBeNull();
+    // The next reply starts in it.
+    await makeReply(bare.handle)("again", []);
+    expect(mockRunTurn.mock.calls[1][0]).toMatchObject({ workingDir: "/chosen", attached: [] });
+
+    // A chat that has one keeps it.
+    const set = makeHandle();
+    await makeReply(set.handle)("go", []);
+    expect(set.session().workingDir).toBe("/work");
+  });
+
   it("keeps a chat with no working directory without one when the model asks for a folder", async () => {
     const h = makeHandle({ workingDir: null, attachments: [] });
     mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {

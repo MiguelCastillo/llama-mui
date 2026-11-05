@@ -163,8 +163,10 @@ A new chat starts with neither.
 
 - **Working directory** is the folder relative paths and `run_command` start
   in, and the system prompt names it. It's a setting of the chat, separate
-  from the attachments, and it's never picked for you: attaching a folder
-  doesn't make it the working directory. Choose it with **Choose folder…**
+  from the attachments. The model never picks it, and attaching a folder
+  doesn't make it the working directory; the one way a folder becomes it
+  without you opening these settings is a choice you make in the model's
+  "find this folder" prompt (see below). Choose it here with **Choose folder…**
   (one folder; files aren't offered) or pick one from **Recent**. Choosing
   another folder replaces it, and the old one isn't kept as
   an attachment. **Clear** removes it. Under **Recent** are the last five
@@ -188,7 +190,8 @@ about them changes.
 
 When the model asks for a path that isn't the working directory or attached,
 the reply pauses on an Allow / Deny prompt; allowing attaches it for the rest
-of the chat (never as the working directory), and denying tells the model no.
+of the chat (never as the working directory: nothing the model asks for
+changes it), and denying tells the model no.
 When the path doesn't exist but its own folder does (a file the model is about
 to create, say), it is the same Allow / Deny prompt, for that folder: the file
 not being there yet is expected, and what is missing is access.
@@ -198,7 +201,17 @@ right file or folder in the system dialog instead: whatever you pick is
 attached, and the model is told to use it.
 When you name something without its path ("find llama mui"), the model calls
 `locate_path` instead of guessing, and the reply pauses with the same Choose
-file / Choose folder buttons.
+file / Choose folder buttons, and, for a folder, the Recent list.
+When the chat has no working directory, a folder asked for this way comes
+with a checkbox, "Make it the working directory", ticked: choosing a folder
+(Choose folder… or one under Recent) then makes it the working directory
+instead of attaching it, so `run_command` and relative paths start there for
+the rest of that reply and every one after it, and the model is told so (the
+next message carries "The working directory is now …"; the system prompt, fixed
+at the first reply, is not rewritten). Untick it and the folder is attached as
+usual. With a working directory already set there is no checkbox and the
+folder is attached; a file is always attached. This is the user's choice only:
+the model's own requests never change the working directory.
 The server re-checks the attachments on every call, and every path the model
 sends is checked against them after resolving symlinks and `../`. Searches
 skip symlinks, so they stay inside what's attached. `settings.json` itself

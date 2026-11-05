@@ -24,7 +24,7 @@
 // Nothing here can hold an API key: the server never sends one, and the page
 // never had one.
 
-import { ApiError, type AttachmentTarget, type Session, getSession, sendCommand } from "./api";
+import { ApiError, type Picked, type Session, getSession, sendCommand } from "./api";
 import { applyPatch, type SessionPatch } from "../server/sessionPatch";
 import type { Answer, Ask } from "./runnerTypes";
 import { type RunnerView, needsYou } from "./runView";
@@ -402,7 +402,7 @@ export async function sendChat(id: string, text: string, options: RunOptions & {
 export const approve = (id: string, askId: string, allow: boolean) => sendCommand(id, "approve", { askId, allow });
 
 // The files or folders picked for a question that asks for a path.
-export const answer = (id: string, askId: string, paths: AttachmentTarget[]) => sendCommand(id, "answer", { askId, paths });
+export const answer = (id: string, askId: string, paths: Picked[]) => sendCommand(id, "answer", { askId, paths });
 
 // The answer behind a view's `ask.decide`: a refusal shows as the run's error
 // until the next event, except for a question that was answered already (the

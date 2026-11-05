@@ -184,6 +184,26 @@ describe("approve and answer", () => {
     await vi.waitFor(() => expect(askedAnswer("a", "s1")).toEqual(picked));
   });
 
+  it("answer keeps asWorkingDir for a folder and drops it for anything else", async () => {
+    saved("a", 1);
+    askOn("a", "s1", { needsLocation: { description: "the notes", kind: "folder", canSetWorkingDir: true } });
+    await command("a", "run", options);
+    const askId = await waitingFor();
+    const paths = [
+      { path: "/notes", kind: "folder", asWorkingDir: true },
+      { path: "/n.txt", kind: "file", asWorkingDir: true },
+      { path: "/other", kind: "folder", asWorkingDir: "yes" },
+    ];
+    expect((await command("a", "answer", { askId, paths })).status).toBe(200);
+    await vi.waitFor(() =>
+      expect(askedAnswer("a", "s1")).toEqual([
+        { path: "/notes", kind: "folder", asWorkingDir: true },
+        { path: "/n.txt", kind: "file" },
+        { path: "/other", kind: "folder" },
+      ]),
+    );
+  });
+
   it("a no turns down a location ask too", async () => {
     saved("a", 1);
     askOn("a", "s1", { needsLocation: { description: "the notes", kind: "folder" } });

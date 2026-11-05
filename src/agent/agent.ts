@@ -1,6 +1,6 @@
 // Turn-loop helpers extracted from Chat.tsx.
 
-import { type Api, type Kind, type ChatMessage, type ToolCall, type Usage, type Todo, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, streamChat, runTool } from "../api.ts";
+import { type Api, type Kind, type ChatMessage, type ToolCall, type Usage, type Todo, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, type Picked, streamChat, runTool } from "../api.ts";
 import { closeOpenToolCalls } from "../closeOpenToolCalls.ts";
 import { callKey, shareTokens } from "./helpers.ts";
 import { applyTodoCall, openTodos } from "./todos.ts";
@@ -81,8 +81,10 @@ export interface RunTurnCallbacks {
   setUsage: (u: Usage | undefined) => void;
   setAbort: (c: AbortController | null) => void;
   refreshModels: (id: string) => void;
-  askUser: (ask: { needsAccess: AccessRequest } | { needsApproval: Approval } | { needsLocation: { description: string; kind: AttachmentTarget["kind"] } }, signal: AbortSignal) => Promise<boolean | AttachmentTarget[]>;
+  askUser: (ask: { needsAccess: AccessRequest } | { needsApproval: Approval } | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }, signal: AbortSignal) => Promise<boolean | Picked[]>;
   attach: (a: Attachment) => void;
+  // The user chose this folder as the chat's working directory (see Picked).
+  setWorkingDir: (path: string) => void;
   setPlanProposal: (p: any[]) => void;
   setPastPlans: (fn: (p: any[]) => any[]) => void;
   setPlanAnchor: (a: string | null) => void;
@@ -149,16 +151,19 @@ export async function runTurn(
   const {
     connectorId, kind, api, model, toolsOn, thinkOn, planning, planStep,
     systemPrompt, toolDefinitions, toolContextUpdate, seenUpdate,
-    history: baseHistory, forgotten, workingDir, attached: attachedBase,
+    history: baseHistory, forgotten, attached: attachedBase,
     chatId, controller, started, text,
   } = config;
-  const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, setPlanSummary, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext, planSummary } = callbacks;
+  const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setWorkingDir, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, setPlanSummary, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext, planSummary } = callbacks;
 
   const tag = planStep ? { planStep } : {};
   let error: string | undefined;
   let ok = false;
 
-  // attached is mutated when the user picks paths during tool execution.
+  // Both change when the user picks paths during tool execution: a folder
+  // chosen as the working directory is where the rest of this reply's calls
+  // start, and the session gets it through setWorkingDir.
+  let workingDir = config.workingDir;
   let attached = [...attachedBase];
 
   const update = toolsOn && toolContextUpdate !== seenUpdate ? { update: toolContextUpdate } : {};
@@ -276,18 +281,32 @@ export async function runTurn(
 
           let outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model });
           while (!("result" in outcome)) {
+            // Only a chat with no working directory offers to make the folder one.
+            if ("needsLocation" in outcome && workingDir === null && outcome.needsLocation.kind === "folder") {
+              outcome = { needsLocation: { ...outcome.needsLocation, canSetWorkingDir: true } };
+            }
             const answer = await askUser(outcome as any, controller.signal);
             if (controller.signal.aborted) return { ok, messages: [...forgotten, ...history], attached, error };
             toolStarted = performance.now();
             if (Array.isArray(answer)) {
-              const newTargets = answer as AttachmentTarget[];
+              // The working directory is not also an attachment. Only for a folder,
+              // and only when the chat has none (the prompt offers it only then).
+              const home = "needsLocation" in outcome && workingDir === null
+                ? answer.find((t) => t.asWorkingDir && t.kind === "folder")
+                : undefined;
+              if (home) {
+                workingDir = home.path;
+                setWorkingDir(home.path);
+              }
+              const newTargets = answer.filter((t) => t !== home);
               const newPaths = newTargets.map((t) => t.path);
               attached = [...attached, ...newPaths];
-              newTargets.forEach((t) => attach({ ...t, source: "request" as const }));
-              const picked = newPaths.map((p: string) => `${p} (file)`).join(", ");
+              newTargets.forEach((t) => attach({ path: t.path, kind: t.kind, source: "request" as const }));
+              const picked = newTargets.map((t) => `${t.path} (${t.kind})`).join(", ");
               outcome = {
-                result:
-                  "needsAccess" in outcome
+                result: home
+                  ? `The user picked ${home.path} and made it the working directory: relative paths and run_command start there from now on. Use that path.${picked ? ` Also attached: ${picked}.` : ""}`
+                  : "needsAccess" in outcome
                     ? `Instead of ${(outcome as any).needsAccess.path}, the user attached ${picked}. Use that path; call the tool again with it.`
                     : `The user picked ${picked}; it's attached to this chat. Use that path.`,
               };

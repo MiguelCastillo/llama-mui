@@ -15,8 +15,10 @@
 //            card calls it Pause, a chat reply Stop.
 //   approve  { askId, allow }   yes or no to an access or approval question
 //            (a no also turns down a question that asks for a path)
-//   answer   { askId, paths: [{ path, kind }] }   the files or folders picked
-//            for a question that asks for a path
+//   answer   { askId, paths: [{ path, kind, asWorkingDir? }] }   the files or
+//            folders picked for a question that asks for a path; asWorkingDir
+//            (a folder, in a chat with no working directory) sets it as the
+//            working directory instead of attaching it
 //   message  { text }   a message to the session.
 //            While a plan runs, it is folded in before the next step (after
 //            Pause's hold), which gets it in its prompt; the answer says
@@ -150,7 +152,7 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
       await runners.answerAsk(
         id,
         askIdOf(body),
-        paths.map((p: any) => ({ path: p.path, kind: p.kind })),
+        paths.map((p: any) => ({ path: p.path, kind: p.kind, ...(p.asWorkingDir === true && p.kind === "folder" && { asWorkingDir: true }) })),
       );
       break;
     }

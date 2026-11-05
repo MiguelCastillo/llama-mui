@@ -370,6 +370,11 @@ export interface AttachmentTarget {
   kind: "file" | "folder";
 }
 
+// A folder or file the user chose to answer a prompt. `asWorkingDir`: the user
+// ticked "Make it the working directory", so a folder is set as the chat's
+// working directory instead of being attached.
+export type Picked = AttachmentTarget & { asWorkingDir?: boolean };
+
 // A path the model asked for outside the chat's attachments. kind is null
 // when nothing exists there, so the user can point to the right one instead.
 export interface AccessRequest {
@@ -504,7 +509,7 @@ export type Approval =
 export type ToolOutcome =
   | { result: string }
   | { needsAccess: AccessRequest }
-  | { needsLocation: { description: string; kind: AttachmentTarget["kind"] } }
+  | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }
   | { needsApproval: Approval };
 
 export interface ToolCallContext {

@@ -357,7 +357,8 @@ const locatePath: ToolSpec = {
   definition: fn(
     "locate_path",
     "Ask the user to pick a file or folder they mentioned without its full path, like \"my notes\" or \"the " +
-      "llama-mui project\". They choose it in a file dialog, it's attached to the chat, and you get its path. " +
+      "llama-mui project\". They choose it in a file dialog, it's attached to the chat (or, for a folder in a chat with no working " +
+      "directory, they may make it the working directory), and you get its path. " +
       "Use this instead of guessing paths.",
     {
       type: "object",

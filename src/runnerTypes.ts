@@ -2,15 +2,15 @@
 // and a runner (the server's, server/runners.ts) can both use them without
 // either importing the other. No React in this file.
 
-import type { AccessRequest, Approval, AttachmentTarget, Connector, Model, PlanStep, Session, ToolContext } from "./api.ts";
+import type { AccessRequest, Approval, AttachmentTarget, Picked, Connector, Model, PlanStep, Session, ToolContext } from "./api.ts";
 
 // What a tool call can wait on the user for, and their answer: allow or deny,
 // or, for a path, the files or folders they picked in its place.
 export type Ask =
   | { needsAccess: AccessRequest }
-  | { needsLocation: { description: string; kind: AttachmentTarget["kind"] } }
+  | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }
   | { needsApproval: Approval };
-export type Answer = boolean | AttachmentTarget[];
+export type Answer = boolean | Picked[];
 
 // What a run needs besides the session. Kept by the runner, never saved. The
 // connector is the server's list entry (`hasKey`, never the key itself).

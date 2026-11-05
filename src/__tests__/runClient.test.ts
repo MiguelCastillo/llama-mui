@@ -325,6 +325,14 @@ describe("asks", () => {
     });
   });
 
+  it("decide sends asWorkingDir along with the picked folder", async () => {
+    global().emit("snapshot", { runs: [{ id: "a", run: run({ status: "waiting", ask: ask("q1", "location", { description: "x", kind: "folder", canSetWorkingDir: true }) }) }] });
+    expect(getView("a")!.ask!.ask).toEqual({ needsLocation: { description: "x", kind: "folder", canSetWorkingDir: true } });
+    getView("a")!.ask!.decide([{ path: "/p", kind: "folder", asWorkingDir: true }]);
+    await flush();
+    expect(commands()[0]).toMatchObject({ body: { askId: "q1", paths: [{ path: "/p", kind: "folder", asWorkingDir: true }] } });
+  });
+
   it("an answer that is late (the first one won) is not shown as an error", async () => {
     global().emit("snapshot", { runs: [{ id: "a", run: run({ status: "waiting", ask: ask("q1", "approval", {}) }) }] });
     serve(() => ({ status: 409, body: { error: "Already answered", reason: "stale ask" } }));

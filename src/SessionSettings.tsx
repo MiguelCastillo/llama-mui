@@ -28,6 +28,7 @@ import InsertDriveFileOutlinedIcon from "@mui/icons-material/InsertDriveFileOutl
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import TuneIcon from "@mui/icons-material/Tune";
 import { type Attachment, getRecentFolders, pickAttachments } from "./api";
+import RecentFolders from "./RecentFolders";
 
 const SOURCE_LABEL: Record<Attachment["source"], string> = {
   manual: "Added by you",
@@ -238,30 +239,7 @@ function WorkingDirSection({
         </Button>
         {picking && <CircularProgress size="1.125rem" sx={{ alignSelf: "center" }} />}
       </Stack>
-      {others.length > 0 && (
-        <Box>
-          <Typography variant="caption" color="text.secondary">
-            Recent
-          </Typography>
-          <List dense disablePadding>
-            {others.map((f) => (
-              <ListItemButton key={f} disabled={locked} onClick={() => onSet(f)} sx={{ borderRadius: 1, py: 0 }}>
-                <ListItemIcon sx={{ minWidth: "2.25rem" }}>
-                  <FolderOutlinedIcon fontSize="small" />
-                </ListItemIcon>
-                <ListItemText
-                  primary={f.split("/").filter(Boolean).at(-1) ?? f}
-                  slotProps={{ primary: { variant: "body1", noWrap: true } }}
-                  sx={{ flex: "0 0 auto", maxWidth: "50%" }}
-                />
-                <Typography variant="body2" noWrap sx={{ flexGrow: 1, minWidth: 0, textAlign: "right", ml: 2, color: "text.disabled" }}>
-                  ({f})
-                </Typography>
-              </ListItemButton>
-            ))}
-          </List>
-        </Box>
-      )}
+      <RecentFolders folders={others} disabled={locked} onChoose={onSet} />
       {error && <Alert severity="error">{error}</Alert>}
     </Stack>
   );
