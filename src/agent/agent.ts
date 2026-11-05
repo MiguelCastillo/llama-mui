@@ -504,7 +504,7 @@ export interface RunPlanCallbacks {
   request?: string;
   // The context for the plan, sent with each step (see stepPrompt).
   context?: string | null;
-  // Settings → Chat, "Fresh context for each plan step"; on unless false.
+  // Settings → Tools, "Fresh context for each plan step"; on unless false.
   freshSteps?: boolean;
   setError: (err: string | null) => void;
   setAbort: (c: AbortController | null) => void;

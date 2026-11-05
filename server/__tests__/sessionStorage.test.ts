@@ -98,6 +98,18 @@ describe("session routes", () => {
     expect((await call("PATCH", ["plain-1"], { userName: "X" })).body.parentId).toBeNull();
   });
 
+  it("keeps a group set by PATCH through later saves, trims it, and clears it with null or empty", async () => {
+    await call("PUT", ["grp-1"], saved("grp-1"));
+    expect((await call("PATCH", ["grp-1"], { group: "  Work  " })).body.group).toBe("Work");
+    // A save from a page that never knew the group doesn't wipe it.
+    expect((await call("PUT", ["grp-1"], saved("grp-1"))).body.group).toBe("Work");
+    expect((await call("GET", [])).body.find((s: any) => s.id === "grp-1").group).toBe("Work");
+    expect((await call("PATCH", ["grp-1"], { group: "" })).body.group).toBeNull();
+    await call("PATCH", ["grp-1"], { group: "Work" });
+    expect((await call("PATCH", ["grp-1"], { group: null })).body.group).toBeNull();
+    expect((await call("PUT", ["grp-2"], saved("grp-2"))).body.group).toBeNull();
+  });
+
   it("refuses an id that is not a plain id", async () => {
     expect((await call("PUT", ["..%2Fx"], saved("x"))).status).toBe(400);
     expect((await call("GET", ["A_B"])).status).toBe(400);

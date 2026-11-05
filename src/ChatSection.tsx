@@ -22,12 +22,6 @@ const OPTIONS: { key: keyof Preferences; label: string; summary: string }[] = [
     summary:
       "Show formatting in messages (bold, lists, tables, code blocks with a Copy button), yours and the model's. Off shows the raw text, ** and backticks included.",
   },
-  {
-    key: "freshPlanSteps",
-    label: "Fresh context for each plan step",
-    summary:
-      "Each step of a plan sends the model only the request, the plan, the files earlier steps changed and the step's own work, not the whole session, so long plans don't fill the context. The session keeps everything. Off sends it all, as before. Here for testing; it will become the only way.",
-  },
 ];
 
 export default function ChatSection() {

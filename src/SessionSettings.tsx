@@ -1,7 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
-  Badge,
   Box,
   Button,
   Chip,
@@ -28,7 +27,7 @@ import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
 import InsertDriveFileOutlinedIcon from "@mui/icons-material/InsertDriveFileOutlined";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import TuneIcon from "@mui/icons-material/Tune";
-import { type Attachment, checkAttachment, pickAttachments } from "./api";
+import { type Attachment, getRecentFolders, pickAttachments } from "./api";
 
 const SOURCE_LABEL: Record<Attachment["source"], string> = {
   manual: "Added by you",
@@ -82,11 +81,8 @@ export default function SessionSettings({
   return (
     <>
       <Tooltip title="Session settings: working directory and attachments">
-        {/* mt centers it on a one-line input (3.5rem). */}
-        <IconButton onClick={() => setOpen(true)} sx={{ mt: 1 }}>
-          <Badge badgeContent={attachments.length + (workingDir ? 1 : 0)} color="primary">
-            <TuneIcon />
-          </Badge>
+        <IconButton onClick={() => setOpen(true)}>
+          <TuneIcon />
         </IconButton>
       </Tooltip>
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md" fullScreen={narrow}>
@@ -103,7 +99,7 @@ export default function SessionSettings({
             ))}
           </Tabs>
         )}
-        <DialogContent sx={{ display: "flex", gap: 3, minHeight: "22.5rem", pt: narrow ? 2 : 0 }}>
+        <DialogContent sx={{ display: "flex", gap: 3, minHeight: "32rem", pt: narrow ? 2 : 0, ...(!narrow && { pl: 0 }) }}>
           {!narrow && (
             <List component="nav" sx={{ width: "15rem", flexShrink: 0, py: 0, alignSelf: "flex-start", display: "flex", flexDirection: "column", gap: 0.5 }}>
               {sections.map((s) => (
@@ -111,7 +107,7 @@ export default function SessionSettings({
                   key={s.id}
                   selected={s.id === section}
                   onClick={() => setSection(s.id)}
-                  sx={{ borderRadius: 1, px: 2, py: 1.25 }}
+                  sx={{ borderRadius: 1, px: 2, py: 0.75 }}
                 >
                   <ListItemIcon sx={{ minWidth: "2.5rem" }}>{s.icon}</ListItemIcon>
                   <ListItemText primary={s.label} />
@@ -146,9 +142,8 @@ export default function SessionSettings({
 
 // The chat's working directory: where relative paths and commands start, and
 // whose check command runs after each plan step. One folder, picked in the
-// system dialog or typed as a path (the server checks it exists and is a
-// folder; ~ works). Choosing another replaces it, and the old one is not kept
-// as an attachment.
+// system dialog or picked from the recent ones. Choosing another replaces it,
+// and the old one is not kept as an attachment.
 function WorkingDirSection({
   workingDir,
   onSet,
@@ -162,8 +157,24 @@ function WorkingDirSection({
   onSetCheckCommand: (folder: string, command: string) => void;
   locked: boolean;
 }) {
-  const [path, setPath] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The folders chosen lately, newest first. Read again when the working
+  // directory changes, since choosing one moves it to the top.
+  const [recent, setRecent] = useState<string[]>([]);
+  useEffect(() => {
+    let current = true;
+    // A short delay lets the server note the folder just chosen.
+    const t = setTimeout(() => {
+      getRecentFolders()
+        .then((r) => current && setRecent(r.folders))
+        .catch(() => {});
+    }, 200);
+    return () => {
+      current = false;
+      clearTimeout(t);
+    };
+  }, [workingDir]);
+  const others = recent.filter((f) => f !== workingDir);
   // True while the system dialog is open.
   const [picking, setPicking] = useState(false);
   const pick = () => {
@@ -174,17 +185,8 @@ function WorkingDirSection({
       .catch((e) => setError(e.message))
       .finally(() => setPicking(false));
   };
-  const set = () =>
-    checkAttachment(path)
-      .then((a) => {
-        if (a.kind !== "folder") throw new Error("The working directory must be a folder, not a file.");
-        onSet(a.path);
-        setPath("");
-      })
-      .catch((e) => setError(e.message));
-
   return (
-    <Stack spacing={2}>
+    <Stack spacing={3}>
       <Box>
         <Typography variant="h6">Working directory</Typography>
         <Typography variant="body2" color="text.secondary">
@@ -199,8 +201,14 @@ function WorkingDirSection({
             <Box sx={{ display: "flex", color: "text.secondary" }}>
               <AttachmentIcon kind="folder" />
             </Box>
-            <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1, minWidth: 0, overflowWrap: "anywhere" }}>
-              {workingDir}
+            <Typography variant="body1" sx={{ flexShrink: 0 }}>
+              {workingDir.split("/").filter(Boolean).at(-1) ?? workingDir}
+            </Typography>
+            <Typography
+              variant="body2"
+              sx={{ flexGrow: 1, minWidth: 0, textAlign: "right", overflowWrap: "anywhere", color: "text.disabled" }}
+            >
+              ({workingDir})
             </Typography>
             <Tooltip title="Clear the working directory">
               <span>
@@ -217,11 +225,7 @@ function WorkingDirSection({
             onSave={(c) => onSetCheckCommand(workingDir, c)}
           />
         </Box>
-      ) : (
-        <Typography variant="body2" color="text.secondary">
-          None yet.
-        </Typography>
-      )}
+      ) : null}
       <Stack direction="row" spacing={1}>
         <Button
           size="small"
@@ -234,34 +238,31 @@ function WorkingDirSection({
         </Button>
         {picking && <CircularProgress size="1.125rem" sx={{ alignSelf: "center" }} />}
       </Stack>
-      <Stack
-        component="form"
-        direction="row"
-        spacing={1}
-        sx={{ alignItems: "flex-start" }}
-        onSubmit={(e) => {
-          e.preventDefault();
-          set();
-        }}
-      >
-        <TextField
-          fullWidth
-          size="small"
-          label="Or type a folder path"
-          placeholder="~/Projects/notes"
-          value={path}
-          onChange={(e) => {
-            setPath(e.target.value);
-            setError(null);
-          }}
-          error={!!error}
-          helperText={error}
-          disabled={locked}
-        />
-        <Button type="submit" variant="contained" disabled={!path.trim() || locked} sx={{ flexShrink: 0, mt: 0.25 }}>
-          Set
-        </Button>
-      </Stack>
+      {others.length > 0 && (
+        <Box>
+          <Typography variant="caption" color="text.secondary">
+            Recent
+          </Typography>
+          <List dense disablePadding>
+            {others.map((f) => (
+              <ListItemButton key={f} disabled={locked} onClick={() => onSet(f)} sx={{ borderRadius: 1, py: 0 }}>
+                <ListItemIcon sx={{ minWidth: "2.25rem" }}>
+                  <FolderOutlinedIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText
+                  primary={f.split("/").filter(Boolean).at(-1) ?? f}
+                  slotProps={{ primary: { variant: "body1", noWrap: true } }}
+                  sx={{ flex: "0 0 auto", maxWidth: "50%" }}
+                />
+                <Typography variant="body2" noWrap sx={{ flexGrow: 1, minWidth: 0, textAlign: "right", ml: 2, color: "text.disabled" }}>
+                  ({f})
+                </Typography>
+              </ListItemButton>
+            ))}
+          </List>
+        </Box>
+      )}
+      {error && <Alert severity="error">{error}</Alert>}
     </Stack>
   );
 }
@@ -281,7 +282,6 @@ function AttachmentsSection({
   onRemove: (path: string) => void;
   locked: boolean;
 }) {
-  const [path, setPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   // True while the system dialog is open.
   const [picking, setPicking] = useState(false);
@@ -293,14 +293,6 @@ function AttachmentsSection({
       .catch((e) => setError(e.message))
       .finally(() => setPicking(false));
   };
-  const add = () =>
-    checkAttachment(path)
-      .then((a) => {
-        onAdd({ ...a, source: "manual" });
-        setPath("");
-      })
-      .catch((e) => setError(e.message));
-
   return (
     <Stack spacing={2}>
       <Box>
@@ -311,11 +303,7 @@ function AttachmentsSection({
         </Typography>
       </Box>
       {locked && <Alert severity="info">{ATTACHMENTS_LOCKED_NOTE}</Alert>}
-      {attachments.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">
-          Nothing yet.
-        </Typography>
-      ) : (
+      {attachments.length > 0 && (
         <Stack divider={<Divider flexItem />}>
           {attachments.map((a) => (
             <Stack key={a.path} direction="row" spacing={1.5} sx={{ alignItems: "center", py: 0.75 }}>
@@ -368,34 +356,7 @@ function AttachmentsSection({
         </Button>
         {picking && <CircularProgress size="1.125rem" sx={{ alignSelf: "center" }} />}
       </Stack>
-      <Stack
-        component="form"
-        direction="row"
-        spacing={1}
-        sx={{ alignItems: "flex-start" }}
-        onSubmit={(e) => {
-          e.preventDefault();
-          add();
-        }}
-      >
-        <TextField
-          fullWidth
-          size="small"
-          label="Or type a path"
-          placeholder="~/Projects/notes"
-          value={path}
-          onChange={(e) => {
-            setPath(e.target.value);
-            setError(null);
-          }}
-          error={!!error}
-          helperText={error}
-          disabled={locked}
-        />
-        <Button type="submit" variant="contained" disabled={!path.trim() || locked} sx={{ flexShrink: 0, mt: 0.25 }}>
-          Attach
-        </Button>
-      </Stack>
+      {error && <Alert severity="error">{error}</Alert>}
     </Stack>
   );
 }

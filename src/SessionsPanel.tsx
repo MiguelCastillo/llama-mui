@@ -1,23 +1,37 @@
 import {
+  alpha,
   Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
   Drawer,
   IconButton,
+  InputAdornment,
   List,
   ListItem,
   ListItemButton,
   ListItemText,
+  Menu,
+  MenuItem,
   TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
 import AddCommentIcon from "@mui/icons-material/AddComment";
+import CheckIcon from "@mui/icons-material/Check";
+import ClearIcon from "@mui/icons-material/Clear";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import DriveFileMoveOutlinedIcon from "@mui/icons-material/DriveFileMoveOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import SearchIcon from "@mui/icons-material/Search";
 import SubdirectoryArrowRightIcon from "@mui/icons-material/SubdirectoryArrowRight";
 import type { SessionSummary } from "./api";
-import { buildSessionTree, deleteLockedIds, type SessionNode } from "./sessionTree";
+import { buildSessionTree, deleteLockedIds, filterTree, groupNames, groupTree, type SessionNode } from "./sessionTree";
 import { useMemo, useState } from "react";
 
 const DEFAULT_WIDTH = 260;
@@ -83,6 +97,8 @@ type RowContext = {
   onSelect: (id: string) => void;
   onNewNested: (id: string) => void;
   onDelete: (id: string) => void;
+  // Open the "move to group" menu for a top-level session, at its button.
+  onMove: (id: string, anchor: HTMLElement) => void;
 };
 
 // One session row, then (unless hidden) its nested sessions, one level deeper.
@@ -188,7 +204,7 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
             />
           ) : (
             <>
-              <ListItemText primary={title} slotProps={{ primary: { noWrap: true } }} />
+              <ListItemText primary={title} slotProps={{ primary: { noWrap: true, variant: "body1" } }} />
               {/* A plan here is waiting on you; the open session shows its own prompt. */}
               {s.id !== currentId && attention.has(s.id) && (
                 <Box
@@ -214,6 +230,19 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
               </IconButton>
             </span>
           </Tooltip>
+          {depth === 0 && (
+            <Tooltip title="Move to a group">
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label={`Move ${title} to a group`}
+                  onClick={(e) => ctx.onMove(s.id, e.currentTarget)}
+                >
+                  <DriveFileMoveOutlinedIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
           <Tooltip title="Rename session">
             <span>
               <IconButton
@@ -262,6 +291,7 @@ export default function SessionsPanel({
   onNewNested,
   onDelete,
   onRename,
+  onGroup,
   onClose,
 }: {
   sessions: SessionSummary[];
@@ -282,6 +312,8 @@ export default function SessionsPanel({
   onDelete: (id: string) => void;
   // `name`: what the user typed, trimmed; empty goes back to the model's name.
   onRename: (id: string, name: string) => void;
+  // Put a top-level session in the group named `group`, or in none (null).
+  onGroup: (id: string, group: string | null) => void;
   onClose: () => void;
 }) {
   const [width, setWidth] = useState(loadWidth);
@@ -290,6 +322,27 @@ export default function SessionsPanel({
   // Rows whose nested sessions are hidden. Kept here only, not saved.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const tree = useMemo(() => buildSessionTree(sessions), [sessions]);
+  // The search box narrows the tree by title; while it has text, groups open
+  // so every match shows.
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const searching = needle !== "";
+  const shownTree = useMemo(
+    () => (searching ? filterTree(tree, (x) => displayTitle(x).toLowerCase().includes(needle)) : tree),
+    [tree, searching, needle],
+  );
+  const groups = useMemo(() => groupTree(shownTree), [shownTree]);
+  const names = useMemo(() => groupNames(sessions), [sessions]);
+  // The "move to group" menu, and the box that names a new group.
+  const [moveMenu, setMoveMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
+  const [newGroupFor, setNewGroupFor] = useState<string | null>(null);
+  const [newGroupName, setNewGroupName] = useState("");
+  const movingFrom = moveMenu ? (sessions.find((x) => x.id === moveMenu.id)?.group ?? null) : null;
+  const submitNewGroup = () => {
+    const name = newGroupName.trim();
+    if (newGroupFor && name) onGroup(newGroupFor, name);
+    setNewGroupFor(null);
+  };
 
   const saveEdit = (id: string, value: string) => {
     onRename(id, value.trim());
@@ -328,6 +381,7 @@ export default function SessionsPanel({
     onSelect,
     onNewNested: newNested,
     onDelete,
+    onMove: (id, anchor) => setMoveMenu({ id, anchor }),
   };
 
   const list = (
@@ -337,7 +391,9 @@ export default function SessionsPanel({
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        ...(narrow && { width: DEFAULT_WIDTH }),
+        // The drawer takes three quarters of the screen, so titles have room
+        // beside their action buttons.
+        ...(narrow && { width: "75vw" }),
       }}
     >
       <Box sx={{ display: "flex", alignItems: "center", pl: 2, pr: 1, pt: 1, pb: 0.5 }}>
@@ -357,18 +413,138 @@ export default function SessionsPanel({
           Your sessions show up here once you send a message.
         </Typography>
       ) : (
-        <List dense sx={{ overflowY: "auto", flexGrow: 1, px: 1, display: "flex", flexDirection: "column", gap: 0.25 }}>
-          {tree.map((node) => (
-            <SessionRow key={node.session.id} node={node} depth={0} ctx={ctx} />
-          ))}
-        </List>
+        <>
+          <TextField
+            size="small"
+            placeholder="Search sessions"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && setQuery("")}
+            sx={{ mx: 1, mb: 0.5 }}
+            slotProps={{
+              htmlInput: { "aria-label": "Search sessions" },
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+                endAdornment: query ? (
+                  <InputAdornment position="end">
+                    <IconButton size="small" aria-label="Clear search" onClick={() => setQuery("")}>
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ) : undefined,
+              },
+            }}
+          />
+          <List dense sx={{ overflowY: "auto", flexGrow: 1, px: 1, display: "flex", flexDirection: "column", gap: 0.25 }}>
+            {searching && groups.length === 0 && (
+              <Typography variant="body2" color="text.secondary" sx={{ px: 1 }}>
+                No sessions match.
+              </Typography>
+            )}
+            {groups.map((g, i) => {
+              const key = `group:${g.name}`;
+              // The sessions in no group get a header only beside named groups.
+              const titled = g.name !== null || groups.length > 1;
+              const open = !titled || searching || !collapsed.has(key);
+              return (
+                <Box key={g.name ?? "(none)"} sx={{ display: "flex", flexDirection: "column", gap: 0.25, mt: i > 0 ? 3 : 0 }}>
+                  {titled && (
+                    <ListItemButton
+                      onClick={() => toggleCollapsed(key)}
+                      aria-expanded={open}
+                      // Lined up with the rows' arrows, on a band of its own: a tint of the theme's
+                      // colour, so it reads apart from the grey of a hovered or open row.
+                      sx={{ borderRadius: 1, py: 0.5, pl: 0, pr: 1.5, bgcolor: (t) => alpha(t.palette.primary.main, 0.14), "&:hover": { bgcolor: (t) => alpha(t.palette.primary.main, 0.22) } }}
+                    >
+                      <Box sx={{ width: ARROW_SLOT, display: "flex", justifyContent: "center", flexShrink: 0 }}>
+                        {open ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
+                      </Box>
+                      <Typography variant="body1" noWrap sx={{ flexGrow: 1, pl: 0.5, fontWeight: 500 }}>
+                        {g.name ?? "Ungrouped"}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {g.nodes.length}
+                      </Typography>
+                    </ListItemButton>
+                  )}
+                  {open && g.nodes.map((node) => <SessionRow key={node.session.id} node={node} depth={0} ctx={ctx} />)}
+                </Box>
+              );
+            })}
+          </List>
+        </>
       )}
     </Box>
+  );
+  const groupMenus = (
+    <>
+      <Menu anchorEl={moveMenu?.anchor} open={moveMenu !== null} onClose={() => setMoveMenu(null)}>
+        {names.map((n) => (
+          <MenuItem
+            key={n}
+            selected={n === movingFrom}
+            onClick={() => {
+              if (moveMenu && n !== movingFrom) onGroup(moveMenu.id, n);
+              setMoveMenu(null);
+            }}
+          >
+            {n}
+            {n === movingFrom && <CheckIcon fontSize="small" sx={{ ml: 1 }} />}
+          </MenuItem>
+        ))}
+        {names.length > 0 && <Divider />}
+        <MenuItem
+          onClick={() => {
+            setNewGroupFor(moveMenu?.id ?? null);
+            setNewGroupName("");
+            setMoveMenu(null);
+          }}
+        >
+          New group…
+        </MenuItem>
+        {movingFrom !== null && (
+          <MenuItem
+            onClick={() => {
+              if (moveMenu) onGroup(moveMenu.id, null);
+              setMoveMenu(null);
+            }}
+          >
+            Remove from group
+          </MenuItem>
+        )}
+      </Menu>
+      <Dialog open={newGroupFor !== null} onClose={() => setNewGroupFor(null)} fullWidth maxWidth="xs">
+        <DialogTitle>New group</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            margin="dense"
+            label="Group name"
+            value={newGroupName}
+            onChange={(e) => setNewGroupName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitNewGroup()}
+            slotProps={{ htmlInput: { maxLength: 60 } }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setNewGroupFor(null)}>Cancel</Button>
+          <Button variant="contained" disabled={!newGroupName.trim()} onClick={submitNewGroup}>
+            Create
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
   );
   if (narrow) {
     return (
       <Drawer open={open} onClose={onClose}>
         {list}
+        {groupMenus}
       </Drawer>
     );
   }
@@ -419,6 +595,7 @@ export default function SessionsPanel({
         }}
       />
       {list}
+      {groupMenus}
     </Box>
   );
 }

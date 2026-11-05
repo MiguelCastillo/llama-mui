@@ -46,7 +46,7 @@ let migration: Promise<void> | undefined;
 
 // Handles /api/sessions; returns false for anything else.
 //   GET          → [summary], newest first; a summary is { id, title, updatedAt,
-//                  modelName, userName, todos, parentId } (see summaryOf)
+//                  modelName, userName, group, todos, parentId } (see summaryOf)
 //   GET /<id>    → the saved session, with its `revision` (0 if it never had one)
 //                  and `run` while a plan is running in it in this process
 //   PUT /<id>    → saves it; the server sets createdAt, updatedAt and revision;
@@ -54,7 +54,7 @@ let migration: Promise<void> | undefined;
 //                  `revision` the page loaded: if the file has moved on it answers
 //                  409 { error, revision } and saves nothing. While a plan runs in
 //                  the session, every PUT is a 409 (the run owns the session).
-//   PATCH /<id>  → updates only the name fields, keeps updatedAt; answers with its
+//   PATCH /<id>  → updates only the name fields and the group, keeps updatedAt; answers with its
 //                  summary plus `revision`. While a plan runs it goes through the
 //                  run's live session.
 //   DELETE /<id> → deletes its session.json, and its folder if nothing else is in
@@ -101,8 +101,9 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
         // the model named the session wiped the name out. The title follows them.
         const modelName = old?.modelName ?? body.modelName ?? null;
         const userName = old ? (old.userName ?? null) : (body.userName ?? null);
+        const group = old ? (old.group ?? null) : (body.group ?? null); // a PATCH's too
         const title = String(userName ?? modelName ?? body.title ?? "New session").slice(0, 100);
-        return { ...body, id, title, modelName, userName, createdAt: old?.createdAt ?? now, updatedAt: now };
+        return { ...body, id, title, modelName, userName, group, createdAt: old?.createdAt ?? now, updatedAt: now };
       },
       sent,
     );
@@ -115,6 +116,8 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
       if (body.title !== undefined) s.title = String(body.title).slice(0, 100);
       if (body.modelName !== undefined) s.modelName = body.modelName;
       if (body.userName !== undefined) s.userName = body.userName;
+      // The group a top-level session is listed under; empty or null: none.
+      if (body.group !== undefined) s.group = body.group === null ? null : String(body.group).trim().slice(0, 60) || null;
     });
     sendJson(res, 200, { ...summaryOf(session), revision });
     return true;

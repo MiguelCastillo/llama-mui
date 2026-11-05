@@ -85,6 +85,7 @@ export function summaryOf(s: any) {
     updatedAt: Number(s.updatedAt),
     modelName: s.modelName ?? null,
     userName: s.userName ?? null,
+    group: typeof s.group === "string" && s.group ? s.group : null,
     todos: openTodoList(s.todos),
     parentId: typeof s.parentId === "string" ? s.parentId : null,
   };

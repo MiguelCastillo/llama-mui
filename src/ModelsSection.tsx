@@ -286,7 +286,7 @@ export default function ModelsSection() {
                     )}
                   </Stack>
                   {/* Short label so it stays on the model's line; the note below explains it. */}
-                  <Tooltip title="Think before answering">
+                  <Tooltip title="Think before answering. With it off, small models usually skip the tools.">
                     <FormControlLabel
                       label="Think"
                       labelPlacement="start"
@@ -331,13 +331,20 @@ export default function ModelsSection() {
           </Paper>
 
           {/* Explains the Think switch on each model's row, so it sits right under them. */}
-          <Typography variant="body2" color="text.secondary">
-            <b>Think</b> (before answering) lets a reasoning model (like Qwen) work through the problem first; its
-            thoughts show in a collapsible panel above the reply. It helps with hard questions but is slower, and small
-            models can spend minutes on simple ones. Models whose chat template has no thinking mode ignore it. With it
-            off, small models usually skip the tools and answer from what they already know, so chat offers to turn it
-            on when you switch Tools on.
-          </Typography>
+          <Stack spacing={1}>
+            <Typography variant="body2" color="text.secondary">
+              <b>Think</b> (before answering) lets a reasoning model (like Qwen) work through the problem before it
+              writes its answer. In chat, the model's message then starts with a grey bar labelled <b>Thoughts</b>, above
+              the answer. Click the bar to read what the model worked out; the time it spent thinking shows at the bar's
+              right end. (The bar needs <b>Show steps</b> on in Settings → Chat.) Thinking helps with hard questions but
+              is slower, and small models can spend minutes on simple ones. Models whose chat template has no thinking
+              mode ignore the switch.
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              <b>Think and tools:</b> with it off, small models usually skip the tools: instead of reading your files or
+              searching the web, they answer from what they already know. Turn it on for a model you want to use tools.
+            </Typography>
+          </Stack>
 
           {/* Search section */}
           <Paper variant="outlined">
@@ -472,7 +479,7 @@ function AnthropicModels({
                 />
                 <DefaultButton id={m.id} current={connector.defaultModel} change={changeDefault} />
                 {/* On: Claude thinks as it sees fit and shows a summary. */}
-                <Tooltip title="Think before answering">
+                <Tooltip title="Think before answering. Claude's message in chat gets a Thoughts bar with a summary of its thinking.">
                   <FormControlLabel
                     label="Think"
                     labelPlacement="start"
@@ -490,6 +497,17 @@ function AnthropicModels({
             ))}
           </List>
         </Paper>
+      )}
+
+      {/* Explains the Think switch on each model's row, so it sits right under them. */}
+      {models && (
+        <Typography variant="body2" color="text.secondary">
+          <b>Think</b> (before answering) lets Claude think as it sees fit before it writes its answer. In chat,
+          Claude's message then starts with a grey bar labelled <b>Thoughts</b>, above the answer; click the bar to read
+          a summary of what Claude thought; the time it spent thinking shows at the bar's right end. (The bar needs{" "}
+          <b>Show steps</b> on in Settings → Chat.) Thinking can help with hard questions but is slower. Off, Claude isn't asked to think,
+          though some models may still think briefly, and you won't see it.
+        </Typography>
       )}
     </Stack>
   );

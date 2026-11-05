@@ -214,3 +214,63 @@ describe("a path that does not exist, outside everything attached", () => {
     expect(after.result).toContain("locate_path");
   });
 });
+
+describe("the master switch", () => {
+  const master = async (enabled: boolean) => {
+    const req = Readable.from([Buffer.from(JSON.stringify({ enabled }))]) as unknown as IncomingMessage;
+    let text = "";
+    const res = { statusCode: 200, setHeader() {}, end: (t: string) => void (text = t) } as unknown as ServerResponse;
+    await toolRoutes({ req, res, parts: ["tools"], method: "PUT", search: "" });
+    return JSON.parse(text);
+  };
+  const list = async () => {
+    let text = "";
+    const res = { statusCode: 200, setHeader() {}, end: (t: string) => void (text = t) } as unknown as ServerResponse;
+    await toolRoutes({ req: Readable.from([]) as unknown as IncomingMessage, res, parts: ["tools"], method: "GET", search: "" });
+    return JSON.parse(text);
+  };
+
+  it("offers nothing while off, refuses calls, and brings back each tool's own choice when on", async () => {
+    await post("read_file", { enabled: false }, "PUT");
+    expect((await post("context", { attachments: [] })).offered).not.toContain("read_file");
+    expect((await post("context", { attachments: [] })).offered).toContain("list_directory");
+
+    await master(false);
+    expect((await list()).enabled).toBe(false);
+    const off = await post("context", { attachments: [] });
+    expect(off.offered).toEqual([]);
+    expect(off.update).toContain("Tools are turned off in Settings");
+    expect(JSON.stringify(await post("call", { name: "list_directory", arguments: { path: home.dir }, attachments: [] }))).toContain("turned off in Settings");
+
+    await master(true);
+    const on = (await post("context", { attachments: [] })).offered;
+    expect(on).toContain("list_directory");
+    expect(on).not.toContain("read_file"); // its own switch was off before
+    await post("read_file", { enabled: true }, "PUT");
+  });
+});
+
+describe("recent folders", () => {
+  const make = async (name: string) => {
+    const dir = path.join(home.dir, name);
+    await mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  it("keeps the last five, newest first, with a repeat moving to the top", async () => {
+    const dirs = await Promise.all(["r1", "r2", "r3", "r4", "r5", "r6"].map(make));
+    for (const d of dirs) await post("recent-folders", { folder: d });
+    await post("recent-folders", { folder: dirs[2] });
+    const { folders } = await post("recent-folders", {}, "GET");
+    expect(folders).toEqual([dirs[2], dirs[5], dirs[4], dirs[3], dirs[1]]);
+  });
+
+  it("leaves out a folder that is gone, and refuses one that doesn't exist", async () => {
+    const { rm } = await import("node:fs/promises");
+    const gone = await make("gone");
+    await post("recent-folders", { folder: gone });
+    await rm(gone, { recursive: true });
+    expect((await post("recent-folders", {}, "GET")).folders).not.toContain(gone);
+    await expect(post("recent-folders", { folder: path.join(home.dir, "never") })).rejects.toThrow();
+  });
+});

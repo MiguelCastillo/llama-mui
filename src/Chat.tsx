@@ -4,6 +4,7 @@ import {
   AccordionDetails,
   AccordionSummary,
   Alert,
+  alpha,
   Box,
   Button,
   ButtonBase,
@@ -18,14 +19,12 @@ import {
   DialogTitle,
   Divider,
   Fab,
-  FormControlLabel,
   IconButton,
   LinearProgress,
   MenuItem,
   Paper,
   Popover,
   Stack,
-  Switch,
   TextField,
   Tooltip,
   Typography,
@@ -71,6 +70,7 @@ import {
   type PlanStep,
   type PlanThread,
   type Todo,
+  rememberFolder,
   setCheckCommand,
   type Session,
   type SessionSummary,
@@ -79,7 +79,6 @@ import {
   type Model,
   getConnectors,
   getModelSettings,
-  updateModelSettings,
   getPreferences,
   getToolContext,
   listModels,
@@ -141,15 +140,10 @@ import { withSessionDefaults } from "./sessionDefaults";
 import { descendantIds, nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
-// and whether the Tools switch is on. Storage can be unavailable (private
+// and whether the sessions panel is open. Storage can be unavailable (private
 // windows), so failures fall back to the default.
 const TOOLBAR_KEY = "llama-mui:toolbarOpen";
-// Off until the user turns it on: tools can read files, change them and run
-// commands, so they're something to opt into.
-const TOOLS_KEY = "llama-mui:toolsOn";
-// On by default: with tools on, a task gets a plan that chat runs and checks.
-const PLAN_KEY = "llama-mui:planOn";
-// Whether the chats panel is open (wide screens; on phones it's a drawer).
+// Whether the chats panel is open (wide screens; on phones and small windows it's a drawer).
 const SESSIONS_OPEN_KEY = "llama-mui:sessionsOpen";
 // Which saved chat is open, so a reload reopens it.
 const SESSION_KEY = "llama-mui:sessionId";
@@ -225,16 +219,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     defaults: ModelSettings;
     models: Record<string, ModelSettings>;
   } | null>(null);
-  const [toolsWanted, setToolsWantedState] = useState(() => loadFlag(TOOLS_KEY, true));
-  const setToolsWanted = (on: boolean) => {
-    setToolsWantedState(on);
-    saveFlag(TOOLS_KEY, on);
-  };
-  const [planWanted, setPlanWantedState] = useState(() => loadFlag(PLAN_KEY, true));
-  const setPlanWanted = (on: boolean) => {
-    setPlanWantedState(on);
-    saveFlag(PLAN_KEY, on);
-  };
   // Extra files and folders this chat's disk tools may read, besides the
   // working directory; New chat clears them.
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -360,6 +344,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [prefs, setPrefs] = useState<Preferences | null>(null);
   const [toolbarOpen, setToolbarOpenState] = useState(() => loadFlag(TOOLBAR_KEY, true));
   const narrow = useMediaQuery((t) => t.breakpoints.down("sm"));
+  // The sessions panel is a drawer below this width: beside the panel (and its
+  // drag handle) the chat gets too narrow for its toolbar and message box.
+  const drawerMode = useMediaQuery((t) => t.breakpoints.down("md"));
   const setToolbarOpen = (open: boolean) => {
     setToolbarOpenState(open);
     saveFlag(TOOLBAR_KEY, open);
@@ -835,6 +822,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       })
       .catch((e) => setError(e.message));
   };
+  // Puts a top-level session in a group (null: none). The server keeps it.
+  const groupSessionLocal = (id: string, group: string | null) => {
+    renameSession(id, { group })
+      .then((summary) => setSessions((ss) => ss.map((x) => (x.id === id ? { ...x, group: summary.group ?? null } : x))))
+      .catch((e) => setError(e.message));
+  };
   const deleteConfirmed = () => {
     const id = confirmDelete;
     setConfirmDelete(null);
@@ -958,7 +951,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   }, [visible, attachments, workingDir, promptDir, contextVersion]);
 
   // On only when the user wants tools and some are ready in this chat.
-  const toolsOn = toolsWanted && toolContext.offered.length > 0;
+  const toolsOn = toolContext.offered.length > 0;
   useEffect(() => {
     setBusySince((since) => (runActive ? (since ?? Date.now()) : null));
   }, [runActive]);
@@ -967,19 +960,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const taskSince = runActive && runnerView ? runnerView.startedAt : busySince;
 
   const canPlan = toolsOn && toolContext.offered.includes("update_plan");
-  const planOn = canPlan && planWanted;
+  const planOn = canPlan;
   const thinkOn = !!(modelSettings?.models[model] ?? modelSettings?.defaults)?.think;
-  // Switching Tools on with Think off asks whether to turn Think on: without
-  // it, small models (Qwen 9B) mostly answer from memory instead of calling
-  // tools. The answer goes to Settings → Models, so the switch there is what
-  // chat actually uses.
-  const [offerThink, setOfferThink] = useState(false);
-  const turnThinkOn = () =>
-    updateModelSettings(model, { think: true })
-      .then((saved) => setModelSettings((s) => s && { ...s, models: { ...s.models, [model]: saved } }))
-      .catch((e) => setError(e.message))
-      .finally(() => setOfferThink(false));
-  const toolCount = toolContext.offered.length;
 
   // A prompt from a plan step shows in the plan card, under the step (see
   // PlanView); others show at the bottom of the chat.
@@ -1006,7 +988,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // as an attachment.
   const changeWorkingDir = (dir: string | null) => {
     if (runnerActive(sessionId)) setError(ATTACHMENTS_LOCKED_NOTE);
-    else setWorkingDir(dir);
+    else {
+      setWorkingDir(dir);
+      // Remembered for the picker; if that fails the folder is still set.
+      if (dir) rememberFolder(dir).catch(() => {});
+    }
   };
   const attach = (a: Attachment) => changeAttachments((as) => (as.some((x) => x.path === a.path) ? as : [...as, a]));
 
@@ -1408,8 +1394,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       <SessionsPanel
         sessions={sessions}
         currentId={sessionId}
-        open={narrow ? drawerOpen : sessionsOpen}
-        narrow={narrow}
+        open={drawerMode ? drawerOpen : sessionsOpen}
+        narrow={drawerMode}
         busy={false}
         attention={attention}
         inProgress={inProgress}
@@ -1418,6 +1404,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         onNewNested={newNested}
         onDelete={removeSession}
         onRename={renameSessionLocal}
+        onGroup={groupSessionLocal}
         onClose={() => setDrawerOpen(false)}
       />
       <Box sx={{ flexGrow: 1, minWidth: 0, height: "100dvh", display: "flex", flexDirection: "column", position: "relative" }}>
@@ -1552,40 +1539,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 </Stack>
               </MenuItem>
             </TextField>
-            <Tooltip
-              title={
-                toolCount
-                  ? `Let the model use ${toolCount} tool${toolCount === 1 ? "" : "s"}. Choose which in Settings → Tools.`
-                  : "No tools are ready. Set them up in Settings → Tools."
-              }
-            >
-              <FormControlLabel
-                label="Tools"
-                control={
-                  <Switch
-                    checked={toolsOn}
-                    onChange={(e) => {
-                      setToolsWanted(e.target.checked);
-                      if (e.target.checked && !thinkOn) setOfferThink(true);
-                    }}
-                  />
-                }
-                disabled={runActive || toolCount === 0}
-              />
-            </Tooltip>
-            <Tooltip
-              title={
-                canPlan
-                  ? "For a task, the model first writes a plan; chat runs it one step at a time and checks each step."
-                  : "Needs Tools, with Plan tasks on in Settings → Tools."
-              }
-            >
-              <FormControlLabel
-                label="Plan"
-                control={<Switch checked={planOn} onChange={(e) => setPlanWanted(e.target.checked)} />}
-                disabled={runActive || !canPlan}
-              />
-            </Tooltip>
           </Stack>
         </Collapse>
         <Tooltip title={toolbarOpen ? "Hide toolbar" : `Show toolbar${model ? ` (${model})` : ""}`}>
@@ -1601,7 +1554,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         </Tooltip>
         {/* New chat lives in the Sessions panel; here only while that's hidden.
             It comes first so the Sessions toggle and Settings never move. */}
-        {!(narrow ? drawerOpen : sessionsOpen) && (
+        {!(drawerMode ? drawerOpen : sessionsOpen) && (
           <Tooltip title="New session">
             <span>
               <IconButton onClick={newChat}>
@@ -1610,8 +1563,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             </span>
           </Tooltip>
         )}
-        <Tooltip title={(narrow ? drawerOpen : sessionsOpen) ? "Hide sessions" : "Show sessions"}>
-          <IconButton onClick={() => (narrow ? setDrawerOpen(!drawerOpen) : setSessionsOpen(!sessionsOpen))}>
+        <Tooltip title={(drawerMode ? drawerOpen : sessionsOpen) ? "Hide sessions" : "Show sessions"}>
+          <IconButton onClick={() => (drawerMode ? setDrawerOpen(!drawerOpen) : setSessionsOpen(!sessionsOpen))}>
             <ViewSidebarOutlinedIcon />
           </IconButton>
         </Tooltip>
@@ -1674,22 +1627,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         </DialogActions>
       </Dialog>
 
-      <Dialog open={offerThink} onClose={() => setOfferThink(false)} maxWidth="xs">
-        <DialogTitle>Turn on Think?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Think is off for {model}. Without it, small models usually skip the tools: instead of reading your files
-            or searching the web, they answer from what they already know. You can change this later in Settings →
-            Models.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOfferThink(false)}>Keep it off</Button>
-          <Button variant="contained" onClick={turnThinkOn}>
-            Turn on Think
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Top padding keeps the first messages clear of the toolbar. */}
       <Box ref={scrollRef} onScroll={onScroll} sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3, position: "relative" }}>
@@ -1883,6 +1820,7 @@ function Composer({
       <TextField
         fullWidth
         multiline
+        size="small"
         maxRows={8}
         placeholder={placeholder}
         inputRef={inputRef}
@@ -1977,6 +1915,11 @@ function MessageBubble({
   // Settings → Chat. Declared before the early return below, as hooks must be.
   const [override, setOverride] = useState<boolean | null>(null);
   const [showHidden, setShowHidden] = useState(false);
+  // A long message of yours: whether it is unfolded, and whether it is tall
+  // enough to fold at all (see FoldedMessage). The button for it sits in the
+  // row under the message, with the formatted/raw toggle.
+  const [unfolded, setUnfolded] = useState(false);
+  const [tooTall, setTooTall] = useState(false);
   const showMarkdown = override ?? renderMarkdown;
   // The finished reply's time and speed, kept on its last message.
   const took = [...parts].reverse().find((m) => m.took)?.took;
@@ -2024,14 +1967,17 @@ function MessageBubble({
     <Box sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", gap: 1, opacity: forgotten ? 0.5 : 1 }}>
       <Paper
         variant={isUser ? "elevation" : "outlined"}
+        elevation={isUser ? 0 : undefined}
         sx={{
           px: 2,
           py: 1.5,
           // Messages and replies both span the chat.
           width: "100%",
           maxWidth: "100%",
-          bgcolor: isUser ? "primary.main" : "background.paper",
-          color: isUser ? "primary.contrastText" : "text.primary",
+          // What you typed is quieter than the reply: a faint tint of the theme's
+          // colour behind normal text, not a solid colour fill.
+          bgcolor: isUser ? (t) => alpha(t.palette.primary.main, 0.14) : "background.paper",
+          color: "text.primary",
           // Only when failed: replies are outlined, and border: 0 would drop it.
           ...(hasError && { border: 1, borderColor: "error.main" }),
         }}
@@ -2063,13 +2009,23 @@ function MessageBubble({
                 </Accordion>
               )}
               {m.content &&
-                (!showMarkdown ? (
-                  <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</Typography>
-                ) : m.role === "assistant" ? (
-                  <MarkdownRenderer content={m.content} />
-                ) : (
-                  <MarkdownRenderer content={m.content} breaks onPrimary />
-                ))}
+                (() => {
+                  const body = !showMarkdown ? (
+                    <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</Typography>
+                  ) : m.role === "assistant" ? (
+                    <MarkdownRenderer content={m.content} />
+                  ) : (
+                    <MarkdownRenderer content={m.content} breaks />
+                  );
+                  // Replies always show in full; a long message of yours folds.
+                  return isUser ? (
+                    <FoldedMessage open={unfolded} onTooTall={setTooTall}>
+                      {body}
+                    </FoldedMessage>
+                  ) : (
+                    body
+                  );
+                })()}
               {showSteps &&
                 m.toolCalls?.map((c) => (
                   <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} stopped={!streaming} />
@@ -2097,13 +2053,18 @@ function MessageBubble({
           )}
           {!streaming && parts.some((m) => m.content) && (
             <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 1, mb: -1, mr: -1 }}>
+              {isUser && tooTall && (
+                <Button size="small" onClick={() => setUnfolded(!unfolded)} aria-expanded={unfolded} sx={{ mr: "auto", ml: -1 }}>
+                  {unfolded ? "Show less" : "Show all"}
+                </Button>
+              )}
               {hidden && (
                 <Tooltip title={showHidden ? "Hide what was sent with this message" : "Show what was sent with this message, unseen"}>
                   <IconButton
                     size="small"
                     onClick={() => setShowHidden(!showHidden)}
                     aria-pressed={showHidden}
-                    sx={{ color: "inherit" }}
+                    sx={{ color: "text.secondary" }}
                   >
                     <StickyNote2OutlinedIcon fontSize="small" />
                   </IconButton>
@@ -2121,8 +2082,7 @@ function MessageBubble({
                   size="small"
                   onClick={() => setOverride(!showMarkdown)}
                   aria-pressed={!showMarkdown}
-                  // The theme's grey would vanish on your blue messages.
-                  sx={{ color: isUser ? "inherit" : "text.secondary" }}
+                  sx={{ color: "text.secondary" }}
                 >
                   <CodeOutlinedIcon fontSize="small" />
                 </IconButton>
@@ -2538,6 +2498,55 @@ const formatSeconds = (ms: number) => {
   if (sec < 60) return `${Math.round(sec)}s`;
   return `${Math.floor(sec / 60)}m ${String(Math.round(sec % 60)).padStart(2, "0")}s`;
 };
+
+// How tall your message may be before it folds: about five lines of the page's
+// text (body1 is 1.5rem a line).
+const FOLD_AT = "7.5rem";
+
+// Your own long messages (a pasted brief, say) fold to a box about five lines
+// tall that scrolls, so the reply below isn't pushed off the screen. Replies never fold. This folds the text and
+// tells the message when it is tall enough to need the Show all button, which
+// sits in the row under the message. Not saved: a reload folds them again.
+function FoldedMessage({
+  open,
+  onTooTall,
+  children,
+}: {
+  open: boolean;
+  onTooTall: (tooTall: boolean) => void;
+  children: ReactNode;
+}) {
+  const [tooTall, setTooTall] = useState(false);
+  const inner = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = inner.current;
+    if (!el) return;
+    const measure = () => {
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const tall = el.offsetHeight > rem * parseFloat(FOLD_AT) + 1;
+      setTooTall(tall);
+      onTooTall(tall);
+    };
+    measure();
+    // The text rewraps when the window or the panels resize.
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [onTooTall]);
+  const folded = tooTall && !open;
+  return (
+    <Box
+      sx={{
+        maxHeight: folded ? FOLD_AT : "none",
+        // Folded, it scrolls inside its own box, so the whole message can be read
+        // without unfolding. At either end, scrolling carries on in the chat.
+        overflowY: folded ? "auto" : "visible",
+      }}
+    >
+      <div ref={inner}>{children}</div>
+    </Box>
+  );
+}
 
 // A step's duration, right-aligned next to its expander arrow; hovering it
 // shows the details (token counts).

@@ -39,7 +39,7 @@ export interface RunOptions {
   model: string;
   toolsOn: boolean;
   thinkOn: boolean;
-  // Settings → Chat, "Fresh context for each plan step"; on unless false.
+  // Settings → Tools, "Fresh context for each plan step"; on unless false.
   freshSteps?: boolean;
 }
 

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment, SessionSummary } from "../api";
-import { buildSessionTree, countNested, deleteLockedIds, descendantIds, nestedHeldBy, nestedSessionFrom } from "../sessionTree";
+import {
+  buildSessionTree,
+  countNested,
+  deleteLockedIds,
+  descendantIds,
+  filterTree,
+  groupNames,
+  groupTree,
+  nestedHeldBy,
+  nestedSessionFrom,
+} from "../sessionTree";
 
 const row = (id: string, parentId?: string | null, updatedAt = 1): SessionSummary => ({
   id,
@@ -168,5 +178,62 @@ describe("nestedSessionFrom", () => {
     expect(s.plan).toBeNull();
     expect(s.todos).toEqual([]);
     expect(s.usage).toBeNull();
+  });
+});
+
+describe("filterTree", () => {
+  const rows = [row("alpha", null, 4), row("a-kid", "alpha", 3), row("beta", null, 2), row("b-hit", "beta", 1)];
+  const ids = (tree: ReturnType<typeof filterTree>) => tree.map((n) => [n.session.id, n.children.map((c) => c.session.id)]);
+  const has = (word: string) => (s: SessionSummary) => s.id.includes(word);
+
+  it("keeps everything when every session matches", () => {
+    expect(ids(filterTree(buildSessionTree(rows), () => true))).toEqual(ids(buildSessionTree(rows)));
+  });
+
+  it("a matching parent keeps all of its nested sessions", () => {
+    expect(ids(filterTree(buildSessionTree(rows), has("alpha")))).toEqual([["alpha", ["a-kid"]]]);
+  });
+
+  it("a matching nested session keeps its parent, with only the matches under it", () => {
+    expect(ids(filterTree(buildSessionTree(rows), has("hit")))).toEqual([["beta", ["b-hit"]]]);
+  });
+
+  it("drops what doesn't match", () => {
+    expect(filterTree(buildSessionTree(rows), has("zzz"))).toEqual([]);
+  });
+});
+
+describe("groupTree", () => {
+  const g = (id: string, group: string | null, updatedAt = 1): SessionSummary => ({ ...row(id, null, updatedAt), group });
+
+  it("lists groups A to Z first, then ungrouped sessions, newest first inside", () => {
+    const groups = groupTree(buildSessionTree([g("a", "Work", 1), g("b", null, 2), g("c", "Home", 3), g("d", "Work", 4)]));
+    expect(groups.map((x) => [x.name, x.nodes.map((n) => n.session.id)])).toEqual([
+      ["Home", ["c"]],
+      ["Work", ["d", "a"]],
+      [null, ["b"]],
+    ]);
+  });
+
+  it("has no ungrouped section when every session is in a group", () => {
+    expect(groupTree(buildSessionTree([g("a", "Work")])).map((x) => x.name)).toEqual(["Work"]);
+  });
+
+  it("a nested session goes with its parent, whatever its own group says", () => {
+    const rows = [g("p", "Work", 2), { ...row("c", "p", 1), group: "Home" }];
+    expect(groupTree(buildSessionTree(rows)).map((x) => [x.name, x.nodes[0].children.length])).toEqual([["Work", 1]]);
+  });
+});
+
+describe("groupNames", () => {
+  it("lists the groups in use once each, A to Z, ignoring nested sessions", () => {
+    const rows: SessionSummary[] = [
+      { ...row("a"), group: "Work" },
+      { ...row("b"), group: "Home" },
+      { ...row("c"), group: "Work" },
+      { ...row("d", "a"), group: "Zed" },
+      row("e"),
+    ];
+    expect(groupNames(rows)).toEqual(["Home", "Work"]);
   });
 });

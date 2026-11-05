@@ -5,6 +5,7 @@ import os from "node:os";
 import { DISK_TOOLS, checkAttachments, checkWorkingDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { readInstructions } from "./instructions.ts";
+import { readRecentFolders, withFolder, writeRecentFolders } from "./recentFolders.ts";
 import { load, save } from "./store.ts";
 import {
   AccessNeeded,
@@ -127,7 +128,7 @@ const TOOLS: ToolSpec[] = [
   ...FETCH_TOOLS,
 ];
 
-const isOffered = (ctx: ToolContext, t: ToolSpec) => !ctx.store.disabledTools.includes(t.name);
+const isOffered = (ctx: ToolContext, t: ToolSpec) => ctx.store.toolsEnabled && !ctx.store.disabledTools.includes(t.name);
 
 // The system prompt: what holds for the whole session. It never changes in a
 // session, since it's the start of every request and a change made llama.cpp
@@ -168,7 +169,11 @@ async function chatUpdate(ctx: ToolContext, promptDir: string | null): Promise<s
     "Chat update:",
     ...(dir !== promptDir ? [dir ? `The working directory is now ${dir}.` : "There's no working directory now."] : []),
     others.length ? `Also attached:\n${others.map((d) => `- ${d}`).join("\n")}` : "Nothing else is attached.",
-    ...(off.length ? [`Turned off in Settings, so calls to them fail: ${off.join(", ")}.`] : []),
+    ...(!ctx.store.toolsEnabled
+      ? ["Tools are turned off in Settings, so calls to any of them fail."]
+      : off.length
+        ? [`Turned off in Settings, so calls to them fail: ${off.join(", ")}.`]
+        : []),
   ].join("\n");
 }
 
@@ -246,6 +251,7 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
   if (parts.length === 1 && method === "GET") {
     const store = await load();
     sendJson(res, 200, {
+      enabled: store.toolsEnabled,
       groups: GROUPS.map((g) => ({
         id: g.id,
         label: g.label,
@@ -282,6 +288,26 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
     return true;
   }
 
+  // The working directories chosen lately, newest first, for the picker in
+  // Session settings (see recentFolders.ts). One that is gone from the disk is
+  // left out of the list but kept in the file until it is pushed out, in case
+  // a drive comes back.
+  if (parts[1] === "recent-folders" && method === "GET") {
+    const folders = (await Promise.all((await readRecentFolders()).map(checkWorkingDir))).filter((f) => f !== null);
+    sendJson(res, 200, { folders });
+    return true;
+  }
+  // Remembers a folder the user just chose as a working directory.
+  if (parts[1] === "recent-folders" && method === "POST") {
+    const { folder } = await readJson(req);
+    const real = await checkWorkingDir(folder);
+    if (!real) throw new HttpError(400, "That isn't a folder that exists.");
+    const folders = withFolder(await readRecentFolders(), real);
+    await writeRecentFolders(folders);
+    sendJson(res, 200, { folders });
+    return true;
+  }
+
   // A folder's check command: set (empty clears it), or run. It runs without
   // asking, unlike run_command: the user typed it, the model can't change it,
   // and this only runs what's saved for an attached folder.
@@ -311,6 +337,16 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
   if (parts[1] === "call" && method === "POST") {
     const body = await readJson(req);
     sendJson(res, 200, await runTool(String(body.name), body.arguments, await contextFor(body)));
+    return true;
+  }
+
+  // The master switch: every tool off or on, each one's own setting kept.
+  if (parts.length === 1 && method === "PUT") {
+    const { enabled } = await readJson(req);
+    const store = await load();
+    store.toolsEnabled = !!enabled;
+    await save(store);
+    sendJson(res, 200, { enabled: store.toolsEnabled });
     return true;
   }
 

@@ -51,6 +51,9 @@ export interface ModelSettings {
 export interface Store {
   activeId: string | null;
   connectors: Connector[];
+  // The master switch in Settings → Tools: off, no tool is offered, and each
+  // tool's own setting below is kept for when it goes back on.
+  toolsEnabled: boolean;
   // Tools are on by default, so new ones show up enabled.
   disabledTools: string[];
   preferences: Preferences;
@@ -83,6 +86,7 @@ async function moveOldSettings(): Promise<boolean> {
 const empty = (): Store => ({
   activeId: null,
   connectors: [],
+  toolsEnabled: true,
   disabledTools: [],
   preferences: { showContextMeter: true, showSteps: true, renderMarkdown: true, freshPlanSteps: true },
   models: {},
@@ -94,6 +98,8 @@ export async function load(): Promise<Store> {
     const raw = JSON.parse(await readFile(SETTINGS_FILE, "utf8"));
     const base = empty();
     // Merge preferences key by key so ones added later get their defaults.
+    // The recent working directories were briefly kept here; they have their own file now.
+    delete raw.recentFolders;
     return { ...base, ...raw, preferences: { ...base.preferences, ...raw.preferences } };
   } catch (e: any) {
     if (e.code !== "ENOENT") throw e;

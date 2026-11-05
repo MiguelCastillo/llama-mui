@@ -410,7 +410,9 @@ export interface ToolGroup {
 }
 
 // For Settings → Tools: every group and each tool's on/off state.
-export const getTools = () => call<{ groups: ToolGroup[] }>("GET", "/api/tools");
+// `enabled` is the master switch: off, none of them is offered.
+export const getTools = () => call<{ enabled: boolean; groups: ToolGroup[] }>("GET", "/api/tools");
+export const setToolsEnabled = (enabled: boolean) => call("PUT", "/api/tools", { enabled });
 export const setToolEnabled = (name: string, enabled: boolean) => call("PUT", `/api/tools/${name}`, { enabled });
 
 // The definitions and system prompt are the same in every chat; see
@@ -434,6 +436,10 @@ export interface ToolContext {
 // every session; an empty one clears it. Chat runs it after each plan step.
 export const setCheckCommand = (folder: string, command: string) =>
   call<{ folder: string; command: string }>("PUT", "/api/tools/check-command", { folder, command });
+// The last few working directories chosen (newest first; ones no longer on
+// disk are left out), and remembering one just chosen.
+export const getRecentFolders = () => call<{ folders: string[] }>("GET", "/api/tools/recent-folders");
+export const rememberFolder = (folder: string) => call<{ folders: string[] }>("POST", "/api/tools/recent-folders", { folder });
 // Only the working directory has one: `folder` must be `workingDir`.
 export const runCheckCommand = (workingDir: string | null, attachments: string[], folder: string) =>
   call<{ command: string; passed: boolean; output: string }>("POST", "/api/tools/check-command", {
@@ -546,6 +552,10 @@ export interface Session {
   // else modelName, else title (first message). Never overwritten by save.
   modelName?: string | null;
   userName?: string | null;
+  // The group the sessions panel lists this session under (top-level sessions;
+  // a nested one follows its parent). Set by the user; the server owns it, so a
+  // save never changes it. Null or missing: not in a group.
+  group?: string | null;
   // Things to come back to, from add_todo; see src/agent/todos.ts. Older saved chats don't have it.
   todos?: Todo[];
   // The session this one is nested under (its direct parent). The panel shows
@@ -653,6 +663,7 @@ export interface SessionSummary {
   updatedAt: number;
   modelName?: string | null;
   userName?: string | null;
+  group?: string | null;
   // The session's open todos, without descriptions; see openTodoList in server/sessions.ts.
   todos?: { id: string; summary: string }[];
   // The session this one is nested under (its direct parent, any session). The
@@ -725,6 +736,7 @@ export interface RenameSessionParams {
   title?: string;
   modelName?: string | null;
   userName?: string | null;
+  group?: string | null;
 }
 export const renameSession = (id: string, params: RenameSessionParams) =>
   call<SessionSummary & { revision: number }>("PATCH", `/api/sessions/${id}`, params).then((row) => {

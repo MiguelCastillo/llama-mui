@@ -7,7 +7,6 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 
 // On the user's primary-colored bubble the theme's greys disappear, so code
 // is tinted darker there.
-const ON_PRIMARY_TINT = "rgba(0, 0, 0, 0.15)";
 
 const codeInlineStyle = {
   fontFamily: "monospace",
@@ -30,17 +29,14 @@ function CodeBlock({ children, tint }: { children?: ReactNode; tint: string }) {
 }
 
 // breaks: a single line break stays a line break, as in what the user typed.
-// onPrimary: colors for the user's primary-colored bubble.
 export default function MarkdownRenderer({
   content,
   breaks = false,
-  onPrimary = false,
 }: {
   content: string;
   breaks?: boolean;
-  onPrimary?: boolean;
 }) {
-  const tint = onPrimary ? ON_PRIMARY_TINT : "action.hover";
+  const tint = "action.hover";
 
   return (
     <Box
@@ -64,8 +60,8 @@ export default function MarkdownRenderer({
           ul: ({ children }) => <Box component="ul" sx={{ my: 1, pl: 3 }}>{children}</Box>,
           ol: ({ children }) => <Box component="ol" sx={{ my: 1, pl: 3 }}>{children}</Box>,
           li: ({ children }) => <Box component="li" sx={{ my: 0.25 }}>{children}</Box>,
-          a: ({ href, children }) => <Link href={href} target="_blank" rel="noopener noreferrer" color={onPrimary ? "inherit" : undefined}>{children}</Link>,
-          img: ({ src, alt }) => <Link href={src} target="_blank" rel="noopener noreferrer" color={onPrimary ? "inherit" : undefined}>{alt || src}</Link>,
+          a: ({ href, children }) => <Link href={href} target="_blank" rel="noopener noreferrer">{children}</Link>,
+          img: ({ src, alt }) => <Link href={src} target="_blank" rel="noopener noreferrer">{alt || src}</Link>,
           h1: ({ children }) => (
             <Typography variant="subtitle1" sx={{ fontWeight: 600, mt: 2, mb: 1 }}>
               {children}
@@ -108,7 +104,7 @@ export default function MarkdownRenderer({
             <Box component="td" sx={{ p: 0.75, borderBottom: 1, borderColor: "divider" }}>{children}</Box>
           ),
           blockquote: ({ children }) => (
-            <Box component="blockquote" sx={{ borderLeft: 3, borderColor: "divider", pl: 2, mx: 0, my: 1.5, color: onPrimary ? "inherit" : "text.secondary" }}>{children}</Box>
+            <Box component="blockquote" sx={{ borderLeft: 3, borderColor: "divider", pl: 2, mx: 0, my: 1.5, color: "text.secondary" }}>{children}</Box>
           ),
           hr: () => <Box component="hr" sx={{ my: 2, border: 0, borderTop: 1, borderColor: "divider" }} />,
           strong: ({ children }) => <strong>{children}</strong>,

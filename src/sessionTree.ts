@@ -131,3 +131,44 @@ export function deleteLockedIds(tree: SessionNode[], inProgress: ReadonlySet<str
 
 // How many sessions the session `id` holds, for the delete question.
 export const nestedHeldBy = (summaries: SessionSummary[], id: string): number => descendantIds(summaries, id).length;
+
+// The tree narrowed to what a search matches. A top-level session that matches
+// keeps everything nested under it; one that doesn't stays only if something
+// nested under it matches, and then shows just those.
+export function filterTree(tree: SessionNode[], matches: (s: SessionSummary) => boolean): SessionNode[] {
+  const out: SessionNode[] = [];
+  for (const node of tree) {
+    if (matches(node.session)) {
+      out.push(node);
+      continue;
+    }
+    const children = node.children.filter((c) => matches(c.session));
+    if (children.length > 0) out.push({ session: node.session, children });
+  }
+  return out;
+}
+
+// A named set of top-level sessions, as the panel lists them. `name` is null
+// for the sessions in no group.
+export type SessionGroup = { name: string | null; nodes: SessionNode[] };
+
+// The tree split by each top-level session's group (a nested session goes with
+// its parent). The named groups come first, A to Z, then the sessions in no
+// group; order inside each is the tree's. A group with no sessions isn't listed.
+export function groupTree(tree: SessionNode[]): SessionGroup[] {
+  const named = new Map<string, SessionNode[]>();
+  const loose: SessionNode[] = [];
+  for (const node of tree) {
+    const name = node.session.group;
+    if (!name) loose.push(node);
+    else named.set(name, [...(named.get(name) ?? []), node]);
+  }
+  const groups: SessionGroup[] = [...named.keys()].sort((a, b) => a.localeCompare(b)).map((name) => ({ name, nodes: named.get(name)! }));
+  if (loose.length > 0) groups.push({ name: null, nodes: loose });
+  return groups;
+}
+
+// Every group name in use, A to Z, for the "move to group" menu.
+export function groupNames(summaries: SessionSummary[]): string[] {
+  return [...new Set(summaries.filter((s) => !s.parentId && s.group).map((s) => s.group!))].sort((a, b) => a.localeCompare(b));
+}

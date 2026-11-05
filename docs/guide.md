@@ -58,10 +58,13 @@ Chat uses the selected connector. The plugin proxies chat requests at
 browser (the SDK in the browser has a placeholder the proxy replaces).
 
 **Tools** are things the model can do while answering, grouped by what they
-reach and switched on or off one by one (`server/tools.ts`). With the
-**Tools** switch on in chat, the model can use every tool that's on.
-That switch starts on, and your browser remembers where you leave it. Tool
-calls and their results show in the reply.
+reach and switched on or off one by one (`server/tools.ts`), in **Settings →
+Tools**. The model can use every tool that's on. **Use tools** at the top of
+that page turns the whole set off or on: off, chat runs without tools and the
+page dims the list, but each tool's own choice is kept for when it goes back on
+(saved as `toolsEnabled` in `settings.json`). There is no switch for this in
+chat. Tool calls and their
+results show in the reply.
 
 **Models** lets you manage the models on the selected llama server. It shows
 the models in the server's cache with their status (loaded/unloaded), and you
@@ -93,16 +96,20 @@ A new chat starts with neither.
   in, and the system prompt names it. It's a setting of the chat, separate
   from the attachments, and it's never picked for you: attaching a folder
   doesn't make it the working directory. Choose it with **Choose folder…**
-  (one folder; files aren't offered) or by typing its path, which must be a
-  folder. Choosing another folder replaces it, and the old one isn't kept as
-  an attachment. **Clear** removes it. The folder's **check command** (see
+  (one folder; files aren't offered) or pick one from **Recent**. Choosing
+  another folder replaces it, and the old one isn't kept as
+  an attachment. **Clear** removes it. Under **Recent** are the last five
+  folders you chose, each with its path on the right (newest first; kept on the
+  server in `~/.llama-mui/recent-folders.json`, so every browser sees the same
+  list; one that no longer
+  exists is left out), and clicking one sets it. The folder's **check command** (see
   [How plans work](#how-plans-work)) is set here too. With no working
   directory, relative paths fail with "Use an absolute path", and the model
   is told "There's no working directory: use absolute paths." even if a
   folder is attached.
 - **Attachments** are the extra files and folders the model may read, each
-  marked with whether you added it or the model asked for it, and a field to
-  attach more. The model can read the working directory and the attachments;
+  marked with whether you added it or the model asked for it, and buttons to
+  choose more files or folders. The model can read the working directory and the attachments;
   only the working directory is where relative paths start.
 
 Chats saved before the working directory was a setting are converted when
@@ -238,9 +245,8 @@ vitest (`npm test`).
 
 ### When a plan is made
 
-- The **Plan** switch is next to **Tools** in chat. It's on by default, your
-  browser remembers it, and it only works while **Tools** is on and
-  **Plan tasks** is on in **Settings → Tools**.
+- Planning is on whenever the **Plan tasks** tool is on in **Settings →
+  Tools** (it is by default); there is no switch for it in chat.
 - With it on, **every message you send** gets a planning turn first. Chat
   decides that, not the model: the model doesn't get to choose whether to
   have one.
@@ -333,7 +339,7 @@ vitest (`npm test`).
   not earlier steps' turns or the planning discussion. With all of it, long
   plans filled the 64k context every step or two. Nothing is cleared: after
   the plan, your next message sends the session as usual. **Fresh context for
-  each plan step** in Settings → Chat turns it off, for comparing; it's meant
+  each plan step** in Settings → Tools (under the Plan tool) turns it off, for comparing; it's meant
   to go away once it's proven.
 - The plan may also include a `context` field: a brief description of the
   decisions, constraints, and other details from the conversation that each
@@ -463,8 +469,8 @@ nothing starts again by itself: see
 [After a restart](#after-a-restart).
 
 - **Run** saves the session first, then sends a `run` command with what the
-  page has chosen: the server (connector), the model, and whether Tools and
-  Think are on. The server looks up the connector, its models and the tools
+  page has chosen: the server (connector), the model, and whether Think
+  is on. The server looks up the connector, its models and the tools
   itself. The API key never goes to the page and never into the run: the run
   talks to the server's own `/api`, whose proxy adds the key to the request.
 - The page is a view. It listens to the server's events (`src/runClient.ts`)
@@ -541,7 +547,7 @@ the server as well, as a run one reply long (`startTurn` in
 in it or it is running a plan.
 
 - **Send** saves the session first, with the messages before this one, then
-  sends a `message` command with the text and the **Plan** switch. The reply
+  sends a `message` command with the text and whether planning is on. The reply
   streams back as events and shows the way a plan's steps do: the messages as
   they grow, the usage, the session's name when the model has written it, any
   question for you (a command to approve, a folder to allow) in the chat, and
@@ -754,6 +760,22 @@ step that was running when the page closed comes back as pending.
     whole app, so a nested session follows it. A plan that hasn't started
     also makes one: **Run** opens it in a nested session (see
     [Running a plan](#running-a-plan)).
+- **Long messages fold**: a message of yours taller than about five lines shows
+  its first lines in a box that scrolls, so you can read it all without
+  unfolding; **Show all** (then **Show less**) sits under it, beside the
+  formatted/raw toggle. Replies never fold, and a short message has no button. It isn't saved, so a
+  reload folds them again.
+- **Search and groups**: the box at the top of the Sessions panel filters the
+  list by title as you type (**Escape** or the ✕ clears it). A session that
+  matches keeps everything nested under it; one that only has a nested match
+  stays, showing just those. On a top-level row, the folder icon moves the
+  session into a group you name (**New group…**), into one that exists, or back
+  out (**Remove from group**). Groups list first, A to Z, each with a count and
+  an arrow that hides or shows it; sessions in none sit under **Ungrouped**
+  (the header shows only once a group exists). A nested session follows its
+  parent. A group is just a name on its sessions, saved as `group` in
+  `session.json` and the sessions list, so it exists while a session is in it
+  and is gone when the last one leaves. Searching opens every group.
 - **Session naming**: after the first reply, the model is asked to name the
   session in 3–6 words. The name shows as the session title unless you give it
   one yourself. Hover the session and click the **✎** icon to rename it: a text
@@ -806,9 +828,8 @@ step that was running when the page closed comes back as pending.
   default): off sends `chat_template_kwargs: {enable_thinking: false}`; on
   shows the model's reasoning in a collapsible panel. Saved by model id, so it
   follows the model to any server, and it's what chat uses. With it off,
-  small models like Qwen 9B rarely call tools, so switching **Tools** on with
-  Think off asks whether to turn Think on, and **Settings → Tools** warns
-  about models that have it off.
+  small models like Qwen 9B rarely call tools, so the note under the models in
+  **Settings → Models** says so.
   With it on, chat decides per request: a reply's first request thinks (where
   the model decides what to do), later rounds after tool results don't, and
   planning turns don't. A plan step's check still thinks. Qwen3.6 spent
@@ -832,7 +853,7 @@ Each model row displays:
 - ▶ / ■ to load or unload it. The server does it in the background, so the
   page asks again each second until the status changes.
 - A **Think** switch to enable reasoning mode for that model, explained right
-  under the list
+  under the list (for the local models and for Claude, each in its own words)
 
 A model's context and other settings come from the server's preset file
 (`--models-preset`); the load API takes only the model's name. For a context
