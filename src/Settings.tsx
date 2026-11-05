@@ -349,24 +349,18 @@ function ConnectorDialog({
   const [kind, setKind] = useState<Kind>(connector?.kind ?? "llama");
   const llama = kind === "llama";
   const [api, setApi] = useState<Api>(connector?.api ?? "anthropic");
-  // The saved key is never sent to the browser, so for a server that has one
-  // the field starts as "keep it" rather than as an empty input.
-  const [keyMode, setKeyMode] = useState<"keep" | "replace" | "remove">(connector?.hasKey ? "keep" : "replace");
+  // The saved key is never sent to the browser, so the field stays empty: typing
+  // replaces the saved key, and this drops it (llama servers only).
+  const [clearKey, setClearKey] = useState(false);
   const [test, setTest] = useState<Status | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const changeKeyMode = (m: typeof keyMode) => {
-    setKeyMode(m);
-    setApiKey("");
-    setTest(null);
-  };
-
   // What the server should do with the key: use the typed one, drop the
   // saved one, or (neither set) keep the saved one.
-  const keyInput = { apiKey: keyMode === "replace" ? apiKey : undefined, clearKey: keyMode === "remove" };
-  // A llama server needs its address; Anthropic's API, a key.
-  const ready = llama ? !!url.trim() : keyMode === "keep" || !!apiKey.trim();
+  const keyInput = { apiKey: apiKey || undefined, clearKey };
+  // A llama server needs its address; Anthropic's API, a key (typed or saved).
+  const ready = llama ? !!url.trim() : !!apiKey.trim() || !!connector?.hasKey;
 
   const runTest = () => {
     setTest("checking");
@@ -476,65 +470,43 @@ function ConnectorDialog({
               <MenuItem value="openai">OpenAI Chat Completions</MenuItem>
             </TextField>
           )}
-          {keyMode === "replace" ? (
-            <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
-              <TextField
-                fullWidth
-                label={connector?.hasKey ? "New API key" : "API key"}
-                type="password"
-                autoComplete="off"
-                autoFocus={!!connector?.hasKey}
-                required={!llama}
-                helperText={
-                  llama
-                    ? "Stored only on this machine, never sent to the browser."
-                    : "From console.anthropic.com. Stored only on this machine, never sent to the browser."
-                }
-                placeholder={connector?.hasKey || !llama ? undefined : "Optional"}
-                value={apiKey}
-                onChange={(e) => {
-                  setApiKey(e.target.value);
+          <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
+            <TextField
+              fullWidth
+              label="API key"
+              type="password"
+              autoComplete="off"
+              required={!llama && !connector?.hasKey}
+              disabled={clearKey}
+              placeholder={connector?.hasKey ? "Saved key kept. Type to replace it" : llama ? "Optional" : undefined}
+              helperText={
+                clearKey
+                  ? "The saved key will be removed when you save."
+                  : `${llama ? "" : "From console.anthropic.com. "}${
+                      connector?.hasKey ? "A key is saved; leave this empty to keep it. " : ""
+                    }Stored only on this machine, never sent to the browser.`
+              }
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                setTest(null);
+              }}
+            />
+            {/* Anthropic's API needs a key, so only llama servers can drop theirs. */}
+            {llama && connector?.hasKey && (
+              <Button
+                color={clearKey ? "primary" : "error"}
+                onClick={() => {
+                  setClearKey(!clearKey);
+                  setApiKey("");
                   setTest(null);
                 }}
-              />
-              {connector?.hasKey && (
-                <Button onClick={() => changeKeyMode("keep")} sx={{ mt: 1 }}>
-                  Keep saved key
-                </Button>
-              )}
-            </Stack>
-          ) : (
-            <Paper variant="outlined" sx={{ px: 2, py: 1, display: "flex", alignItems: "center", gap: 1.5 }}>
-              <KeyOutlinedIcon color={keyMode === "keep" ? "success" : "disabled"} />
-              <Box sx={{ flexGrow: 1 }}>
-                <Typography variant="body2">
-                  {keyMode === "keep" ? "API key saved" : "API key will be removed when you save"}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {keyMode === "keep"
-                    ? "It stays on this machine and is never shown again."
-                    : "The server will be called without a key."}
-                </Typography>
-              </Box>
-              {keyMode === "keep" ? (
-                <>
-                  <Button size="small" onClick={() => changeKeyMode("replace")}>
-                    Replace
-                  </Button>
-                  {/* Anthropic's API needs one. */}
-                  {llama && (
-                    <Button size="small" color="error" onClick={() => changeKeyMode("remove")}>
-                      Remove
-                    </Button>
-                  )}
-                </>
-              ) : (
-                <Button size="small" onClick={() => changeKeyMode("keep")}>
-                  Undo
-                </Button>
-              )}
-            </Paper>
-          )}
+                sx={{ mt: "0.5rem", flexShrink: 0 }}
+              >
+                {clearKey ? "Undo" : "Remove saved key"}
+              </Button>
+            )}
+          </Stack>
           {test && test !== "checking" && (
             <Alert severity={test.ok ? "success" : "error"}>
               {test.ok ? `Connected. ${test.models} model${test.models === 1 ? "" : "s"} available.` : test.error}
