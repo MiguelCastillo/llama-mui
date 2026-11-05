@@ -1571,7 +1571,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               select
               size="small"
               label="Model"
-              value={model}
+              // While the list is still loading, or the server can't be reached, the
+              // chosen model isn't among the options: the menu then has no value (MUI
+              // warns about one that isn't an option) and still shows the name.
+              value={models.some((m) => m.id === model) ? model : ""}
               onChange={(e) =>
                 e.target.value === MANAGE_MODELS ? (location.hash = "#/settings/models") : setModel(e.target.value)
               }
@@ -1582,7 +1585,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               // to the menu's edge, and its text is centered in all the space below
               // its line (the padding read as part of it, so the text looked high).
               slotProps={{
-                select: { renderValue: (v) => String(v), MenuProps: { slotProps: { list: { sx: { pb: 0 } } } } },
+                select: { displayEmpty: true, renderValue: () => model, MenuProps: { slotProps: { list: { sx: { pb: 0 } } } } },
+                inputLabel: { shrink: true },
               }}
             >
               {models.map((m) => (
