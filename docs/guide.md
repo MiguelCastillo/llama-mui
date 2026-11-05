@@ -538,7 +538,7 @@ nothing starts again by itself: see
   it up again from that step (the step starts over; earlier steps' answers are
   kept). While a plan runs, the message box keeps **Send** (a message to the
   run) and has no Stop; it shows **Stop** instead of Send only while a chat
-  reply streams.
+  reply streams (on a wide screen there is no button: press **Esc**).
 - When the run ends (every step done, stopped, or failed), the page reads the
   session once more from the server. That is the session it shows and the one
   its next save is based on.
@@ -585,8 +585,19 @@ the server as well, as a run one reply long (`startTurn` in
 `server/runners.ts`). So every session has one owner, whether you are chatting
 in it or it is running a plan.
 
-- **Send** saves the session first, with the messages before this one, then
-  sends a `message` command with the text and whether planning is on. The reply
+- **Send** (Enter on a wide screen, which has no button and uses Shift+Enter for a new line; on a phone the Send button, and Enter starts a new line) saves the session first, with the messages before this one, then
+  sends a `message` command with the text and whether planning is on. A session
+  the server already holds exactly as it is (it was just opened, or arrived from
+  the server, and nothing changed) isn't saved again: a long chat is megabytes,
+  and on a phone that was seconds with nothing on screen. From the tap until the
+  message has gone, the box is read-only (and on a phone the button shows a spinner), and
+  another tap or Enter does nothing; if the message is refused the text stays
+  and the error shows. Nothing is checked on the page first: the server looks
+  whether the model is loaded as it starts the reply, so a message is one
+  request from the tap, and if the model isn't loaded, or is still loading, the
+  reply says so ("isn't loaded, so nothing was sent" or "is still loading").
+  What you have typed and not sent is kept in this browser, per chat (the
+  newest 30), so a refresh brings it back; it goes when the message does. The reply
   streams back as events and shows the way a plan's steps do: the messages as
   they grow, the usage, the session's name when the model has written it, any
   question for you (a command to approve, a folder to allow) in the chat, and
@@ -838,7 +849,7 @@ step that was running when the page closed comes back as pending.
   the model is loaded, and sends nothing if it isn't: your message stays in the
   box, with a note to load it from the model menu. Opening an old chat picks
   its model, but doesn't load it.
-- Streaming replies with a Stop button. Each step of a reply (thinking, tool
+- Streaming replies with a Stop button (on a phone) or Esc (wide screens). Each step of a reply (thinking, tool
   calls) shows how long it took; hover for token counts. Hide the steps in
   **Settings → Chat** to see just the answers.
 - The chat follows new output while you're at the bottom. Scroll up to read
@@ -858,8 +869,8 @@ step that was running when the page closed comes back as pending.
   loading. In your messages a single line break stays a line break. Turn it
   off in **Settings → Chat** to see the raw text, or switch one message with
   the **<>** button in its bottom-right corner.
-- Context indicator under Send ("98% left"), orange then red as the window
-  fills. Click it for tokens used of the model's window, generation speed and
+- Context indicator (under Send on a phone; the share of the window used, "2%"), orange then
+  red as the window fills. Click it for tokens used of the model's window, generation speed and
   **Clear context**: the model forgets everything so far, but the transcript
   stays on screen, dimmed, under a divider. **New chat** clears both. Turn the
   indicator off in **Settings → Chat**.

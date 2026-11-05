@@ -14,10 +14,11 @@ import type { RunnerHandle } from "./runnerTypes.ts";
 // `workingDir` (see Session.workingDir).
 export const attachedPaths = (as: Attachment[]): string[] => as.map((a) => a.path);
 
-// Asks the server, fresh, whether the model is loaded, as Chat does before it
-// sends anything. A server that doesn't report status has nothing to load, and
-// one that can't be asked is left to fail the request with its own error.
-// Not loaded: the runner's error says so.
+// Asks the server, fresh, whether the model is loaded, before a reply is made:
+// Chat doesn't check first when you send a message, so this is where "not
+// loaded" and "still loading" are said, in the reply. A server that doesn't
+// report status has nothing to load, and one that can't be asked is left to
+// fail the request with its own error. Not loaded: the runner's error says so.
 export async function modelLoaded(h: RunnerHandle): Promise<boolean> {
   const { connector, model } = h.env;
   if (!connector || !model) return false;
@@ -28,7 +29,11 @@ export async function modelLoaded(h: RunnerHandle): Promise<boolean> {
     return true;
   }
   if (!status || status === "unknown" || status === "loaded") return true;
-  h.setError(`${model} isn't loaded, so nothing was sent. Load it with ▶ in the model menu, then try again.`);
+  h.setError(
+    status === "loading"
+      ? `${model} is still loading, so nothing was sent yet. Try again in a moment.`
+      : `${model} isn't loaded, so nothing was sent. Load it with ▶ in the model menu, then try again.`,
+  );
   return false;
 }
 

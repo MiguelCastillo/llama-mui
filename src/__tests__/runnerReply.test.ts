@@ -278,6 +278,14 @@ describe("makeReply", () => {
     expect(h.session().promptDir).toBeUndefined();
   });
 
+  it("says the model is still loading, when it is", async () => {
+    mockListModels.mockResolvedValue([{ id: "m", status: "loading" }]);
+    const h = makeHandle();
+    expect((await makeReply(h.handle)("go", [])).ok).toBe(false);
+    expect(mockRunTurn).not.toHaveBeenCalled();
+    expect(h.setError).toHaveBeenCalledWith(expect.stringContaining("still loading"));
+  });
+
   it("goes ahead when the server can't say whether the model is loaded", async () => {
     mockListModels.mockRejectedValue(new Error("down"));
     const h = makeHandle();

@@ -97,6 +97,7 @@ import {
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { pickModel } from "./modelChoice";
 import { copyText } from "./clipboard";
+import { loadDraft, saveDraft } from "./drafts";
 import { newId } from "./uuid";
 import SessionSettings, { ATTACHMENTS_LOCKED_NOTE, AttachmentIcon } from "./SessionSettings";
 import SessionsPanel from "./SessionsPanel";
@@ -852,7 +853,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // it: opening an old chat and sending once loaded the 27B next to the 9B, and
   // both slowed to 5 tok/s. So nothing is sent to a model that isn't loaded;
   // loading is an explicit action, in the model menu or on the Models page.
-  // `notLoaded` is the model the note under the chat is about.
+  // The server checks as it starts each reply (see modelLoaded in
+  // runnerReply.ts) and says so in the reply; the check here is for starting a
+  // plan from its card. `notLoaded` is the model the note under the chat is about.
   const [notLoaded, setNotLoaded] = useState<string | null>(null);
   // Asks the server, fresh, whether the model is loaded. A server that doesn't
   // report status (no router mode) has nothing to load, and one that can't be
@@ -1025,7 +1028,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     }
     // The one before this is still being saved and sent.
     if (!model || !connector || starting.current) return false;
-    if (!(await modelLoaded())) return false;
+    // No check of the model here: the server looks, as it starts the reply, and
+    // says in the reply if the model isn't loaded or is still loading. That is
+    // one request from the tap instead of two.
     toBottom();
     return chatTurn(text, messages, planOn);
   };
@@ -1056,11 +1061,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // A first message saves the session just so the server has it to read; if
     // the message doesn't go, that empty session is removed again.
     const listed = sessions.some((x) => x.id === id);
+    // The server already holds exactly this session (it was opened or arrived
+    // from the server and nothing changed since), so it isn't sent again: a long
+    // chat is megabytes, and from a phone that was seconds with nothing to show.
+    const inSync = listed && savedKey.current === key;
     starting.current = id;
     try {
       savedKey.current = key;
-      const summary = await saveSession(toSend);
-      setSessions((ss) => upsertRow(ss, summary));
+      if (!inSync) {
+        const summary = await saveSession(toSend);
+        setSessions((ss) => upsertRow(ss, summary));
+      }
       await sendChat(id, text, { ...options, planning });
       // Until the server's copy of the session arrives (mirrorView), show the
       // message as sent, and a failure of the reply that came before it as gone.
@@ -1100,11 +1111,15 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const id = sessionId;
     const toRun = { ...snapshot(), plan: planRef.current };
     const key = keyOf(toRun);
+    // Not sent again if the server already holds exactly this (see chatTurn).
+    const inSync = sessions.some((x) => x.id === id) && savedKey.current === key;
     starting.current = id;
     try {
       savedKey.current = key;
-      const summary = await saveSession(toRun);
-      setSessions((ss) => upsertRow(ss, summary));
+      if (!inSync) {
+        const summary = await saveSession(toRun);
+        setSessions((ss) => upsertRow(ss, summary));
+      }
       return await startRemoteRun(id, options);
     } catch (e) {
       // Not saved after all: the next save must try again.
@@ -1117,6 +1132,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // A command the server couldn't do shows as the error, in its own words.
   const showFailure = (command: Promise<unknown>) =>
     void command.catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  // Escape stops a streaming reply (a phone has the Stop button instead). It
+  // leaves alone an Escape that closes a dialog or menu, or that another
+  // handler already used.
+  useEffect(() => {
+    if (!turnRunning || !visible) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) return;
+      showFailure(stopRunner(sessionId));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
   // Says why a refused Run or a refused save didn't happen. A save refused
   // because the session changed (or runs) elsewhere shows the server's copy.
   const runRefused = (e: unknown) => {
@@ -1194,7 +1222,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const retry = async () => {
     const userMsg = [...messages].reverse().find((m) => m.role === "user");
     if (!userMsg || runActive || starting.current) return;
-    if (!model || !connector || !(await modelLoaded())) return;
+    if (!model || !connector) return;
     const index = messages.indexOf(userMsg);
     toBottom();
     await chatTurn(userMsg.content, messages.slice(0, index), false);
@@ -1729,9 +1757,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         )}
       </Box>
 
-      <Paper square elevation={3} sx={{ py: 2 }}>
+      <Paper square elevation={0} sx={{ py: 2, bgcolor: "transparent" }}>
         <Container maxWidth={false}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
+          {/* On a wide screen Enter sends and there is no Send button: the settings button
+              and the box are centered beside the context meter. On a phone Send has the
+              meter under it, the box is as tall as both, and the settings button is centered. */}
+          <Stack direction="row" spacing={1} sx={{ alignItems: narrow ? "stretch" : "center" }}>
+            <Box sx={{ display: "flex", alignSelf: "center" }}>
             <SessionSettings
               attachments={attachments}
               workingDir={workingDir}
@@ -1746,22 +1778,29 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   .catch((e) => setError(e.message))
               }
             />
+            </Box>
             <Composer
+              tall={narrow}
+              sendButton={narrow}
+              sessionId={sessionId}
               placeholder={
                 planRunning
                   ? narrow
                     ? "Message the plan"
                     : "Message the running plan: the next step will see it (Enter to send)"
-                  : narrow
+                  : turnRunning && !narrow
+                    ? "Replying… press Esc to stop"
+                    : narrow
                     ? "Message"
                     : "Message (Enter to send, Shift+Enter for a new line)"
               }
               onSend={send}
               fill={fill}
-              // Stop here is for a reply that is streaming. A plan run is
-              // paused from its card, and the box keeps Send for messages to it.
+              // Stop here is for a reply that is streaming, on a phone (Escape does it
+              // elsewhere). A plan run is paused from its card, and the box keeps Send
+              // for messages to it.
               onStop={
-                turnRunning ? () => showFailure(stopRunner(sessionId)) : undefined
+                turnRunning && narrow ? () => showFailure(stopRunner(sessionId)) : undefined
               }
               disabled={!model && !planRunning}
               below={
@@ -1789,13 +1828,22 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 // itself: kept in Chat, every keystroke redrew the whole chat, about 100 ms
 // each in a 300-message one.
 function Composer({
+  sessionId,
   placeholder,
   onSend,
   onStop,
   disabled,
   below,
   fill,
+  tall = false,
+  sendButton = true,
 }: {
+  // The box is as tall as the Send column beside it (Send with the meter under it).
+  tall?: boolean;
+  // Whether to show the Send button. Enter sends either way; on a wide screen the box goes without it.
+  sendButton?: boolean;
+  // The chat the box belongs to: what's typed and not sent is kept per chat (see drafts.ts).
+  sessionId: string;
   placeholder: string;
   // Text to put in the box and focus it (not sent); a new `n` is a new request.
   fill?: { text: string; n: number } | null;
@@ -1806,16 +1854,47 @@ function Composer({
   // Under Send: the context indicator.
   below: ReactNode;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => loadDraft(sessionId));
+  // The chat whose draft is in the box. Opening another chat shows its draft,
+  // not the text typed in the one before.
+  const shownFor = useRef(sessionId);
+  useEffect(() => {
+    if (shownFor.current === sessionId) return;
+    shownFor.current = sessionId;
+    setText(loadDraft(sessionId));
+  }, [sessionId]);
+  // Every change is kept, so a refresh brings the text back.
+  const edit = (value: string) => {
+    setText(value);
+    saveDraft(sessionId, value);
+  };
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (!fill) return;
-    setText(fill.text);
+    edit(fill.text);
     inputRef.current?.focus();
   }, [fill]);
+  // From the tap until the message has gone (or been refused): the button shows
+  // it, and a second tap or Enter doesn't send the text again. The text stays
+  // in the box meanwhile and clears only when it went.
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const send = async () => {
     const t = text.trim();
-    if (t && (await onSend(t))) setText("");
+    if (!t || sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
+    const sentFrom = sessionId;
+    try {
+      if (await onSend(t)) {
+        // It went: that chat's draft is gone, and the box is cleared unless another chat was opened meanwhile.
+        saveDraft(sentFrom, "");
+        if (shownFor.current === sentFrom) setText("");
+      }
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
   };
   return (
     <>
@@ -1824,12 +1903,16 @@ function Composer({
         multiline
         size="small"
         maxRows={8}
+        sx={tall ? { alignSelf: "stretch", "& .MuiInputBase-root": { flexGrow: 1, alignItems: "flex-start" } } : undefined}
         placeholder={placeholder}
         inputRef={inputRef}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        slotProps={{ htmlInput: { readOnly: sending } }}
+        onChange={(e) => edit(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
+          // Enter sends where there is no Send button (a wide screen). With the button
+          // (a phone, whose keyboard has no Shift) Enter starts a new line.
+          if (e.key === "Enter" && !e.shiftKey && !sendButton) {
             e.preventDefault();
             send();
           }
@@ -1837,23 +1920,27 @@ function Composer({
       />
       {/* Send lines up with the input's top edge; the context
           indicator sits just below it. */}
-      <Stack spacing={1.25} sx={{ flexShrink: 0, alignItems: "center" }}>
+      <Stack spacing={0.5} sx={{ flexShrink: 0, alignItems: "center" }}>
         {/* Icons, with the words as tooltip and accessible label. */}
-        {!onStop && (
+        {!onStop && sendButton && (
           <Tooltip title="Send">
             <span>
               <IconButton
-                aria-label="Send"
+                aria-label={sending ? "Sending" : "Send"}
+                aria-busy={sending}
                 onClick={send}
-                disabled={!text.trim() || disabled}
+                disabled={!text.trim() || disabled || sending}
                 sx={{
                   bgcolor: "primary.main",
                   color: "primary.contrastText",
                   "&:hover": { bgcolor: "primary.dark" },
-                  "&.Mui-disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
+                  // Busy keeps the button's colour, so it reads as working, not as unavailable.
+                  "&.Mui-disabled": sending
+                    ? { bgcolor: "primary.main", color: "primary.contrastText" }
+                    : { bgcolor: "action.disabledBackground", color: "action.disabled" },
                 }}
               >
-                <SendIcon />
+                {sending ? <CircularProgress size="1.5rem" color="inherit" /> : <SendIcon />}
               </IconButton>
             </span>
           </Tooltip>
@@ -2597,15 +2684,17 @@ function ContextIndicator({
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const share = contextShare(usage, contextSize);
   const color = contextColor(share);
-  const left = Math.max(0, 100 - share * 100);
-  const label = usage && contextSize ? `${left >= 10 ? left.toFixed(0) : left.toFixed(1)}% left` : "Context";
+  // The share used, to match the ring, which fills as the window does.
+  const used = Math.min(100, share * 100);
+  const percent = `${used >= 10 ? used.toFixed(0) : used.toFixed(1)}%`;
+  const label = usage && contextSize ? percent : "Context";
 
   return (
     <Box sx={{ display: "flex" }}>
-      <Tooltip title="Context left. Click for details and to clear it.">
+      <Tooltip title="Context used. Click for details and to clear it.">
         <ButtonBase
           onClick={(e) => setAnchor(e.currentTarget)}
-          sx={{ borderRadius: 1, px: 0.5, gap: 0.75, color: color === "primary" ? "text.secondary" : `${color}.main` }}
+          sx={{ borderRadius: 1, px: 0.25, gap: 0.75, color: color === "primary" ? "text.secondary" : `${color}.main` }}
         >
           {/* A faint full circle behind the used share, so the ring reads as a
               gauge even when almost empty. */}
