@@ -20,7 +20,9 @@ works, and this file says how to change it.
   - the path checks and access prompts in `server/disk.ts` and `server/write.ts`,
     including the `sessions/<id>/worktrees` exception;
   - the block on `settings.json`, `.keys` and the key file (`isSettingsFile`);
-  - the home-folder rule in `create_worktree`, and the approval `remove_worktree` asks for.
+  - the home-folder rule in `create_worktree`, and the approval `remove_worktree` asks for;
+  - the host check in `inspect_page` (`server/inspect.ts`): localhost opens freely, any other host asks first,
+    because a page runs code in Chrome and a sandbox or network rule should be what limits that.
 
   Don't add to this list without saying so here.
 

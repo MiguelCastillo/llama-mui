@@ -308,6 +308,21 @@ text, with HTML turned into plain text, 20,000 characters at a time. Pages are
 fetched from this machine, so the model can reach anything it can, including
 your local network.
 
+The third Web tool is `inspect_page` (`server/inspect.ts`), for checking how a
+page looks, as a person would. It opens a URL in a headless Chrome and returns
+text: the page's title, its visible text and structure (headings, buttons,
+inputs and links, with their names) and, if the model gave a `script`, the
+JSON result of running that JavaScript in the page (say, the size of each
+button). There is no screenshot, and nothing is clicked or typed. It uses the
+Chrome already installed (found through `LLAMA_MUI_CHROME`, then the usual
+places on macOS, Linux and Windows); llama-mui downloads no browser, and if
+none is found the tool says to install Chrome or set that variable. Pages on
+`localhost`, `127.0.0.1` and `[::1]` open without asking; any other site asks
+you first, because a page can run code. Each call uses a new empty browser
+profile that is deleted afterwards, the browser is closed even on an error,
+and a call stops after 30 seconds. The reply is cut at 12,000 characters,
+and says so.
+
 ### What the model is told
 
 Besides your messages and its own replies, the model is told things in three

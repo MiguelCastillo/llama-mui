@@ -348,7 +348,9 @@ export async function runTurn(
                       ? `Error: the user didn't approve this change to ${approval.path}; nothing was written`
                       : approval.type === "worktree"
                         ? `Error: the user didn't approve removing the worktree ${approval.path}; nothing changed`
-                        : "Error: the user didn't approve running this command; it didn't run",
+                        : approval.type === "page"
+                          ? `Error: the user didn't allow opening ${approval.url}; it wasn't opened. Use a localhost page or ask them.`
+                          : "Error: the user didn't approve running this command; it didn't run",
                 };
                 break;
               }

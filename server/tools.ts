@@ -19,6 +19,7 @@ import {
   type ToolSpec,
 } from "./toolkit.ts";
 import { FETCH_TOOLS } from "./fetch.ts";
+import { INSPECT_TOOLS } from "./inspect.ts";
 import { PLAN_TOOLS, planInstructions } from "./plan.ts";
 import { THREAD_TOOLS, threadInstructions } from "./threads.ts";
 import { TODO_TOOLS, todoInstructions } from "./todos.ts";
@@ -117,12 +118,14 @@ const GROUPS: Group[] = [
     id: "web",
     label: "Web",
     description:
-      "Search the web through DuckDuckGo, and open web pages. Search queries go to DuckDuckGo; pages are fetched " +
-      "from this machine, so they can include ones on your network.",
+      "Search the web through DuckDuckGo, and open web pages, as text or in a headless Chrome to check layout. " +
+      "Search queries go to DuckDuckGo; pages are fetched from this machine, so they can include ones on your network. " +
+      "Chrome pages on localhost open at once; any other site asks you first.",
     instructions:
       "You can search the web with web_search and read a page with fetch_url. Use them for current events, recent " +
       "releases and facts you aren't sure of, and always when the user asks you to search; don't answer those " +
-      "from memory. Search first, then open the most relevant results to read them. Cite the URLs you used.",
+      "from memory. Search first, then open the most relevant results to read them. Cite the URLs you used. To check how a page looks or is laid out, " +
+      "use inspect_page: it opens the URL in Chrome and returns its structure, and the result of a script you give it.",
   },
 ];
 
@@ -136,6 +139,7 @@ const TOOLS: ToolSpec[] = [
   ...TERMINAL_TOOLS,
   ...WEB_TOOLS,
   ...FETCH_TOOLS,
+  ...INSPECT_TOOLS,
 ];
 
 const isOffered = (ctx: ToolContext, t: ToolSpec) => ctx.store.toolsEnabled && !ctx.store.disabledTools.includes(t.name);

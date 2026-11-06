@@ -540,7 +540,9 @@ export type Approval =
       diff: string;
     }
   | { type: "command"; command: string; cwd: string }
-  | { type: "worktree"; action: "remove"; repo: string; branch: string; path: string };
+  | { type: "worktree"; action: "remove"; repo: string; branch: string; path: string }
+  // inspect_page on a host other than this computer.
+  | { type: "page"; url: string; host: string };
 
 // Text for the model, a path outside the attachments that the user must allow
 // before the call can run, or something the user must approve.

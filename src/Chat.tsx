@@ -49,6 +49,7 @@ import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import LayersClearOutlinedIcon from "@mui/icons-material/LayersClearOutlined";
 import CompressOutlinedIcon from "@mui/icons-material/CompressOutlined";
 import AccountTreeOutlinedIcon from "@mui/icons-material/AccountTreeOutlined";
+import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -2836,6 +2837,8 @@ function ApprovalPrompt({ approval, onDecide, onAlways }: { approval: Approval; 
           <TerminalOutlinedIcon fontSize="small" />
         ) : approval.type === "worktree" ? (
           <AccountTreeOutlinedIcon fontSize="small" />
+        ) : approval.type === "page" ? (
+          <PublicOutlinedIcon fontSize="small" />
         ) : (
           <EditOutlinedIcon fontSize="small" />
         )
@@ -2866,6 +2869,17 @@ function ApprovalPrompt({ approval, onDecide, onAlways }: { approval: Approval; 
           </Box>
           <Typography variant="caption" color="text.secondary" component="div">
             In {approval.cwd}. It runs as you, with your network access and credentials.
+          </Typography>
+        </>
+      ) : approval.type === "page" ? (
+        <>
+          <Typography variant="body2">The model wants to open this page in Chrome:</Typography>
+          <Typography variant="body2" sx={{ fontFamily: "monospace", overflowWrap: "anywhere", my: 0.5 }}>
+            {approval.url}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" component="div">
+            A page can run code. It opens in a fresh, empty browser profile that is deleted afterwards, and the
+            model reads its text; nothing is saved.
           </Typography>
         </>
       ) : approval.type === "worktree" ? (
