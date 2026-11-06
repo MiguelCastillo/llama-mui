@@ -270,6 +270,20 @@ changes; the thread's own Result shows it once the plan has stopped. Nothing
 shows when the session has no worktree, or its worktree was removed. A branch
 that was squash-merged still counts its commits as not on main.
 
+**Approving for a session.** An approval prompt has a button under Approve and
+Deny that approves the same kind of thing for the rest of that session, so a
+plan that makes ten edits or runs a dozen commands doesn't stop ten or twelve
+times: **Approve all changes in this session** (every file change the tools
+would ask about) and **Approve all commands in this session** (every command,
+git or not; it runs as you, with your network access and credentials). There is
+no special handling of git: a command is approved or it isn't. Removing a
+worktree is always asked. The choice is saved in the session (`autoApprove` in
+`session.json`), so a reload keeps it, and a new session starts without it; it
+is not inherited by a thread. A chip above the message box says what is
+approved, and its x asks again. Only the question is skipped: the paths a chat
+may reach and the files that are off limits (`settings.json`, the keys) are
+checked as before, and an approved change still shows its diff in the chat.
+
 The **Terminal** group (`server/terminal.ts`) has `run_command`, which runs a
 shell command the model suggests, in the working directory, an attached folder
 (or one you allow). With no working directory the model has to name the `cwd`.

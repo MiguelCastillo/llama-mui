@@ -508,7 +508,7 @@ describe("needsYou", () => {
     expect(needsYou(view({}))).toBe(false);
   });
   it("is true for a pending ask", () => {
-    expect(needsYou(view({ ask: { ask: { needsApproval: {} as any }, decide: () => {} } }))).toBe(true);
+    expect(needsYou(view({ ask: { ask: { needsApproval: {} as any }, decide: () => {}, always: () => {} } }))).toBe(true);
   });
   it("is true when it ended with a waiting step, false for other ends and for no session", () => {
     const waiting = session("a", { plan: [{ id: "s1", text: "One", status: "waiting" }] });

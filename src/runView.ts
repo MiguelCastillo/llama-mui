@@ -2,7 +2,7 @@
 // it. The run itself is on the server (server/runners.ts); src/runClient.ts
 // keeps these views current from its events. No React in this file.
 
-import type { Session } from "./api";
+import type { AutoKind, Session } from "./api";
 import type { Answer, Ask } from "./runnerTypes";
 
 export type RunnerStatus = "running" | "waiting" | "stopped";
@@ -21,7 +21,8 @@ export interface RunnerView {
   status: RunnerStatus;
   // The pending ask and the way to answer it (a command to the server). The
   // same object while it is the same ask.
-  ask: { ask: Ask; decide: (answer: Answer) => void } | null;
+  // `always` also approves that kind of thing for the rest of the session.
+  ask: { ask: Ask; decide: (answer: Answer) => void; always: (kind: AutoKind) => void } | null;
   error: string | null;
   // A request is in flight (a step's reply or its check).
   streaming: boolean;

@@ -24,7 +24,7 @@
 // Nothing here can hold an API key: the server never sends one, and the page
 // never had one.
 
-import { ApiError, type Picked, type Session, getSession, sendCommand } from "./api";
+import { ApiError, type AutoKind, type Picked, type Session, getSession, sendCommand } from "./api";
 import { applyPatch, type SessionPatch } from "../server/sessionPatch";
 import type { Answer, Ask } from "./runnerTypes";
 import { type RunnerView, needsYou } from "./runView";
@@ -126,7 +126,7 @@ function askOf(l: Live): RunnerView["ask"] {
     return null;
   }
   if (l.ask?.id !== a.id) {
-    l.ask = { id: a.id, value: { ask: toAsk(a), decide: (answer) => void decide(l.id, a.id, answer) } };
+    l.ask = { id: a.id, value: { ask: toAsk(a), decide: (answer) => void decide(l.id, a.id, answer), always: (kind) => void decide(l.id, a.id, true, kind) } };
   }
   return l.ask.value;
 }
@@ -399,7 +399,11 @@ export async function sendChat(id: string, text: string, options: RunOptions & {
 
 // Yes or no to an access or approval question (a no also turns down a
 // question that asks for a path).
-export const approve = (id: string, askId: string, allow: boolean) => sendCommand(id, "approve", { askId, allow });
+export const approve = (id: string, askId: string, allow: boolean, always?: AutoKind) =>
+  sendCommand(id, "approve", { askId, allow, ...(always ? { always } : {}) });
+
+// Turns an approval for the rest of the session on or off (the chip in the chat).
+export const setAutoApprove = (id: string, kind: AutoKind, on: boolean) => sendCommand(id, "autoapprove", { kind, on });
 
 // The files or folders picked for a question that asks for a path.
 export const answer = (id: string, askId: string, paths: Picked[]) => sendCommand(id, "answer", { askId, paths });
@@ -407,9 +411,9 @@ export const answer = (id: string, askId: string, paths: Picked[]) => sendComman
 // The answer behind a view's `ask.decide`: a refusal shows as the run's error
 // until the next event, except for a question that was answered already (the
 // first answer wins; the events show what happened).
-async function decide(id: string, askId: string, answerGiven: Answer) {
+async function decide(id: string, askId: string, answerGiven: Answer, always?: AutoKind) {
   try {
-    if (typeof answerGiven === "boolean") await approve(id, askId, answerGiven);
+    if (typeof answerGiven === "boolean") await approve(id, askId, answerGiven, always);
     else await answer(id, askId, answerGiven);
   } catch (e) {
     if (e instanceof ApiError && e.data.reason === "stale ask") return;

@@ -73,6 +73,8 @@ import {
   type PastPlan,
   type PlanStep,
   type PlanThread,
+  type AutoApprove,
+  type AutoKind,
   type Todo,
   rememberFolder,
   setCheckCommand,
@@ -138,6 +140,7 @@ import {
   needsYou,
   sendChat,
   sendMessage as sendToRun,
+  setAutoApprove as sendAutoApprove,
   startRun as startRemoteRun,
   stop as stopRunner,
   subscribe,
@@ -457,7 +460,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const savedKey = useRef("");
   // Not the title: it comes from the names and the first message, and a saved
   // one holds the user's name, which saves never send.
-  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.workingDir ?? null, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planId ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos, s.parentId ?? null, s.threads ?? [], s.titleHint ?? null, s.planMovedIn ?? false]);
+  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.workingDir ?? null, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planId ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos, s.parentId ?? null, s.threads ?? [], s.autoApprove ?? null, s.titleHint ?? null, s.planMovedIn ?? false]);
 
   // The session this one is nested under (its direct parent), if any.
   const [parentId, setParentId] = useState<string | null>(null);
@@ -465,6 +468,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // name this session has until the model names it, and whether the plan was
   // moved in here from the parent and has not run yet.
   const [threads, setThreads] = useState<PlanThread[]>([]);
+  // What is approved for the rest of this session without asking (see autoApprove.ts).
+  const [autoApprove, setAutoApproveState] = useState<AutoApprove>({});
   const [titleHint, setTitleHint] = useState<string | null>(null);
   const [planMovedIn, setPlanMovedIn] = useState(false);
 
@@ -508,6 +513,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     changeTodos(s.todos ?? []);
     setParentId(s.parentId ?? null);
     setThreads(s.threads ?? []);
+    setAutoApproveState(s.autoApprove ?? {});
     setTitleHint(s.titleHint ?? null);
     setPlanMovedIn(s.planMovedIn ?? false);
     if (s.model && !live) setModel(s.model);
@@ -650,6 +656,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       todos,
       parentId,
       threads,
+      ...(Object.keys(autoApprove).length ? { autoApprove } : {}),
       titleHint,
       planMovedIn,
     };
@@ -701,7 +708,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return () => clearTimeout(timer);
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
-  }, [loaded, messages, contextStart, attachments, workingDir, usage, model, failed, plan, planProposal, planContext, planSummary, planId, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId, threads, titleHint, planMovedIn]);
+  }, [loaded, messages, contextStart, attachments, workingDir, usage, model, failed, plan, planProposal, planContext, planSummary, planId, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId, threads, autoApprove, titleHint, planMovedIn]);
 
   // Set by openSession: once that session has loaded, the chat box scrolls to
   // its plan card instead of the end.
@@ -755,6 +762,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     changeTodos([]);
     setParentId(null);
     setThreads([]);
+    setAutoApproveState({});
     setTitleHint(null);
     setPlanMovedIn(false);
     setDrawerOpen(false);
@@ -1364,7 +1372,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           onOpen={() => openSession(t.sessionId, true, t.planId ?? "")}
           prompt={
             threadAsks[t.sessionId] && noteAskKind(threadAsks[t.sessionId].ask) === "answer" ? (
-              <PendingPrompt ask={threadAsks[t.sessionId].ask} onDecide={threadAsks[t.sessionId].decide} />
+              <PendingPrompt ask={threadAsks[t.sessionId].ask} onDecide={threadAsks[t.sessionId].decide} onAlways={threadAsks[t.sessionId].always} />
             ) : undefined
           }
           needsYou={!!threadAsks[t.sessionId] && noteAskKind(threadAsks[t.sessionId].ask) === "open"}
@@ -1413,7 +1421,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   onClone={canClone ? () => clonePlan(plan, planContext, planSummary) : undefined}
                   prompt={
                     promptInPlan && shownPending ? (
-                      <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} />
+                      <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} onAlways={(k) => { shownPending.always(k); setAutoApproveState((a) => ({ ...a, [k]: true })); }} />
                     ) : undefined
                   }
                 />
@@ -1816,7 +1824,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               </Box>
             ))}
             {shownPending && !promptInPlan && (
-              <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} />
+              <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} onAlways={(k) => { shownPending.always(k); setAutoApproveState((a) => ({ ...a, [k]: true })); }} />
             )}
             {notLoaded && (
               <Alert severity="info">
@@ -1845,6 +1853,30 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           {/* On a wide screen Enter sends and there is no Send button: the settings button
               and the box are centered beside the context meter. On a phone Send has the
               meter under it, the box is as tall as both, and the settings button is centered. */}
+          {/* What is approved for the rest of this session; the x asks again. */}
+          {(["changes", "commands"] as const).some((k) => autoApprove[k]) && (
+            <Stack direction="row" useFlexGap spacing={1} sx={{ mb: 1, flexWrap: "wrap", alignItems: "center" }}>
+              {(["changes", "commands"] as const).map(
+                (k) =>
+                  autoApprove[k] && (
+                    <Chip
+                      key={k}
+                      size="small"
+                      color="warning"
+                      variant="outlined"
+                      label={k === "changes" ? "Approving all changes" : "Approving all commands"}
+                      onDelete={() => {
+                        setAutoApproveState(({ [k]: _off, ...rest }) => rest);
+                        sendAutoApprove(sessionId, k, false).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+                      }}
+                    />
+                  ),
+              )}
+              <Typography variant="caption" color="text.secondary">
+                for this session. The x asks again.
+              </Typography>
+            </Stack>
+          )}
           <Stack direction="row" spacing={1} sx={{ alignItems: narrow ? "stretch" : "center" }}>
             <Box sx={{ display: "flex", alignSelf: "center" }}>
             <SessionSettings
@@ -2358,8 +2390,8 @@ function ToolCallView({
 }
 
 // The prompt for whatever a reply is waiting on.
-function PendingPrompt({ ask, onDecide }: { ask: Ask; onDecide: (answer: Answer) => void }) {
-  if ("needsApproval" in ask) return <ApprovalPrompt approval={ask.needsApproval} onDecide={onDecide} />;
+function PendingPrompt({ ask, onDecide, onAlways }: { ask: Ask; onDecide: (answer: Answer) => void; onAlways?: (kind: AutoKind) => void }) {
+  if ("needsApproval" in ask) return <ApprovalPrompt approval={ask.needsApproval} onDecide={onDecide} onAlways={onAlways} />;
   if ("needsLocation" in ask) {
     const { description, kind, canSetWorkingDir } = ask.needsLocation;
     return (
@@ -2566,7 +2598,7 @@ const CHANGE_VERB: Record<ChangeApproval["action"], string> = {
 // Shown while a reply waits on the user: a file change as a diff, or a
 // command and where it runs, with Approve (Run) / Deny. Nothing happens until
 // the user approves.
-function ApprovalPrompt({ approval, onDecide }: { approval: Approval; onDecide: (allow: boolean) => void }) {
+function ApprovalPrompt({ approval, onDecide, onAlways }: { approval: Approval; onDecide: (allow: boolean) => void; onAlways?: (kind: AutoKind) => void }) {
   const isCommand = approval.type === "command";
   return (
     <Alert
@@ -2635,6 +2667,20 @@ function ApprovalPrompt({ approval, onDecide }: { approval: Approval; onDecide: 
           Deny
         </Button>
       </Stack>
+      {/* Approves this and the same kind of thing for the rest of this session;
+          the chip above the message box turns it off. */}
+      {onAlways && approval.type === "change" && (
+        <Button size="small" onClick={() => onAlways("changes")} sx={{ mt: 0.5, ml: -1 }}>
+          Approve all changes in this session
+        </Button>
+      )}
+      {onAlways && approval.type === "command" && (
+        <Tooltip title="Every command, git or not, runs as you with your network access and credentials">
+          <Button size="small" color="warning" onClick={() => onAlways("commands")} sx={{ mt: 0.5, ml: -1 }}>
+            Approve all commands in this session
+          </Button>
+        </Tooltip>
+      )}
     </Alert>
   );
 }

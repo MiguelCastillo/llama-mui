@@ -42,6 +42,7 @@ import type { ChatMessage, PlanStep, Session } from "../src/api.ts";
 import { planRequestFor } from "../src/planThread.ts";
 import { attachedPaths, makeReply, modelLoaded } from "../src/runnerReply.ts";
 import type { Answer, Ask, RunnerEnv, RunnerHandle } from "../src/runnerTypes.ts";
+import { autoApproves } from "../src/autoApprove.ts";
 import { HttpError } from "./http.ts";
 import * as hub from "./runHub.ts";
 import { readSession, revisionOf } from "./sessionFile.ts";
@@ -239,6 +240,8 @@ function patchStep(e: Entry, id: string, patch: Omit<PlanStep, "id" | "text">) {
 // Stores the ask and resolves with the user's answer. An aborted request
 // counts as deny. Asks wait for as long as it takes; nothing pops up.
 function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
+  // Approved for the rest of the session (see autoApprove.ts): no question.
+  if ("needsApproval" in ask && autoApproves(e.session.autoApprove, ask.needsApproval)) return Promise.resolve(true);
   return new Promise<Answer>((resolve) => {
     if (signal.aborted) return resolve(false);
     const decide = (answer: Answer) => {

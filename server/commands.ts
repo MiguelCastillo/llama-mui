@@ -13,7 +13,10 @@
 //   stop     end the run now; answers once it is over. The plan stays, the
 //            step in flight goes back to pending, and `run` picks it up. A plan
 //            card calls it Pause, a chat reply Stop.
-//   approve  { askId, allow }   yes or no to an access or approval question
+//   approve  { askId, allow, always? }   yes or no to an access or approval question;
+//            always (changes, git or commands) also approves that kind for the
+//            rest of the session (see autoApprove.ts)
+//   autoapprove { kind, on }   turns one of those on or off
 //            (a no also turns down a question that asks for a path)
 //   answer   { askId, paths: [{ path, kind, asWorkingDir? }] }   the files or
 //            folders picked for a question that asks for a path; asWorkingDir
@@ -46,6 +49,7 @@ import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
 import { startFromOptions, startTurnFromOptions } from "./runStart.ts";
 import * as runners from "./runners.ts";
+import { AUTO_KINDS, type AutoKind, withAuto } from "../src/autoApprove.ts";
 import { sessionFolder } from "./sessionFile.ts";
 
 export interface RunOptions {
@@ -97,6 +101,11 @@ const askIdOf = (body: any): string => {
   return body.askId;
 };
 
+const autoKindOf = (v: unknown): AutoKind => {
+  if (typeof v === "string" && (AUTO_KINDS as readonly string[]).includes(v)) return v as AutoKind;
+  throw new HttpError(400, `kind must be one of ${AUTO_KINDS.join(", ")}`);
+};
+
 // Handles POST /api/sessions/<id>/commands/<name>; returns false for anything else.
 export async function commandRoutes({ req, res, parts, method }: Route, given: CommandDeps = defaultDeps): Promise<boolean> {
   const deps = { ...defaultDeps, ...given };
@@ -135,8 +144,21 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
     }
     case "approve":
       if (typeof body.allow !== "boolean") throw new HttpError(400, "allow must be true or false");
+      // `always`: also approve this kind of thing for the rest of the session.
+      // Set first, so the next question of that kind is already approved.
+      if (body.allow && body.always !== undefined) {
+        const kind = autoKindOf(body.always);
+        await hub.edit(id, (s) => void (s.autoApprove = withAuto(s.autoApprove, kind, true)));
+      }
       await runners.answerAsk(id, askIdOf(body), body.allow);
       break;
+    case "autoapprove": {
+      // Turns an approval-for-the-session on or off, from the chip in the chat.
+      const kind = autoKindOf(body.kind);
+      if (typeof body.on !== "boolean") throw new HttpError(400, "on must be true or false");
+      await hub.edit(id, (s) => void (s.autoApprove = withAuto(s.autoApprove, kind, body.on)));
+      break;
+    }
     case "answer": {
       if (body.text !== undefined) {
         throw new HttpError(409, "Nothing is waiting for typed text. A step that asked a question is answered on the plan card, and the plan is run again.", {

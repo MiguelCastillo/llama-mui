@@ -536,6 +536,16 @@ export const runTool = (c: ToolCall, context: ToolCallContext) =>
   call<ToolOutcome>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments, ...context });
 
 // A saved chat: everything needed to reopen it where it was left.
+// What the user chose to approve for the rest of a session without being asked
+// again (see server/autoApprove.ts). Missing or empty: everything asks.
+export interface AutoApprove {
+  // Every file change.
+  changes?: boolean;
+  // Every command.
+  commands?: boolean;
+}
+export type AutoKind = keyof AutoApprove;
+
 export interface Session {
   id: string;
   title: string;
@@ -595,6 +605,8 @@ export interface Session {
   // Plans this session moved into their own nested sessions, each shown as a
   // note where the plan was. Older saved chats don't have it.
   threads?: PlanThread[];
+  // Approvals given for the rest of this session (see AutoApprove).
+  autoApprove?: AutoApprove;
   // The title until the model names the session (e.g. a plan's summary for a
   // thread's first message). Older saved chats don't have it.
   titleHint?: string | null;
