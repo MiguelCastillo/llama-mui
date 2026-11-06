@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { HttpError, type Route, readJson, readBody, sendJson } from "./http.ts";
 import { load, type Store } from "./store.ts";
+import { track } from "./upstreamLog.ts";
 
 const authHeaders = (apiKey: string): Record<string, string> => (apiKey ? { Authorization: `Bearer ${apiKey}` } : {});
 
@@ -32,6 +33,8 @@ async function proxy(
   res.on("close", () => controller.abort());
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
+  const tracked = track(req, res, c.name, `${path}`);
+  let answered = false;
   try {
     const upstream = await fetch(url, {
       method: req.method,
@@ -42,15 +45,26 @@ async function proxy(
       body: hasBody ? new Uint8Array(await readBody(req)) : undefined,
       signal: controller.signal,
     });
+    answered = true;
+    tracked.answered(upstream.status);
     res.statusCode = upstream.status;
     for (const h of ["content-type", "cache-control"]) {
       const v = upstream.headers.get(h);
       if (v) res.setHeader(h, v);
     }
-    if (!upstream.body) return void res.end();
+    if (!upstream.body) {
+      res.end();
+      return tracked.end();
+    }
     // Stream the response body (handles SSE)
-    await pipeline(Readable.fromWeb(upstream.body as any), res).catch(() => {});
+    const body = Readable.fromWeb(upstream.body as any);
+    tracked.watch(body);
+    await pipeline(body, tracked.counter, res).then(
+      () => tracked.end(),
+      (e) => tracked.end(e),
+    );
   } catch (e: any) {
+    if (!answered) tracked.failed(e);
     throw new HttpError(502, `Can't reach ${c.name}: ${e.message ?? describeNetworkError(e)}`);
   }
 }

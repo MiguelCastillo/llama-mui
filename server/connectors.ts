@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { HttpError, type Route, readBody, readJson, sendJson } from "./http.ts";
 import { type Api, type Connector, type Kind, type Store, load, save } from "./store.ts";
+import { track } from "./upstreamLog.ts";
 
 const ANTHROPIC_URL = "https://api.anthropic.com";
 
@@ -102,6 +103,7 @@ async function proxy(req: IncomingMessage, res: ServerResponse, id: string, rest
   res.on("close", () => controller.abort());
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
+  const tracked = track(req, res, c.name, rest);
   let upstream: Response;
   try {
     upstream = await fetch(`${c.url}${rest}`, {
@@ -116,16 +118,27 @@ async function proxy(req: IncomingMessage, res: ServerResponse, id: string, rest
       signal: controller.signal,
     });
   } catch (e: any) {
+    tracked.failed(e);
     throw new HttpError(502, `Can't reach ${c.name}: ${describeNetworkError(e)}`);
   }
+  tracked.answered(upstream.status);
   res.statusCode = upstream.status;
   for (const h of ["content-type", "cache-control"]) {
     const v = upstream.headers.get(h);
     if (v) res.setHeader(h, v);
   }
-  if (!upstream.body) return void res.end();
-  // Rejects when the browser aborts mid-stream; nothing left to report then.
-  await pipeline(Readable.fromWeb(upstream.body as any), res).catch(() => {});
+  if (!upstream.body) {
+    res.end();
+    return tracked.end();
+  }
+  // Rejects when the browser aborts mid-stream or the model server's connection
+  // breaks; the reply can't say so any more, so the log does (upstreamLog.ts).
+  const body = Readable.fromWeb(upstream.body as any);
+  tracked.watch(body);
+  await pipeline(body, tracked.counter, res).then(
+    () => tracked.end(),
+    (e) => tracked.end(e),
+  );
 }
 
 // Handles /api/c/*, /api/active and /api/connectors/*; returns false for

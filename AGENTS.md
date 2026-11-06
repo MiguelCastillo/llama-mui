@@ -77,7 +77,9 @@ need a secure context without a fallback: `crypto.randomUUID` (use `newId` in
 - Don't open `~/.llama-mui/.keys` or `~/.config/llama-mui/secret.key`; they hold the API keys.
   Leave `settings.json` alone too: older versions kept the keys in it.
 - Where data lives: `~/.llama-mui/settings.json` (and `.keys`), and for each session
-  `~/.llama-mui/sessions/<id>/session.json` with its `worktrees/` beside it.
+  `~/.llama-mui/sessions/<id>/session.json` with its `worktrees/` beside it. The server's log is `~/.llama-mui/logs/server-<day>.log`
+  (`server/log.ts`; `docs/guide.md`, "The server's log"): never put a key, header, prompt
+  or reply in a line.
 - Git commands that write (`commit`, `branch`, `reset`) are the user's to run in
   some setups; give the command as one line and let them run it.
 - A command you hand the user for their terminal must never wait for input,

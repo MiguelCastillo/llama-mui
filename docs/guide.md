@@ -1053,3 +1053,40 @@ You can also **Search Hugging Face** for GGUF models:
 
 The search goes through our server to Hugging Face's API. Its results don't
 include an author, so the owner comes from the model id ("owner/repo").
+
+## The server's log
+
+llama-mui's server (the one `npm run prod` or `npm run dev` starts, not the page)
+writes a log to `~/.llama-mui/logs/server-<day>.log`, one JSON object per line,
+and keeps two weeks of it. It is for finding out afterwards why a reply was cut
+off or a step "couldn't be checked". Each line has `t` (time), `pid` and `event`:
+
+- `server.start`, `server.listening`, `server.shutdown`, `server.force-close`,
+  `server.close`, `server.error`, `process.crash`, `process.exit`: the server's own
+  comings and goings. A restart that cut replies shows up as a `server.close` or
+  `server.shutdown` listing the requests to model servers still open (`upstream`).
+  Vite restarting its dev server writes `server.close` and a new `server.start`
+  with the same `pid`.
+- `upstream.start` (only for requests that aren't GETs) and `upstream.end`: every
+  request llama-mui forwards to a model server. `upstream.end` says how it ended in
+  `outcome`: `done`; `client-closed` (whoever asked hung up: Stop, a closed tab, a
+  stopped run, a shutdown); `upstream-error` (the model server's connection broke
+  mid-reply: `error` and `cause` say how, and `idleMs` is how long it had been
+  silent); `connect-failed` (never reached it). It also has `ms`, `headersMs`,
+  `firstByteMs`, `bytes`, and `via` (`browser`, or `server` for calls llama-mui
+  makes itself, which is what plan runs and chat replies are). A GET that went
+  fine and fast isn't logged.
+- `llama.watch`, `llama.down`, `llama.up`, `llama.model`: every 15 seconds the
+  server asks each llama server for its models and writes a line only when
+  something changed: it stopped answering, answered again (`downForMs` is how
+  long it was gone), or a model's state changed (say `loaded` to `unloaded`, in
+  router mode that's a model's process having stopped).
+
+Read the log next to the llama server's own: an `upstream-error` at 21:23:10 and a
+`llama.model` going `loaded` to `unloaded` at 21:23:09 say the model stopped; an
+`upstream-error` with the model still `loaded` says the connection broke on its own.
+
+Nothing secret goes in a line: no API key, header, prompt or reply, and a path is
+logged without its query. `jq` reads it well:
+
+    jq -c 'select(.event=="upstream.end" and .outcome!="done")' ~/.llama-mui/logs/server-*.log

@@ -8,8 +8,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { logServing } from "./lifecycle.ts";
+import { log } from "./log.ts";
 import { handler, whenServing } from "./plugin.ts";
 import { stopAllRuns } from "./runners.ts";
+import { openRequests } from "./upstreamLog.ts";
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -122,6 +125,7 @@ function main() {
   const host = process.env.HOST || "127.0.0.1";
   const port = Number(process.env.PORT ?? 5173);
   const server = createApp();
+  logServing(server, "prod");
 
   let open = 0;
   server.on("request", (_req, res) => {
@@ -130,6 +134,7 @@ function main() {
   });
 
   server.on("error", (e: NodeJS.ErrnoException) => {
+    log("server.error", { code: e.code, error: e.message, host, port });
     console.error(e.code === "EADDRINUSE" ? `llama-mui: ${host}:${port} is already in use. Set PORT to another port.` : `llama-mui: ${e.message}`);
     process.exit(1);
   });
@@ -143,10 +148,12 @@ function main() {
   let closing = false;
   const shutdown = (signal: string) => {
     if (closing) {
+      log("server.shutdown", { signal, again: true, upstream: openRequests() });
       console.log(`llama-mui: ${signal} again, exiting now`);
       process.exit(1);
     }
     closing = true;
+    log("server.shutdown", { signal, open, upstream: openRequests(), graceMs: GRACE_MS });
     console.log(`llama-mui shutting down (${signal}): ${open} request${open === 1 ? "" : "s"} still open, ${GRACE_MS / 1000}s to finish`);
     const finish = async () => {
       await stopAllRuns().catch(() => {});
@@ -155,6 +162,7 @@ function main() {
     server.close(() => void finish());
     server.closeIdleConnections();
     setTimeout(() => {
+      log("server.force-close", { open, upstream: openRequests() });
       server.closeAllConnections();
       setTimeout(() => void finish(), 1_000).unref();
     }, GRACE_MS).unref();
