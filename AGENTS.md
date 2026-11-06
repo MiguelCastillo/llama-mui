@@ -42,6 +42,17 @@ so exporting requires copying the whole folder. Code that writes session data
 must never be handed a key. The app doesn't scrub
 anything for you.
 
+## Session files
+
+Two servers (dev and prod) can share `~/.llama-mui`. Every write of a session goes
+through `lockSession` in `server/sessionFile.ts`, which holds
+`~/.llama-mui/locks/session-<id>.lock` while it reads and writes
+`session.json`. Don't write session files any other way. If you find a lock file
+there, another process is updating that session: don't edit its `session.json`
+by hand or with a script; wait a few seconds and look again. A lock clears
+itself when its process is gone or after 30 seconds, so one still there after
+a minute is a stuck process: tell Miguel, and don't delete it yourself.
+
 ## Other devices
 
 The server has no login, and its tools run commands, so a device that isn't this

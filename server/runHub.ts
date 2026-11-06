@@ -20,7 +20,7 @@
 // the write that follows it can't be split by another request.
 
 import { HttpError } from "./http.ts";
-import { readSession, revisionOf, summaryOf, writeSession } from "./sessionFile.ts";
+import { lockSession, readSession, revisionOf, summaryOf, writeSession } from "./sessionFile.ts";
 import { copyForEvents, diffSession } from "./sessionPatch.ts";
 
 export type RunStatus = "running" | "waiting" | "stopped";
@@ -156,10 +156,12 @@ export function flushAnnounce(id: string) {
   if (patch) publish({ type: "session", id, data: { patch } });
 }
 
-// One queue per session id. Don't call a locked function from inside another.
+// One queue per session id, and inside it a lock file shared with other
+// llama-mui processes on this folder (lockSession), held only while `fn` runs.
+// Don't call a locked function from inside another.
 const tails = new Map<string, Promise<unknown>>();
 export function locked<T>(id: string, fn: () => Promise<T>): Promise<T> {
-  const result = (tails.get(id) ?? Promise.resolve()).then(fn);
+  const result = (tails.get(id) ?? Promise.resolve()).then(() => lockSession(id, fn));
   const tail = result.catch(() => {});
   tails.set(id, tail);
   void tail.then(() => {

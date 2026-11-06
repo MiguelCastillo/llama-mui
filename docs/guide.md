@@ -922,6 +922,19 @@ step that was running when the page closed comes back as pending.
     the page: the server refuses every one with "A plan is running in this
     session", and the page shows the run instead (see
     [Running in the background](#running-in-the-background)).
+  - **Two servers on one folder**: the dev server and the prod server both use
+    `~/.llama-mui`, and neither knows what the other is writing. While a
+    server reads and writes a session it holds a lock file,
+    `~/.llama-mui/locks/session-<id>.lock` (`server/fileLock.ts`), and lets go
+    when the write is done, so the revision check and the write after it can't
+    be split by the other server. A save that finds the lock held waits up to
+    3 seconds, then is refused with "Another llama-mui process is updating
+    this session right now. Try again in a moment." A lock a crashed server
+    left behind clears itself: it is taken over when the process that made it
+    is gone, or when it is more than 30 seconds old. What the lock does not
+    do: a server that starts up still settles every `run` record it finds as
+    interrupted, including a run the other server has going, so start one
+    server at a time when a plan is running.
   - **Live updates**: the server also streams what happens to its sessions as
     server-sent events (an ordinary request that stays open; the browser
     reconnects by itself). `GET /api/events` is for the list: it starts with

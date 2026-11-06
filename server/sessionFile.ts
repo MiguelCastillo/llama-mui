@@ -5,6 +5,7 @@
 import { mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { sessionsDir } from "./disk.ts";
+import { withFileLock } from "./fileLock.ts";
 import { HttpError } from "./http.ts";
 
 // Ids come from the browser and become folder names, so only plain ones pass.
@@ -12,6 +13,8 @@ export function sessionFolder(id: string): string {
   if (!/^[a-z0-9-]{1,64}$/.test(id)) throw new HttpError(400, "Bad session id");
   return path.join(sessionsDir, id);
 }
+
+const sessionFolderName = (id: string) => path.basename(sessionFolder(id));
 
 export function sessionFile(id: string): string {
   return path.join(sessionFolder(id), "session.json");
@@ -46,6 +49,10 @@ async function writeText(file: string, text: string) {
   await writeFile(`${file}.tmp`, text, { mode: 0o600 });
   await rename(`${file}.tmp`, file);
 }
+
+// Holds the lock on one session's file while `fn` reads and writes it, so
+// another llama-mui process on this folder can't write in between (fileLock.ts).
+export const lockSession = <T>(id: string, fn: () => Promise<T>): Promise<T> => withFileLock(`session-${sessionFolderName(id)}`, fn);
 
 export const writeSession = (id: string, session: unknown) => writeText(sessionFile(id), JSON.stringify(session));
 
