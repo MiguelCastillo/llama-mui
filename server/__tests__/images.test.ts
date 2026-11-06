@@ -15,15 +15,15 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => home.dir, default: { ...actual, homedir: () => home.dir } };
 });
 
-const { save, read, removeFolder, validateRefs, imageRoutes } = await import("../images.ts");
+const { save, read, removeFolder, validateRefs, removeImage, imageRoutes } = await import("../images.ts");
 
 const SESSION_ID = "abc12345-def0-1234-5678-abcdef123456";
 const IMAGES_DIR = path.join(home.dir, ".llama-mui", "sessions", SESSION_ID, "images");
 
-const invokeRoute = async (method: string, parts: string[], body?: Buffer) => {
+const invokeRoute = async (method: string, parts: string[], body?: Buffer, contentType = "image/png") => {
   const req = Object.assign(Readable.from(body ?? []), {
     method,
-    headers: body ? { "content-type": "image/png" } : {},
+    headers: body ? { "content-type": contentType } : {},
   }) as unknown as IncomingMessage;
   let text = "";
   let error: Error | undefined;
@@ -162,25 +162,18 @@ describe("imageRoutes", () => {
     expect(status).toBe(200);
   });
 
-  it("GET returns the right Content-Type", async () => {
-    const jpeg = Buffer.from([0xff, 0xd8, 0xff]);
-    const { body: saveBody } = await invokeRoute("POST", ["sessions", ROUTE_SESSION_ID, "images"], jpeg);
-    const saved = JSON.parse(saveBody);
-    const headers: Record<string, string> = {};
-    const res = {
-      statusCode: 200,
-      headers,
-      setHeader(k: string, v: string) { headers[k] = v; },
-      end() {},
-    } as unknown as ServerResponse;
-    await imageRoutes({
-      req: Readable.from([]) as unknown as IncomingMessage,
-      res,
-      parts: ["sessions", ROUTE_SESSION_ID, "images", `${saved.id}.jpeg`],
-      method: "GET",
-      search: "",
-    });
-    expect(headers["Content-Type"]).toBe("image/jpeg");
+  it("GET answers with the type the image was saved as, whether asked for with its extension or without", async () => {
+    for (const [type, ext] of [["image/jpeg", "jpeg"], ["image/webp", "webp"], ["image/png", "png"]]) {
+      const { body: saveBody } = await invokeRoute("POST", ["sessions", ROUTE_SESSION_ID, "images"], Buffer.from([0xff, 0xd8, 0xff]), type);
+      const saved = JSON.parse(saveBody);
+      // The page asks by id alone; an extension on the end is accepted too.
+      for (const name of [saved.id, `${saved.id}.${ext}`]) {
+        const headers: Record<string, string> = {};
+        const res = { statusCode: 200, setHeader: (k: string, v: string) => void (headers[k] = v), end() {} } as unknown as ServerResponse;
+        await imageRoutes({ req: Readable.from([]) as unknown as IncomingMessage, res, parts: ["sessions", ROUTE_SESSION_ID, "images", name], method: "GET", search: "" });
+        expect(headers["Content-Type"]).toBe(type);
+      }
+    }
   });
 
   it("GET rejects a missing image id", async () => {
@@ -220,5 +213,27 @@ describe("imageRoutes", () => {
     }
     expect(error).toBeDefined();
     expect((error as Error).message).toBe('Image type "image/bmp" is not supported. Use PNG, JPEG, GIF, or WebP.');
+  });
+
+  it("DELETE /sessions/<id>/images/<imgId> removes the image file", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const { body: saveBody } = await invokeRoute("POST", ["sessions", ROUTE_SESSION_ID, "images"], png);
+    const saved = JSON.parse(saveBody);
+    // Verify the file exists first.
+    const filesBefore = await readdir(IMAGES_DIR);
+    expect(filesBefore).toContain(`${saved.id}.png`);
+    // Delete it.
+    const { status, body } = await invokeRoute("DELETE", ["sessions", ROUTE_SESSION_ID, "images", saved.id]);
+    expect(status).toBe(200);
+    expect(JSON.parse(body)).toEqual({ deleted: saved.id });
+    // Verify it's gone.
+    const filesAfter = await readdir(IMAGES_DIR);
+    expect(filesAfter).not.toContain(`${saved.id}.png`);
+  });
+
+  it("DELETE answers 404 for a missing image", async () => {
+    const { status, error } = await invokeRoute("DELETE", ["sessions", ROUTE_SESSION_ID, "images", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"]);
+    expect(error).toBeDefined();
+    expect((error as Error).message).toBe("Image not found");
   });
 });

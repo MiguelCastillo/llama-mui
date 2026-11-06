@@ -396,12 +396,14 @@ async function launch(
   }
 
   const planRunning = { current: false };
-  const resolved: Required<RunnerDeps> = {
+  const resolved: Required<RunnerDeps> & { readImage: typeof import("../server/images.ts").read } = {
     run: deps.run ?? runPlan,
     save: deps.save ?? ((s) => hub.save(id, s)),
     reply: deps.reply ?? makeReply,
     modelLoaded: deps.modelLoaded ?? modelLoaded,
     report: deps.report ?? askModel,
+    readImage: async (id: string, imgId: string) =>
+      (await import("../server/images.ts")).read(id, imgId),
   };
   const e = {
     id,
@@ -460,6 +462,7 @@ async function launch(
     askUser: (ask, signal) => askUser(e, ask, signal),
     planRunningRef: planRunning,
     planRef,
+    readImage: resolved.readImage,
   };
 
   const reply = resolved.reply(e.handle);

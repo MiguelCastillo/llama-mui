@@ -38,4 +38,7 @@ export interface RunnerHandle {
   // True while runPlan runs; the plan tool reads it (see planFromCall).
   planRunningRef: { current: boolean };
   planRef: { current: PlanStep[] | null };
+  // Reads an image file from disk, for base64 encoding in the reply (see
+  // runnerReply.ts). Injected by the runner so src/ is shared with the browser.
+  readImage?: (sessionId: string, imageId: string) => Promise<Buffer>;
 }

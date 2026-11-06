@@ -886,7 +886,8 @@ step that was running when the page closed comes back as pending.
 ## Features
 
 - **Saved sessions**: each session is saved to `~/.llama-mui/sessions/<id>/session.json`
-  a moment after it changes, so reloading the page reopens it. Sessions saved in
+  a moment after it changes, so reloading the page reopens it. Sessions with
+  images also store them in `~/.llama-mui/sessions/<id>/images/`. Sessions saved in
   `~/.llama-mui/chats/` by earlier versions move there the first time the app
   asks for the list. The **Sessions** panel on the
   left lists them newest first; click one to switch, **+** starts a new session,

@@ -51,6 +51,7 @@ function makeHandle(patch: Partial<Session> = {}) {
   const askUser = vi.fn();
   const setError = vi.fn();
   const setAbort = vi.fn();
+  const readImage = vi.fn();
   const handle: RunnerHandle = {
     sessionId: "a",
     env,
@@ -70,8 +71,9 @@ function makeHandle(patch: Partial<Session> = {}) {
         session = { ...session, plan };
       },
     },
+    readImage,
   };
-  return { handle, session: () => session, askUser, setError, setAbort };
+  return { handle, session: () => session, askUser, setError, setAbort, readImage };
 }
 
 const user = (content: string): ChatMessage => ({ role: "user", content });

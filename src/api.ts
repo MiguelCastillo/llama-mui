@@ -823,6 +823,10 @@ export const deleteSession = (id: string) =>
     return r;
   });
 
+// Delete a single uploaded image from a session's image store.
+export const deleteImage = (sessionId: string, imageId: string) =>
+  call<void>("DELETE", `/api/sessions/${sessionId}/images/${imageId}`);
+
 export interface RenameSessionParams {
   title?: string;
   modelName?: string | null;

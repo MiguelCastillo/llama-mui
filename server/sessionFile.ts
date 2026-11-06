@@ -55,6 +55,9 @@ export const writeSession = (id: string, session: unknown) => writeText(sessionF
 export async function deleteSession(id: string): Promise<void> {
   const file = sessionFile(id);
   await rm(file, { force: true });
+  // Remove the images folder if it exists.
+  const imagesDir = path.join(path.dirname(file), "images");
+  await rm(imagesDir, { recursive: true, force: true }).catch(() => {});
   await rmdir(path.dirname(file)).catch(() => {});
 }
 

@@ -34,8 +34,10 @@ has one, `hasKey`), not in a prompt or a tool result, not in a log, and not in
 `session.json`. The key that unlocks `.keys` is random and lives outside
 `~/.llama-mui`, in `~/.config/llama-mui/secret.key` (or `LLAMA_MUI_SECRET_KEY`),
 so copying `~/.llama-mui` copies nothing usable. Keeping a key out of
-`session.json` is what makes a session exportable by copying that one file, so
-code that writes session data must never be handed a key. The app doesn't scrub
+`session.json` is what makes a session exportable by copying that one file,
+except sessions with images live in `sessions/<id>/` with an `images/` subfolder,
+so exporting requires copying the whole folder. Code that writes session data
+must never be handed a key. The app doesn't scrub
 anything for you.
 
 ## Other devices

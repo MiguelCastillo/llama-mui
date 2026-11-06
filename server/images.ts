@@ -49,6 +49,11 @@ export async function save(sessionId: string, bytes: Buffer, mediaType: string):
 // Read a stored image back as a Buffer. Checks that `imageId` is a plain id
 // (no path tricks) and that the file exists.
 export async function read(sessionId: string, imageId: string): Promise<Buffer> {
+  return (await readImage(sessionId, imageId)).bytes;
+}
+
+// The same, with the media type its file was saved as.
+export async function readImage(sessionId: string, imageId: string): Promise<{ bytes: Buffer; mediaType: string }> {
   sessionFolder(sessionId); // validates id
   if (!/^[a-f0-9\-]{36}$/.test(imageId)) {
     throw new HttpError(400, "Bad image id");
@@ -68,7 +73,22 @@ export async function read(sessionId: string, imageId: string): Promise<Buffer> 
   const files = await readdir(folder).catch(() => [] as string[]);
   const match = files.find((f) => f.startsWith(imageId + "."));
   if (!match) throw new HttpError(404, "Image not found");
-  return readFile(path.join(folder, match));
+  const ext = match.slice(imageId.length + 1);
+  const mediaType = [...ALLOWED].find(([, e]) => e === ext)?.[0] ?? "application/octet-stream";
+  return { bytes: await readFile(path.join(folder, match)), mediaType };
+}
+
+// Remove a single image file from a session's images folder.
+export async function removeImage(sessionId: string, imageId: string): Promise<void> {
+  sessionFolder(sessionId); // validates id
+  if (!/^[a-f0-9\-]{36}$/.test(imageId)) {
+    throw new HttpError(400, "Bad image id");
+  }
+  const folder = imagesFolder(sessionId);
+  const files = await readdir(folder).catch(() => [] as string[]);
+  const match = files.find((f) => f.startsWith(imageId + "."));
+  if (!match) throw new HttpError(404, "Image not found");
+  await rm(path.join(folder, match));
 }
 
 // Check that `child` is inside `root`.
@@ -132,17 +152,22 @@ export async function imageRoutes({ req, res, parts, method }: Route): Promise<b
   }
 
   if (parts.length === 4 && method === "GET") {
-    // parts[3] is the full filename like "uuid.png"; strip the extension for read().
+    // parts[3] is the image's id, with or without an extension.
     const full = parts[3];
     const dot = full.lastIndexOf(".");
-    const imageId = dot >= 0 ? full.slice(0, dot) : full;
-    const buf = await read(sessionId, imageId);
-    // Determine content type from the file extension.
-    const ext = dot >= 0 ? full.slice(dot + 1) : "png";
-    const ct: Record<string, string> = { png: "image/png", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+    const { bytes, mediaType } = await readImage(sessionId, dot >= 0 ? full.slice(0, dot) : full);
     res.statusCode = 200;
-    res.setHeader("Content-Type", ct[ext] ?? "application/octet-stream");
-    res.end(buf);
+    res.setHeader("Content-Type", mediaType);
+    res.end(bytes);
+    return true;
+  }
+
+  if (parts.length === 4 && method === "DELETE") {
+    const full = parts[3];
+    const dot = full.lastIndexOf(".");
+    const id = dot >= 0 ? full.slice(0, dot) : full;
+    await removeImage(sessionId, id);
+    sendJson(res, 200, { deleted: id });
     return true;
   }
 

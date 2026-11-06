@@ -1,4 +1,6 @@
-import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, type ReactNode, useEffect, useRef, useState } from "react";
+import AttachFileIcon from "@mui/icons-material/AttachFile";
+import { isImageFile, prepareImage, revokePreview } from "./images";
 import {
   Accordion,
   AccordionDetails,
@@ -57,6 +59,7 @@ import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
 import StickyNote2OutlinedIcon from "@mui/icons-material/StickyNote2Outlined";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
+import CloseIcon from "@mui/icons-material/Close";
 import { keyframes } from "@mui/material/styles";
 import {
   type ChatMessage,
@@ -76,6 +79,7 @@ import {
   type AutoApprove,
   type AutoKind,
   type Todo,
+  type ImageRef,
   rememberFolder,
   setCheckCommand,
   type Session,
@@ -93,6 +97,7 @@ import {
   pickAttachments,
   getRecentFolders,
   deleteSession,
+  deleteImage,
   getSession,
   getWorktreeStatuses,
   listSessions,
@@ -147,6 +152,7 @@ import {
   subscribeAll,
   type RunOptions,
   type RunnerView,
+  uploadImage,
 } from "./runClient";
 import ThreadNote from "./ThreadNote";
 import { withSessionDefaults } from "./sessionDefaults";
@@ -196,6 +202,8 @@ function saveFlag(key: string, value: boolean) {
 // Splits the tokens a turn read fresh among the previous round's tool results,
 // by length. The total is exact (it includes a little chat-template framing);
 // the split is an estimate.
+// An image queued for upload but not yet sent.
+type PendingImage = { blob: Blob; preview: string; name: string };
 // What a tool call can wait on the user for, and their answer: allow or deny,
 // or, for a path, the files or folders they picked in its place.
 type Ask =
@@ -1027,11 +1035,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Sends what the user typed. Returns whether it went, so the message box
   // clears only then: it waits there while the session is saved and the server
   // is told.
-  const send = async (text: string) => {
+  const send = async (text: string, images?: PendingImage[]) => {
     // While a plan runs, a message goes to the run: the server folds it in
     // before the next step and says which one (see the notes under the chat),
     // or refuses, and then the text stays in the box.
     if (planRunning) {
+      // A message to a running plan is text only (the server refuses images too):
+      // say so and keep the images where they are.
+      if (images?.length) {
+        setError("Images can't be attached while a plan is running. Remove them to send the text, or wait for the plan to finish.");
+        return false;
+      }
       try {
         await sendToRun(sessionId, text);
         // A refusal shown earlier is out of date now; the run's own error stays.
@@ -1055,7 +1069,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // says in the reply if the model isn't loaded or is still loading. That is
     // one request from the tap instead of two.
     toBottom();
-    return chatTurn(text, messages, planOn);
+    return chatTurn(text, messages, planOn, images);
   };
 
   // What the server needs from here to run a plan or a reply: which connector
@@ -1075,7 +1089,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // question for the user, an error. `planning`: the reply only writes a plan
   // (see PLANNING_NOTE). Returns whether it went; a refusal shows as the error,
   // in the server's own words, and the text stays where it was typed.
-  const chatTurn = async (text: string, before: ChatMessage[], planning: boolean): Promise<boolean> => {
+  const chatTurn = async (text: string, before: ChatMessage[], planning: boolean, pendingImages?: PendingImage[], existingRefs?: ImageRef[]): Promise<boolean> => {
     const options = runOptions();
     if (!options) return false;
     const id = sessionId;
@@ -1095,11 +1109,35 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         const summary = await saveSession(toSend);
         setSessions((ss) => upsertRow(ss, summary));
       }
-      await sendChat(id, text, { ...options, planning });
+      // Upload pending images before sending the chat turn, or use refs already
+      // uploaded (e.g. from a Resend retry).
+      let refs: ImageRef[] = [];
+      if (existingRefs?.length) {
+        refs = existingRefs;
+      } else if (pendingImages?.length) {
+        try {
+          const uploads = pendingImages.map((img) => uploadImage(id, img.blob));
+          refs = await Promise.all(uploads);
+        } catch (e) {
+          // Upload failed: revoke previews, delete any images that did upload,
+          // and clean up the empty session if one was created.
+          pendingImages.forEach((img) => revokePreview(img.preview));
+          const name = pendingImages[0]?.name ?? "Image";
+          setError(`${name}: upload failed — ${e instanceof Error ? e.message : String(e)}`);
+          // Delete any images that uploaded before the failure.
+          await Promise.all(refs.map((ref) => deleteImage(id, ref.id).catch(() => {})));
+          // If this was a brand-new chat, remove the empty session.
+          if (!listed && before.length === 0) {
+            deleteSession(id).catch(() => {});
+          }
+          return false;
+        }
+      }
+      await sendChat(id, text, { ...options, planning, images: refs.length ? refs : undefined });
       // Until the server's copy of the session arrives (mirrorView), show the
       // message as sent, and a failure of the reply that came before it as gone.
       if (openId.current === id && !getView(id)?.session) {
-        setMessages([...before, { role: "user", content: text }]);
+        setMessages([...before, { role: "user", content: text, images: refs.length ? refs : undefined }]);
         setFailed(null);
       }
       return true;
@@ -1305,14 +1343,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Retries the last user message, dropping the failed reply (Resend). The
   // session is saved with the messages before that message, then the server is
   // told to send it again (see chatTurn). Like a first try it isn't a planning
-  // turn, as before.
+  // turn, as before. Its images are sent again as the refs it already has.
   const retry = async () => {
     const userMsg = [...messages].reverse().find((m) => m.role === "user");
     if (!userMsg || runActive || starting.current) return;
     if (!model || !connector) return;
     const index = messages.indexOf(userMsg);
     toBottom();
-    await chatTurn(userMsg.content, messages.slice(0, index), false);
+    // The images are already on the server: send the same refs again.
+    const refs = userMsg.images?.length ? userMsg.images : undefined;
+    await chatTurn(userMsg.content, messages.slice(0, index), false, undefined, refs);
   };
 
   // Tool results show inside the call that asked for them, and the assistant
@@ -1344,6 +1384,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       connectorName={connector ? connector.name || connector.kind : undefined}
       onResend={i === lastFailedTurnIndex ? retry : undefined}
       resendDisabled={i === lastFailedTurnIndex ? runActive : undefined}
+      sessionId={sessionId}
     />
   );
   // Each update_plan call's turn, to show the plan it wrote after that turn.
@@ -1865,7 +1906,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               and the box are centered beside the context meter. On a phone Send has the
               meter under it, the box is as tall as both, and the settings button is centered. */}
           <Stack direction="row" spacing={1} sx={{ alignItems: narrow ? "stretch" : "center" }}>
-            <Box sx={{ display: "flex", alignSelf: "center" }}>
+            <Box sx={{ height: "4.5rem", display: "flex", alignItems: "center", alignSelf: "flex-end" }}>
             <SessionSettings
               attachments={attachments}
               workingDir={workingDir}
@@ -1907,6 +1948,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 turnRunning && narrow ? () => showFailure(stopRunner(sessionId)) : undefined
               }
               disabled={!model && !planRunning}
+              planRunning={planRunning}
               below={
                 showIndicator && (
                   <ContextIndicator
@@ -1941,6 +1983,7 @@ function Composer({
   fill,
   tall = false,
   sendButton = true,
+  planRunning,
 }: {
   // The box is as tall as the Send column beside it (Send with the meter under it).
   tall?: boolean;
@@ -1952,13 +1995,19 @@ function Composer({
   // Text to put in the box and focus it (not sent); a new `n` is a new request.
   fill?: { text: string; n: number } | null;
   // Resolves to whether the message went; the box clears only then.
-  onSend: (text: string) => Promise<boolean>;
+  onSend: (text: string, images?: PendingImage[]) => Promise<boolean>;
   onStop?: () => void;
   disabled: boolean;
+  // Whether a plan is running (attach button disabled with explanation).
+  planRunning: boolean;
   // Under Send: the context indicator.
   below: ReactNode;
 }) {
   const [text, setText] = useState(() => loadDraft(sessionId));
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Visual cue when a file is being dragged over the composer.
+  const [dragOver, setDragOver] = useState(false);
   // The chat whose draft is in the box. Opening another chat shows its draft,
   // not the text typed in the one before.
   const shownFor = useRef(sessionId);
@@ -1983,15 +2032,66 @@ function Composer({
   // in the box meanwhile and clears only when it went.
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
+  // Drop/paste helpers: validate, resize, store; revoke on remove.
+  const addImages = useCallback(async (files: FileList) => {
+    const images: PendingImage[] = [];
+    for (const file of Array.from(files)) {
+      if (!isImageFile(file)) continue;
+      try {
+        const { blob, preview } = await prepareImage(file);
+        images.push({ blob, preview, name: file.name });
+      } catch {
+        // unsupported type – silently skip
+      }
+    }
+    if (images.length) setPendingImages((prev) => [...prev, ...images]);
+  }, []);
+  const removeImage = useCallback((index: number) => {
+    setPendingImages((prev) => {
+      const next = [...prev];
+      revokePreview(next[index].preview);
+      next.splice(index, 1);
+      return next;
+    });
+  }, []);
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDragOver(false);
+      if (e.dataTransfer.files.length) addImages(e.dataTransfer.files);
+    },
+    [addImages],
+  );
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(true);
+  }, []);
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+  }, []);
+  const onPaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      if (e.clipboardData.files.length) addImages(e.clipboardData.files);
+    },
+    [addImages],
+  );
   const send = async () => {
     const t = text.trim();
-    if (!t || sendingRef.current) return;
+    if (!t && !pendingImages.length) return;
+    if (sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
     const sentFrom = sessionId;
     try {
-      if (await onSend(t)) {
-        // It went: that chat's draft is gone, and the box is cleared unless another chat was opened meanwhile.
+      if (await onSend(t, pendingImages.length ? pendingImages : undefined)) {
+        // It went: that chat's draft is gone, the previews are revoked, and the
+        // box is cleared unless another chat was opened meanwhile.
+        pendingImages.forEach((img) => revokePreview(img.preview));
+        setPendingImages([]);
         saveDraft(sentFrom, "");
         if (shownFor.current === sentFrom) setText("");
       }
@@ -2001,68 +2101,167 @@ function Composer({
     }
   };
   return (
-    <>
-      <TextField
-        fullWidth
-        multiline
-        size="small"
-        maxRows={8}
-        sx={tall ? { alignSelf: "stretch", "& .MuiInputBase-root": { flexGrow: 1, alignItems: "flex-start" } } : undefined}
-        placeholder={placeholder}
-        inputRef={inputRef}
-        value={text}
-        slotProps={{ htmlInput: { readOnly: sending } }}
-        onChange={(e) => edit(e.target.value)}
-        onKeyDown={(e) => {
-          // Enter sends where there is no Send button (a wide screen). With the button
-          // (a phone, whose keyboard has no Shift) Enter starts a new line.
-          if (e.key === "Enter" && !e.shiftKey && !sendButton) {
-            e.preventDefault();
-            send();
-          }
-        }}
-      />
-      {/* Send lines up with the input's top edge; the context
-          indicator sits just below it. */}
-      <Stack spacing={0.5} sx={{ flexShrink: 0, alignItems: "center" }}>
-        {/* Icons, with the words as tooltip and accessible label. */}
-        {!onStop && sendButton && (
-          <Tooltip title="Send">
-            <span>
+    <Stack
+      direction="column"
+      // No spacing: Stack puts it above every child after the first, the hidden file input included, which pushed the row down.
+      sx={{
+        flexGrow: 1,
+        alignItems: "stretch",
+        // An outline takes no room, so the box keeps its size and place when a file is dragged over it.
+        outline: dragOver ? "2px dashed" : "none",
+        outlineColor: (t) => t.palette.primary.main,
+        outlineOffset: "-2px",
+        borderRadius: 1,
+      }}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onPaste={onPaste}
+    >
+      {/* Image preview row: hidden when there are no pending images. */}
+      {pendingImages.length > 0 && (
+        <Stack
+          direction="row"
+          spacing={0.5}
+          sx={{
+            flexWrap: "wrap",
+            gap: 0.5,
+            mb: 0.5,
+          }}
+        >
+          {pendingImages.map((img, i) => (
+            <Box
+              key={img.preview}
+              sx={{
+                position: "relative",
+                width: "5rem",
+                height: "5rem",
+                border: "1px solid",
+                borderColor: "divider",
+                borderRadius: 0.5,
+                overflow: "hidden",
+                flexShrink: 0,
+              }}
+            >
+              <img
+                src={img.preview}
+                alt={img.name}
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
               <IconButton
-                aria-label={sending ? "Sending" : "Send"}
-                aria-busy={sending}
-                onClick={send}
-                disabled={!text.trim() || disabled || sending}
+                size="small"
+                onClick={() => removeImage(i)}
                 sx={{
-                  bgcolor: "primary.main",
-                  color: "primary.contrastText",
-                  "&:hover": { bgcolor: "primary.dark" },
-                  // Busy keeps the button's colour, so it reads as working, not as unavailable.
-                  "&.Mui-disabled": sending
-                    ? { bgcolor: "primary.main", color: "primary.contrastText" }
-                    : { bgcolor: "action.disabledBackground", color: "action.disabled" },
+                  position: "absolute",
+                  top: 0,
+                  right: 0,
+                  bgcolor: "background.paper",
+                  "&:hover": { bgcolor: "background.paper" },
+                  p: 0,
                 }}
               >
-                {sending ? <CircularProgress size="1.5rem" color="inherit" /> : <SendIcon />}
+                <CloseIcon fontSize="small" />
+              </IconButton>
+            </Box>
+          ))}
+        </Stack>
+      )}
+      {/* Hidden file picker, triggered by the attach button. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={(e) => {
+          if (e.target.files?.length) addImages(e.target.files);
+          e.target.value = "";
+        }}
+      />
+      {/* Main row: TextField + icons column. */}
+      <Stack
+        direction="row"
+        spacing={0.5}
+        sx={{
+          flexGrow: 1,
+          alignItems: "flex-end",
+        }}
+      >
+        <TextField
+          fullWidth
+          multiline
+          size="small"
+          maxRows={8}
+          sx={tall ? { alignSelf: "stretch", "& .MuiInputBase-root": { flexGrow: 1, alignItems: "flex-start" } } : undefined}
+          placeholder={placeholder}
+          inputRef={inputRef}
+          value={text}
+          slotProps={{ htmlInput: { readOnly: sending } }}
+          onChange={(e) => edit(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter sends where there is no Send button (a wide screen). With the button
+            // (a phone, whose keyboard has no Shift) Enter starts a new line.
+            if (e.key === "Enter" && !e.shiftKey && !sendButton) {
+              e.preventDefault();
+              send();
+            }
+          }}
+        />
+        {/* Send lines up with the input's top edge; the context
+            indicator sits just below it. */}
+        <Stack spacing={0.5} sx={{ flexShrink: 0, alignItems: "center" }}>
+          {/* Attach images. Not while a plan runs: a message to it is text only. */}
+          <Tooltip title={planRunning ? "Images can't be attached while a plan is running" : "Attach images"}>
+            <span>
+              <IconButton
+                aria-label="Attach images"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={planRunning || disabled || sending}
+                sx={{ color: "text.secondary" }}
+              >
+                <AttachFileIcon />
               </IconButton>
             </span>
           </Tooltip>
-        )}
-        {onStop && (
-          <Tooltip title="Stop the reply">
-            <IconButton
-              aria-label="Stop"
-              onClick={onStop}
-              sx={{ border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
-            >
-              <StopIcon />
-            </IconButton>
-          </Tooltip>
-        )}
-        {below}
+          {/* Icons, with the words as tooltip and accessible label. */}
+          {!onStop && sendButton && (
+            <Tooltip title="Send">
+              <span>
+                <IconButton
+                  aria-label={sending ? "Sending" : "Send"}
+                  aria-busy={sending}
+                  onClick={send}
+                  disabled={(!text.trim() && !pendingImages.length) || disabled || sending}
+                  sx={{
+                    bgcolor: "primary.main",
+                    color: "primary.contrastText",
+                    "&:hover": { bgcolor: "primary.dark" },
+                    // Busy keeps the button's colour, so it reads as working, not as unavailable.
+                    "&.Mui-disabled": sending
+                      ? { bgcolor: "primary.main", color: "primary.contrastText" }
+                      : { bgcolor: "action.disabledBackground", color: "action.disabled" },
+                  }}
+                >
+                  {sending ? <CircularProgress size="1.5rem" color="inherit" /> : <SendIcon />}
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
+          {onStop && (
+            <Tooltip title="Stop the reply">
+              <IconButton
+                aria-label="Stop"
+                onClick={onStop}
+                sx={{ border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
+              >
+                <StopIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+          {below}
+        </Stack>
       </Stack>
-    </>
+    </Stack>
   );
 }
 
@@ -2081,6 +2280,7 @@ function MessageBubble({
   resendDisabled,
   since,
   rate,
+  sessionId,
 }: {
   parts: ChatMessage[];
   streaming: boolean;
@@ -2103,6 +2303,8 @@ function MessageBubble({
   // the waiting dots, and how fast the current round is streaming.
   since?: number | null;
   rate?: { current: StreamRate };
+  // Session id, for building image URLs.
+  sessionId?: string;
 }) {
   // This message's own choice of formatted or raw text; null follows
   // Settings → Chat. Declared before the early return below, as hooks must be.
@@ -2114,6 +2316,8 @@ function MessageBubble({
   const [unfolded, setUnfolded] = useState(false);
   const [tooTall, setTooTall] = useState(false);
   const showMarkdown = override ?? renderMarkdown;
+  // Image preview dialog for user message thumbnails.
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   // The finished reply's time and speed, kept on its last message.
   const took = [...parts].reverse().find((m) => m.took)?.took;
   const isUser = parts[0].role === "user";
@@ -2219,6 +2423,29 @@ function MessageBubble({
                     body
                   );
                 })()}
+              {/* Image thumbnails for user messages: outside FoldedMessage, below text. */}
+              {isUser && parts[0].images && parts[0].images.length > 0 && sessionId && (
+                <Stack direction="row" spacing={1} sx={{ mt: 0.5, flexWrap: "wrap" }}>
+                  {parts[0].images.map((img) => (
+                    <Box
+                      component="img"
+                      key={img.id}
+                      src={`/api/sessions/${sessionId}/images/${img.id}`}
+                      alt={img.mediaType}
+                      onClick={() => setSelectedImage(`/api/sessions/${sessionId}/images/${img.id}`)}
+                      sx={{
+                        width: "6rem",
+                        height: "6rem",
+                        objectFit: "cover",
+                        borderRadius: 0.5,
+                        cursor: "pointer",
+                        border: "1px solid",
+                        borderColor: "divider",
+                      }}
+                    />
+                  ))}
+                </Stack>
+              )}
               {showSteps &&
                 m.toolCalls?.map((c) => (
                   <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} stopped={!streaming} />
@@ -2291,6 +2518,18 @@ function MessageBubble({
         </Typography>
       )}
       {errorLine}
+      {/* Full-size image preview dialog. */}
+      <Dialog open={!!selectedImage} onClose={() => setSelectedImage(null)} maxWidth={false}>
+        <DialogContent sx={{ p: 0 }}>
+          {selectedImage && (
+            <img
+              src={selectedImage}
+              alt="Full size"
+              style={{ width: "100%", height: "auto", display: "block" }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </Box>
   );
 }

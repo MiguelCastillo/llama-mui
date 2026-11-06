@@ -69,7 +69,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         for (const img of m.images) {
           if (!(img.id in imageMap)) {
             try {
-              const buf = await import("../server/images.ts").then((m2) => m2.read(h.sessionId, img.id));
+              const buf = await h.readImage!(h.sessionId, img.id);
               imageMap[img.id] = buf.toString("base64");
             } catch {
               // Missing file: skip it (the wire step adds a note).
