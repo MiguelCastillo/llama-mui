@@ -3,6 +3,7 @@
 import { type Api, type Kind, type ChatMessage, type ToolCall, type Usage, type Todo, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, type Picked, streamChat, runTool } from "../api.ts";
 import { closeOpenToolCalls } from "../closeOpenToolCalls.ts";
 import { callKey, shareTokens } from "./helpers.ts";
+import { ProgressWatch } from "./progress.ts";
 import { applyTodoCall, openTodos } from "./todos.ts";
 import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext, extractPlanSummary } from "./plan.ts";
 
@@ -10,8 +11,10 @@ import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext, extractPla
 // repeat guard fires and stops the model from looping.
 export const MAX_REPEATS = 2;
 
+// A backstop only: the real check for a reply that is stuck is ProgressWatch
+// (progress.ts), which looks at what the calls did, not how many there were.
 // Maximum number of tool-call rounds before the loop gives up.
-export const MAX_TOOL_ROUNDS = 50;
+export const MAX_TOOL_ROUNDS = 200;
 
 // Tool names that mutate disk; a successful run of one resets the repeat
 // counter, because the same read/search may now find different content.
@@ -185,6 +188,7 @@ export async function runTurn(
   try {
     let lastToolResults: number[] = [];
     const ran = new Map<string, number>();
+    const watch = new ProgressWatch();
     let stopReason: string | null = null;
     let planned = false;
 
@@ -386,6 +390,7 @@ export async function runTurn(
           if (steps && planning) planned = true;
         }
 
+        watch.record(call, result);
         lastToolResults.push(history.length);
         history = [
           ...history,
@@ -405,6 +410,9 @@ export async function runTurn(
         ok = true;
         break;
       }
+      // Stuck is what the calls did (the same failure again, nothing new), not how many there were.
+      const stuck = watch.endRound();
+      if (stuck) stopReason ??= `Stopped: ${stuck}`;
       if (round === MAX_TOOL_ROUNDS - 1) stopReason ??= `Stopped after ${MAX_TOOL_ROUNDS} rounds of tool calls.`;
     }
   } catch (e) {

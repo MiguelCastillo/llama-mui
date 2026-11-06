@@ -665,6 +665,31 @@ joins the chat and is put in that step's prompt, and in every step after it.
   thread's run sees it; the chat that started the thread gets just the outcome
   and the report when the run ends.
 
+### When a reply is stopped for being stuck
+
+A model that is stuck keeps calling tools without getting anywhere, which costs
+time on your llama server (or money on a paid one). A count of rounds can't tell
+that from a long job that is getting somewhere, so a reply is stopped for what
+its calls did (`src/agent/progress.ts`), in plain words in the error:
+
+- **The same output again and again.** Commands gave the same output 4 times in
+  a row, whatever the commands were and whatever the model edited in between
+  ("the last 4 commands all gave the same output (the last: `npx vitest run …`)").
+  Colours and timings don't count as a difference, but a count does: 3 failed,
+  then 2 failed, then 1 failed is progress.
+- **Rounds with nothing new.** 6 rounds in a row where every call was a repeat,
+  a read of a file that hasn't been changed since it was last read, or an error
+  it had already got. A successful write or edit, a read after an edit, and
+  anything it hasn't seen before count as news.
+- **The same call three times.** The model asking for the exact same call (same
+  tool, same arguments) a third time is refused, until something succeeds in
+  changing a file or running a command, which starts the count again.
+
+The reply then gets one last request with no tools, to say what it has; in a
+plan the step goes back to pending and **Continue** runs it again. A plain
+count of 200 rounds in one reply stays as a last backstop. It looks only at the
+calls and results, and nothing about a language or a tool's output format.
+
 ### Chat replies run on the server too
 
 A message to a session with no plan running is one chat reply, and it runs on

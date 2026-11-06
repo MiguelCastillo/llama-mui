@@ -206,8 +206,9 @@ type Answer = boolean | Picked[];
 
 // A model stuck in a loop repeats itself: the third identical call (same tool,
 // same arguments) in one reply isn't run, and the model answers with what it
-// has. MAX_TOOL_ROUNDS backs that up for loops whose arguments keep changing;
-// small models make one call per round, so it's set well above real work.
+// has. ProgressWatch (agent/progress.ts) catches the loops whose arguments
+// keep changing: commands giving the same output again and again, or rounds
+// that bring nothing new. MAX_TOOL_ROUNDS is only the last backstop.
 
 // The model menu's "Manage models" item: its value opens Settings → Models
 // instead of picking a model.
