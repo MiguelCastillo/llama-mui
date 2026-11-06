@@ -336,6 +336,56 @@ describe("message with no run: one chat reply, run here", () => {
     expect(r.body).toMatchObject({ ok: true, step: 2 });
     expect(chat).not.toHaveBeenCalled();
   });
+
+  it("refuses images while a plan runs", async () => {
+    saved("a", 3);
+    await command("a", "run", options);
+    await settle();
+    const r = await command("a", "message", { ...chatOptions, text: "hi", images: [{ id: "x", mediaType: "image/png" }] });
+    expect(r).toMatchObject({ status: 409, body: { reason: "reply running" } });
+    expect(r.body.error).toMatch(/Images can't be attached/);
+  });
+
+  it("passes images through to the chat starter when no run is active", async () => {
+    // Create a real image file so validateRefs finds it.
+    const { save: saveImage } = await import("../images.ts");
+    const img = await saveImage("a", Buffer.from([0x89, 0x50]), "image/png");
+    saved("a");
+    const chat = vi.fn(async () => {});
+    const r = await command("a", "message", { ...chatOptions, text: "look", images: [{ id: img.id, mediaType: img.mediaType }] }, "POST", { ...deps, chat });
+    expect(r.status).toBe(200);
+    expect(chat).toHaveBeenCalledWith("a", "look", expect.objectContaining({
+      images: [{ id: img.id, mediaType: img.mediaType }],
+    }));
+  });
+
+  it("accepts images with no text when no run is active", async () => {
+    const { save: saveImage } = await import("../images.ts");
+    const img = await saveImage("a", Buffer.from([0x89, 0x50]), "image/png");
+    saved("a");
+    const chat = vi.fn(async () => {});
+    const r = await command("a", "message", { ...chatOptions, text: "", images: [{ id: img.id, mediaType: img.mediaType }] }, "POST", { ...deps, chat });
+    expect(r.status).toBe(200);
+    expect(chat).toHaveBeenCalledWith("a", "", expect.objectContaining({
+      images: [{ id: img.id, mediaType: img.mediaType }],
+    }));
+  });
+
+  it("rejects images with no text and no images", async () => {
+    saved("a");
+    const r = await command("a", "message", { ...chatOptions, text: "", images: [] });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/images must be a non-empty list/);
+  });
+
+  it("rejects images with no text while a plan runs", async () => {
+    saved("a", 3);
+    await command("a", "run", options);
+    await settle();
+    const r = await command("a", "message", { text: "", images: [{ id: "x", mediaType: "image/png" }] });
+    expect(r).toMatchObject({ status: 409, body: { reason: "reply running" } });
+    expect(r.body.error).toMatch(/Images can't be attached/);
+  });
 });
 
 describe("the route", () => {

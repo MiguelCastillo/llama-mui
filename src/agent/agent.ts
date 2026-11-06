@@ -133,6 +133,11 @@ export interface RunTurnConfig {
   controller: AbortController;
   started: number;
   text: string;
+  // Image refs on the user message (only meaningful on a chat turn, not a plan step).
+  images?: { id: string; mediaType: string }[];
+  // Image id → base64 data. Set by the server (makeReply) so every streamChat
+  // call in the loop gets the images; left out on the browser.
+  imagesBase64?: Record<string, string>;
 }
 
 // The result returned by runTurn, including updated attached paths.
@@ -155,7 +160,7 @@ export async function runTurn(
     connectorId, kind, api, model, toolsOn, thinkOn, planning, planStep,
     systemPrompt, toolDefinitions, toolContextUpdate, seenUpdate,
     history: baseHistory, forgotten, attached: attachedBase,
-    chatId, controller, started, text,
+    chatId, controller, started, text, images, imagesBase64,
   } = config;
   const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setWorkingDir, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, setPlanSummary, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext, planSummary } = callbacks;
 
@@ -174,7 +179,7 @@ export async function runTurn(
   // after it, so it's closed here, and the repaired history is what's kept.
   let history: ChatMessage[] = [
     ...closeOpenToolCalls(baseHistory),
-    { role: "user", content: text, ...update, ...(planning && { note: PLANNING_NOTE }), ...tag },
+    { role: "user", content: text, ...update, ...(planning && { note: PLANNING_NOTE }), ...(images ? { images } : {}), ...tag },
   ];
   setError(null);
   setFailed(null);
@@ -214,6 +219,7 @@ export async function runTurn(
               : history,
           think: thinkOn && !planning && round === 0,
           tools: toolsOn && !lastTurn ? toolDefinitions : undefined,
+          images: imagesBase64,
         },
         (d) => {
           streamRate.first ||= performance.now();
@@ -527,7 +533,7 @@ export interface RunPlanCallbacks {
   messages: ChatMessage[];
   planRef: { current: PlanStep[] | null };
   setStep: (id: string, patch: Omit<PlanStep, "id" | "text">) => void;
-  reply: (text: string, before: ChatMessage[], opts?: { planning?: boolean; planStep?: string; from?: number }) => Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }>;
+  reply: (text: string, before: ChatMessage[], opts?: { planning?: boolean; planStep?: string; from?: number; images?: { id: string; mediaType: string }[] }) => Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }>;
   // The message that asked for the plan, sent with each step (see stepPrompt).
   request?: string;
   // The context for the plan, sent with each step (see stepPrompt).

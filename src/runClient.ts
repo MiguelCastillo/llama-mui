@@ -24,7 +24,7 @@
 // Nothing here can hold an API key: the server never sends one, and the page
 // never had one.
 
-import { ApiError, type AutoKind, type Picked, type Session, getSession, sendCommand } from "./api";
+import { ApiError, type AutoKind, type ImageRef, type Picked, type Session, getSession, sendCommand } from "./api";
 import { applyPatch, type SessionPatch } from "../server/sessionPatch";
 import type { Answer, Ask } from "./runnerTypes";
 import { type RunnerView, needsYou } from "./runView";
@@ -306,6 +306,19 @@ function syncWatch(id: string) {
 
 // ── the API ──────────────────────────────────────────────────────────────────
 
+// Upload an image file to a session's image store. POSTs raw bytes with the
+// blob's type as Content-Type; returns { id, mediaType } from the server.
+export async function uploadImage(sessionId: string, blob: Blob): Promise<ImageRef> {
+  const res = await fetch(`/api/sessions/${sessionId}/images`, {
+    method: "POST",
+    headers: { "Content-Type": blob.type },
+    body: blob,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.error ?? `Upload failed: ${res.status}`, res.status, data);
+  return data as ImageRef;
+}
+
 // The view of this session's run: live while it runs, or the last one of a run
 // that ended and still needs the user.
 export const getView = (id: string): RunnerView | undefined => lives.get(id)?.view ?? stopped.get(id);
@@ -391,7 +404,7 @@ export async function sendMessage(id: string, text: string): Promise<{ step: num
 // reply only writes a plan. Throws an ApiError (a plain refusal: a reply is
 // already streaming, the server isn't in the list any more); the caller keeps
 // the text where the user typed it. Answers once the run shows.
-export async function sendChat(id: string, text: string, options: RunOptions & { planning: boolean }): Promise<void> {
+export async function sendChat(id: string, text: string, options: RunOptions & { planning: boolean; images?: ImageRef[] }): Promise<void> {
   const before = generation.get(id) ?? 0;
   await sendCommand(id, "message", { text, ...options });
   await waitUntil(() => (generation.get(id) ?? 0) !== before, START_WAIT_MS);

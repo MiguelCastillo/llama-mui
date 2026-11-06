@@ -13,6 +13,7 @@ import {
   stop,
   subscribe,
   subscribeAll,
+  uploadImage,
   type RunnerEvent,
   type RunnerView,
 } from "../runClient";
@@ -79,7 +80,16 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (path: string, init: RequestInit = {}) => {
       const method = init.method ?? "GET";
-      requests.push({ method, path, body: init.body ? JSON.parse(String(init.body)) : undefined });
+      let body: any = undefined;
+      if (init.body) {
+        try {
+          body = JSON.parse(String(init.body));
+        } catch {
+          // Raw body (e.g. a Blob from uploadImage): keep as-is for inspection.
+          body = init.body;
+        }
+      }
+      requests.push({ method, path, body });
       const r = replies(method, path);
       const status = r.status ?? 200;
       return { ok: status < 400, status, statusText: "", json: async () => r.body } as Response;
@@ -516,5 +526,50 @@ describe("needsYou", () => {
     expect(needsYou(view({ status: "stopped" }))).toBe(false);
     expect(needsYou(view({ status: "stopped", session: null }))).toBe(false);
     expect(needsYou(view({ status: "running", session: waiting }))).toBe(false);
+  });
+});
+
+describe("uploadImage", () => {
+  it("POSTs the blob to the session images endpoint and returns { id, mediaType }", async () => {
+    const blob = new Blob(["x"], { type: "image/png" });
+    serve((method, path) => {
+      if (method === "POST" && path.includes("/images")) {
+        return { body: { id: "img-1", mediaType: "image/png" } };
+      }
+      return { body: { ok: true, revision: 9 } };
+    });
+    const result = await uploadImage("a", blob);
+    expect(result).toEqual({ id: "img-1", mediaType: "image/png" });
+    const req = requests.find((r) => r.path.includes("/images") && r.method === "POST");
+    expect(req).toBeDefined();
+    expect(req!.path).toBe("/api/sessions/a/images");
+  });
+
+  it("throws an ApiError when the server refuses", async () => {
+    const blob = new Blob(["x"], { type: "image/bmp" });
+    serve(() => ({ status: 400, body: { error: "Image type \"image/bmp\" is not supported." } }));
+    const err = await uploadImage("a", blob).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.message).toBe("Image type \"image/bmp\" is not supported.");
+  });
+});
+
+describe("sendChat with images", () => {
+  it("passes images in the command body", async () => {
+    const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, planning: true, images: [{ id: "img-1", mediaType: "image/png" }] };
+    const p = sendChat("a", "Hello", options);
+    let done = false;
+    void p.then(() => (done = true));
+    subscribeAll(() => {});
+    await vi.waitFor(() => expect(commands()).toHaveLength(1));
+    expect(commands()[0]).toMatchObject({
+      method: "POST",
+      path: "/api/sessions/a/commands/message",
+      body: { text: "Hello", planning: true, images: [{ id: "img-1", mediaType: "image/png" }] },
+    });
+    await flush();
+    expect(done).toBe(false);
+    global().emit("status", { id: "a", run: run({ kind: "turn" }) });
+    await p;
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { streamChat, toMessages, type ChatMessage, type StreamDelta, type ToolCall } from "../api";
+import { streamChat, toMessages, type ChatMessage, type ImageRef, type StreamDelta, type ToolCall } from "../api";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -517,6 +517,233 @@ describe("streamChat with the Chat Completions API", () => {
   it("reports llama.cpp's error message with the status", async () => {
     serve([{ error: { code: 400, message: "model 'qwen' not found", type: "invalid_request_error" } }], 400);
     await expect(collect("openai")).rejects.toThrow("POST /v1/chat/completions: 400 model 'qwen' not found");
+  });
+});
+
+// ── toWire (OpenAI/llama.cpp) with images ───────────────────────────────────
+
+describe("toWire with images via streamChat (openai)", () => {
+  const chunks = [
+    { choices: [{ delta: { reasoning_content: "Need the file." } }] },
+    { choices: [{ delta: { content: "Reading it." } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "t1", function: { name: "read_file", arguments: '{"path":' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"README.md"}' } }] } }] },
+    { choices: [{ delta: {} }], timings: { cache_n: 90, prompt_n: 10, predicted_n: 5, predicted_per_second: 42 } },
+  ];
+
+  it("posts image_url data URLs for images with base64 data", async () => {
+    const requests = serve(chunks);
+    const imageHistory: ChatMessage[] = [
+      {
+        role: "user",
+        content: "What is this?",
+        images: [{ id: "img-1", mediaType: "image/png" }, { id: "img-2", mediaType: "image/jpeg" }],
+      },
+    ];
+    await streamChat(
+      { ...request, api: "openai", kind: "llama", messages: imageHistory, images: { "img-1": "iVBORw0KGgo=", "img-2": "/9j/4AAQSkZJRg==" } },
+      () => {},
+      new AbortController().signal,
+    );
+    const sent = requests[0].body.messages;
+    const userMsg = sent[0];
+    expect(userMsg.role).toBe("user");
+    expect(userMsg.content).toEqual([
+      { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgo=" } },
+      { type: "image_url", image_url: { url: "data:image/jpeg;base64,/9j/4AAQSkZJRg==" } },
+      { type: "text", text: "What is this?" },
+    ]);
+  });
+
+  it("posts a text note for an image whose base64 data is missing", async () => {
+    const requests = serve(chunks);
+    const imageHistory: ChatMessage[] = [
+      {
+        role: "user",
+        content: "What is this?",
+        images: [{ id: "img-1", mediaType: "image/png" }],
+      },
+    ];
+    await streamChat(
+      { ...request, api: "openai", kind: "llama", messages: imageHistory, images: {} },
+      () => {},
+      new AbortController().signal,
+    );
+    const sent = requests[0].body.messages;
+    const userMsg = sent[0];
+    expect(userMsg.content).toEqual([
+      { type: "text", text: '[Image "img-1" missing — the file was deleted or not uploaded]' },
+      { type: "text", text: "What is this?" },
+    ]);
+  });
+
+  it("posts only a text part when there are no images", async () => {
+    const requests = serve(chunks);
+    const history: ChatMessage[] = [{ role: "user", content: "Hello" }];
+    await streamChat(
+      { ...request, api: "openai", kind: "llama", messages: history },
+      () => {},
+      new AbortController().signal,
+    );
+    const sent = requests[0].body.messages;
+    expect(sent[0]).toEqual({ role: "user", content: "Hello" });
+  });
+
+  it("posts image_url plus text when content is empty but images exist", async () => {
+    const requests = serve(chunks);
+    const imageHistory: ChatMessage[] = [
+      {
+        role: "user",
+        content: "",
+        images: [{ id: "img-1", mediaType: "image/png" }],
+      },
+    ];
+    await streamChat(
+      { ...request, api: "openai", kind: "llama", messages: imageHistory, images: { "img-1": "iVBORw0KGgo=" } },
+      () => {},
+      new AbortController().signal,
+    );
+    const sent = requests[0].body.messages;
+    const userMsg = sent[0];
+    expect(userMsg.role).toBe("user");
+    expect(userMsg.content).toEqual([
+      { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgo=" } },
+    ]);
+  });
+});
+
+// ── ImageRef and toMessages with images ──────────────────────────────────────
+
+describe("ImageRef type", () => {
+  it("is a plain object with id and mediaType", () => {
+    const ref: ImageRef = { id: "abc-123", mediaType: "image/png" };
+    expect(ref.id).toBe("abc-123");
+    expect(ref.mediaType).toBe("image/png");
+  });
+});
+
+describe("toMessages with images", () => {
+  it("keeps images on the user message but does not emit image blocks (base64 is read per request)", () => {
+    const images: ImageRef[] = [{ id: "img-1", mediaType: "image/png" }];
+    const history: ChatMessage[] = [{ role: "user", content: "What is this?", images }];
+    const result = toMessages(history);
+    // toMessages converts text/update/note into a text block; images are
+    // read per request and passed separately (never saved into the session).
+    const blocks = result.messages[0].content as any[];
+    expect(blocks[0].type).toBe("text");
+    expect(blocks[0].text).toBe("What is this?");
+  });
+
+  it("leaves images on the message when content is empty", () => {
+    const images: ImageRef[] = [{ id: "img-1", mediaType: "image/jpeg" }];
+    const history: ChatMessage[] = [{ role: "user", content: "", images }];
+    const result = toMessages(history);
+    // No text/update/note → no blocks → the message is skipped.
+    // Images stay on the message; the wire step reads them per request.
+    expect(result.messages).toEqual([]);
+  });
+
+  it("emits image blocks before the text block when images data is provided", () => {
+    const images: ImageRef[] = [
+      { id: "img-1", mediaType: "image/png" },
+      { id: "img-2", mediaType: "image/jpeg" },
+    ];
+    const history: ChatMessage[] = [{ role: "user", content: "What is this?", images }];
+    const base64Images: Record<string, string> = {
+      "img-1": "iVBORw0KGgo=",
+      "img-2": "/9j/4AAQSkZJRg==",
+    };
+    const result = toMessages(history, base64Images);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks).toHaveLength(3);
+    expect(blocks[0]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" },
+    });
+    expect(blocks[1]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: "/9j/4AAQSkZJRg==" },
+    });
+    expect(blocks[2]).toEqual({ type: "text", text: "What is this?" });
+  });
+
+  it("emits a text note for an image whose base64 data is missing", () => {
+    const images: ImageRef[] = [{ id: "img-1", mediaType: "image/png" }];
+    const history: ChatMessage[] = [{ role: "user", content: "What is this?", images }];
+    // No data for "img-1"
+    const base64Images: Record<string, string> = {};
+    const result = toMessages(history, base64Images);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toEqual({
+      type: "text",
+      text: '[Image "img-1" missing — the file was deleted or not uploaded]',
+    });
+    expect(blocks[1]).toEqual({ type: "text", text: "What is this?" });
+  });
+
+  it("skips images whose data is missing but keeps the ones that are present", () => {
+    const images: ImageRef[] = [
+      { id: "img-1", mediaType: "image/png" },
+      { id: "img-2", mediaType: "image/jpeg" },
+    ];
+    const history: ChatMessage[] = [{ role: "user", content: "What is this?", images }];
+    // Only img-2 has data
+    const base64Images: Record<string, string> = { "img-2": "/9j/4AAQSkZJRg==" };
+    const result = toMessages(history, base64Images);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks).toHaveLength(3);
+    // Missing image becomes a text note
+    expect(blocks[0]).toEqual({
+      type: "text",
+      text: '[Image "img-1" missing — the file was deleted or not uploaded]',
+    });
+    // Present image becomes an image block
+    expect(blocks[1]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: "/9j/4AAQSkZJRg==" },
+    });
+    expect(blocks[2]).toEqual({ type: "text", text: "What is this?" });
+  });
+
+  it("puts image blocks before text/update/note combined text", () => {
+    const images: ImageRef[] = [{ id: "img-1", mediaType: "image/png" }];
+    const history: ChatMessage[] = [
+      { role: "user", content: "Fix this", update: "Chat update: new error", note: "Planning note", images },
+    ];
+    const base64Images: Record<string, string> = { "img-1": "iVBORw0KGgo=" };
+    const result = toMessages(history, base64Images);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" },
+    });
+    expect(blocks[1].type).toBe("text");
+    expect(blocks[1].text).toBe("Fix this\n\nChat update: new error\n\nPlanning note");
+  });
+
+  it("emits only image blocks when content, update, and note are all empty", () => {
+    const images: ImageRef[] = [{ id: "img-1", mediaType: "image/png" }];
+    const history: ChatMessage[] = [{ role: "user", content: "", update: "", note: "", images }];
+    const base64Images: Record<string, string> = { "img-1": "iVBORw0KGgo=" };
+    const result = toMessages(history, base64Images);
+    expect(result.messages).toHaveLength(1);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" },
+    });
+  });
+
+  it("does not emit image blocks when images data map is undefined", () => {
+    const images: ImageRef[] = [{ id: "img-1", mediaType: "image/png" }];
+    const history: ChatMessage[] = [{ role: "user", content: "What is this?", images }];
+    const result = toMessages(history, undefined);
+    const blocks = result.messages[0].content as any[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toEqual({ type: "text", text: "What is this?" });
   });
 });
 

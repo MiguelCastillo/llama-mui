@@ -44,7 +44,7 @@ export async function modelLoaded(h: RunnerHandle): Promise<boolean> {
 // and whether the model finished (not stopped, failed or cut off by a limit).
 // `planStep`: the turn runs that plan step; its messages carry the step's id.
 export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
-  return async (text, before, { planning = false, planStep, from } = {}) => {
+  return async (text, before, { planning = false, planStep, from, images } = {}) => {
     const { connector, model, toolsOn, thinkOn, toolContext } = h.env;
     const first = h.getSession();
     // Where the model's history starts: the session's (after a clear), or for
@@ -59,6 +59,26 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     // Attachments and tools that are off go the same way, as `update`, and
     // only when they changed since the last one the model saw.
     const seen = [...before.slice(start)].reverse().find((m) => m.update)?.update;
+
+    // Collect every image ref from the history the model sees, read them as
+    // base64, and build the map so streamChat gets the data (never saved).
+    const history = before.slice(start);
+    const imageMap: Record<string, string> = {};
+    for (const m of history) {
+      if (m.images?.length) {
+        for (const img of m.images) {
+          if (!(img.id in imageMap)) {
+            try {
+              const buf = await import("../server/images.ts").then((m2) => m2.read(h.sessionId, img.id));
+              imageMap[img.id] = buf.toString("base64");
+            } catch {
+              // Missing file: skip it (the wire step adds a note).
+            }
+          }
+        }
+      }
+    }
+
     const controller = new AbortController();
     const started = performance.now();
     const now = h.getSession();
@@ -146,6 +166,8 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         controller,
         started,
         text,
+        images,
+        imagesBase64: Object.keys(imageMap).length > 0 ? imageMap : undefined,
       },
       callbacks,
     );

@@ -7,6 +7,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
+export { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 
 export type ModelStatus = "loaded" | "loading" | "unloaded" | string;
 
@@ -114,6 +115,10 @@ export interface ChatMessage {
   // under the message; never sent to the model.
   seenByStep?: number;
   notSeen?: boolean;
+  // On a user message: references to images uploaded to this session. The
+  // base64 data is read per request and passed to the model; never saved
+  // into the session. Only meaningful on user messages.
+  images?: ImageRef[];
 }
 
 export interface StepStats {
@@ -129,7 +134,11 @@ export interface StepStats {
 // The API wants turns to alternate, so a user message after tool results
 // joins their turn. A reply that kept its blocks is sent back as they were;
 // others without their thinking, which only Claude's signed blocks carry.
-export function toMessages(history: ChatMessage[]): { system?: string; messages: Anthropic.MessageParam[] } {
+// `images` maps image ids to base64 data (read per request, never saved).
+export function toMessages(
+  history: ChatMessage[],
+  images?: Record<string, string>,
+): { system?: string; messages: Anthropic.MessageParam[] } {
   let system: string | undefined;
   const messages: Anthropic.MessageParam[] = [];
   const add = (role: "user" | "assistant", blocks: Anthropic.ContentBlockParam[]) => {
@@ -143,7 +152,28 @@ export function toMessages(history: ChatMessage[]): { system?: string; messages:
       system = system === undefined ? m.content : `${system}\n\n${m.content}`;
     } else if (m.role === "user") {
       const text = [m.content, m.update, m.note].filter(Boolean).join("\n\n");
-      add("user", text ? [{ type: "text", text }] : []);
+      const blocks: Anthropic.ContentBlockParam[] = [];
+      if (m.images?.length && images) {
+        for (const img of m.images) {
+          const data = images[img.id];
+          if (data) {
+            blocks.push({
+              type: "image",
+              source: { type: "base64" as const, media_type: img.mediaType as "image/gif" | "image/jpeg" | "image/png" | "image/webp", data },
+            });
+          } else {
+            blocks.push({
+              type: "text",
+              text: `[Image "${img.id}" missing — the file was deleted or not uploaded]`,
+            });
+          }
+        }
+      }
+      if (text) {
+        if (blocks.length) blocks.push({ type: "text", text });
+        else blocks.push({ type: "text", text });
+      }
+      add("user", blocks);
     } else if (m.role === "tool") {
       add("user", [{ type: "tool_result", tool_use_id: m.toolCallId ?? "", content: m.content }]);
     } else if (m.blocks?.length) {
@@ -366,6 +396,14 @@ export interface Preferences {
 export const getPreferences = () => call<Preferences>("GET", "/api/preferences");
 export const updatePreferences = (changes: Partial<Preferences>) => call<Preferences>("PATCH", "/api/preferences", changes);
 
+// An image that was uploaded to a session: a reference to a file on disk.
+// The base64 data is never saved into the session; it is read per request and
+// passed to the model API, then discarded.
+export interface ImageRef {
+  id: string;
+  mediaType: string;
+}
+
 // A file or folder that can be attached to a chat, as the server resolved it.
 export interface AttachmentTarget {
   path: string;
@@ -544,6 +582,7 @@ export interface AutoApprove {
   // Every command.
   commands?: boolean;
 }
+
 export type AutoKind = keyof AutoApprove;
 
 export interface Session {
@@ -824,6 +863,9 @@ export interface ChatRequest {
   // The connector's kind and API; "llama" and "anthropic" when left out.
   kind?: Kind;
   api?: Api;
+  // Image id → base64 data. Read per request from the server; never saved
+  // into the session. Only meaningful on user messages.
+  images?: Record<string, string>;
 }
 
 export interface ChatReply {
@@ -867,7 +909,7 @@ function messagesOptions(kind: Kind | undefined, think: boolean) {
 // The SDK's key is a placeholder: the dev server's proxy replaces it with the
 // connector's, which is why it's safe in a browser.
 async function streamMessages(
-  { connectorId, kind, model, messages, think, tools }: ChatRequest,
+  { connectorId, kind, model, messages, think, tools, images }: ChatRequest,
   onDelta: (d: StreamDelta) => void,
   signal: AbortSignal,
 ): Promise<ChatReply> {
@@ -879,7 +921,7 @@ async function streamMessages(
     // a stream under way. llama.cpp has nothing worth retrying.
     ...(kind === "anthropic" ? {} : { maxRetries: 0 }),
   });
-  const { system, messages: wire } = toMessages(messages);
+  const { system, messages: wire } = toMessages(messages, images);
   const params = {
     model,
     max_tokens: MAX_TOKENS,
@@ -942,7 +984,8 @@ async function streamMessages(
 }
 
 // Converts to the OpenAI wire format, dropping UI-only fields like reasoning.
-function toWire(m: ChatMessage) {
+// `images` maps image ids to base64 data (read per request, never saved).
+function toWire(m: ChatMessage, images?: Record<string, string>) {
   if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
   if (m.toolCalls?.length) {
     return {
@@ -950,6 +993,21 @@ function toWire(m: ChatMessage) {
       content: m.content,
       tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments } })),
     };
+  }
+  // Build a content array when there are images (OpenAI wants an array of parts).
+  if (m.images?.length && images) {
+    const parts: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [];
+    for (const img of m.images) {
+      const data = images[img.id];
+      if (data) {
+        parts.push({ type: "image_url", image_url: { url: `data:${img.mediaType};base64,${data}` } });
+      } else {
+        parts.push({ type: "text", text: `[Image "${img.id}" missing — the file was deleted or not uploaded]` });
+      }
+    }
+    const text = [m.content, m.update, m.note].filter(Boolean).join("\n\n");
+    if (text) parts.push({ type: "text", text });
+    return { role: m.role, content: parts };
   }
   return { role: m.role, content: [m.content, m.update, m.note].filter(Boolean).join("\n\n") };
 }
@@ -979,7 +1037,7 @@ function readUsage(chunk: any): Usage | undefined {
 // chunks over as parsed JSON, so llama.cpp's own fields (reasoning_content,
 // timings) are there, just not in its types.
 async function streamCompletions(
-  { connectorId, model, messages, think, tools }: ChatRequest,
+  { connectorId, model, messages, think, tools, images }: ChatRequest,
   onDelta: (d: StreamDelta) => void,
   signal: AbortSignal,
 ): Promise<ChatReply> {
@@ -992,7 +1050,7 @@ async function streamCompletions(
   const params = {
     model,
     stream: true,
-    messages: messages.map(toWire),
+    messages: messages.map((m) => toWire(m, images)),
     chat_template_kwargs: { enable_thinking: think },
     ...(tools?.length ? { tools } : {}),
   };

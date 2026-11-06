@@ -135,7 +135,7 @@ export async function startTurnFromOptions(
   const disk = await readSession(id);
   if (!disk) throw new HttpError(404, "No such session");
   const env = await buildEnv(disk, options);
-  await startTurn(id, env, { text, planning: options.planning }, deps);
+  await startTurn(id, env, { text, planning: options.planning, images: options.images }, deps);
 }
 
 // Starts the saved session's plan and says which session it runs in. Answers

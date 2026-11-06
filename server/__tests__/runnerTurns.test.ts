@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { ChatMessage } from "../../src/api.ts";
 import type { RunnerEnv, RunnerHandle } from "../../src/runnerTypes.ts";
 import { fakeRun, finish, handles, makeSession, resetFakes } from "./fakeRun.ts";
@@ -298,5 +300,127 @@ describe("a chat reply run on the server", () => {
     await started.done;
     await expect(hub.replace("a", mine, fileOf("a").revision)).resolves.toBeTruthy();
     expect(fileOf("a").title).toBe("mine");
+  });
+});
+
+describe("a chat reply with images", () => {
+  it("passes images through to the reply call", async () => {
+    save("a");
+    const images = [{ id: "img-1", mediaType: "image/png" }];
+    const started = await runners.startTurn("a", env, { text: "look", planning: false, images }, { reply: fakeReply, save: (s) => hub.save(s.id, s) });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].text).toBe("look");
+    expect(calls[0].planning).toBe(false);
+    release(true);
+    await started.done;
+  });
+
+  it("passes the images field to the reply, which the fake records", async () => {
+    save("a");
+    const images = [{ id: "img-1", mediaType: "image/png" }];
+    // Replace the fake reply to capture the images param.
+    let capturedImages: any = undefined;
+    const captureReply = (h: RunnerHandle) => {
+      handles.set(h.sessionId, h);
+      return async (text: string, before: ChatMessage[], opts: { planning?: boolean; images?: any } = {}) => {
+        capturedImages = opts.images;
+        const controller = new AbortController();
+        h.setAbort(controller);
+        const messages: ChatMessage[] = [...before, { role: "user", content: text }, { role: "assistant", content: "Fine." }];
+        h.edit((s) => ({ ...s, messages }));
+        release(true);
+        return { ok: true, messages };
+      };
+    };
+    const started = await runners.startTurn("a", env, { text: "look", planning: false, images }, { reply: captureReply, save: (s) => hub.save(s.id, s) });
+    await vi.waitFor(() => capturedImages !== undefined);
+    expect(capturedImages).toEqual(images);
+    await started.done;
+  });
+
+  it("puts images on the user message in history", async () => {
+    save("a");
+    const images = [{ id: "img-1", mediaType: "image/png" }];
+    let capturedHistory: ChatMessage[] | undefined;
+    const captureReply = (h: RunnerHandle) => {
+      handles.set(h.sessionId, h);
+      return async (text: string, before: ChatMessage[], opts: { planning?: boolean; images?: any } = {}) => {
+        const controller = new AbortController();
+        h.setAbort(controller);
+        const userMsg: ChatMessage = { role: "user", content: text, images: opts.images };
+        const messages: ChatMessage[] = [...before, userMsg, { role: "assistant", content: "Fine." }];
+        h.edit((s) => ({ ...s, messages }));
+        capturedHistory = [...before, userMsg];
+        release(true);
+        return { ok: true, messages };
+      };
+    };
+    const started = await runners.startTurn("a", env, { text: "look", planning: false, images }, { reply: captureReply, save: (s) => hub.save(s.id, s) });
+    await vi.waitFor(() => capturedHistory !== undefined);
+    const userMsg = capturedHistory!.find((m) => m.role === "user" && m.content === "look");
+    expect(userMsg).toBeDefined();
+    expect(userMsg!.images).toEqual(images);
+    await started.done;
+  });
+
+  it("saves images on the user message in the session", async () => {
+    save("a");
+    const images = [{ id: "img-2", mediaType: "image/jpeg" }];
+    // Use a reply that includes images on the user message.
+    const imagesReply = (h: RunnerHandle) => {
+      handles.set(h.sessionId, h);
+      return async (text: string, before: ChatMessage[], opts: { planning?: boolean; images?: any } = {}) => {
+        const controller = new AbortController();
+        h.setAbort(controller);
+        const userMsg: ChatMessage = { role: "user", content: text, images: opts.images };
+        const messages: ChatMessage[] = [...before, userMsg, { role: "assistant", content: "Fine." }];
+        h.edit((s) => ({ ...s, messages }));
+        release(true);
+        return { ok: true, messages };
+      };
+    };
+    const started = await runners.startTurn("a", env, { text: "see", planning: false, images }, { reply: imagesReply, save: (s) => hub.save(s.id, s) });
+    await vi.waitFor(() => expect(calls).toHaveLength(0)); // fakeReply not used
+    release(true);
+    await started.done;
+    const done = fileOf("a");
+    const userMsg = done.messages.find((m: ChatMessage) => m.content === "see");
+    expect(userMsg).toBeDefined();
+    expect(userMsg!.images).toEqual(images);
+  });
+
+  it("collects image base64 from history and passes it to runTurn, but not to the saved session", async () => {
+    // Create a real image file on disk in the temp home directory.
+    const imgId = "img-abc";
+    const imgDir = path.join(home.dir, "sessions", "a", "images");
+    await mkdir(imgDir, { recursive: true });
+    await writeFile(path.join(imgDir, `${imgId}.png`), Buffer.from("fake-png-bytes"));
+
+    // Pre-populate history with a message that has image refs.
+    const prevMsg: ChatMessage = { role: "user", content: "earlier", images: [{ id: imgId, mediaType: "image/png" }] };
+    putFile("a", { ...makeSession("a", 0), plan: null, messages: [prevMsg], revision: 4 });
+
+    // Use the real makeReply (not fakeReply) so image collection runs.
+    // makeReply reads images from disk, builds the base64 map, and passes it
+    // to runTurn. The base64 should NOT end up in the saved session.
+    const { makeReply: realMakeReply } = await import("../../src/runnerReply.ts");
+    const runners2 = await import("../runners.ts");
+    const hub2 = await import("../runHub.ts");
+
+    const started = await runners2.startTurn("a", env, { text: "now", planning: false, images: [{ id: "img-new", mediaType: "image/jpeg" }] }, { reply: realMakeReply, save: (s) => hub2.save(s.id, s) });
+    await vi.waitFor(() => expect(hub2.liveRun("a")).not.toBeNull());
+    // Wait for the run to finish (the real makeReply streams via runTurn).
+    await started.done;
+
+    // The saved session should have the image refs but NOT the base64 data.
+    const done = fileOf("a");
+    const newUser = done.messages.find((m: ChatMessage) => m.content === "now");
+    expect(newUser).toBeDefined();
+    expect(newUser!.images).toEqual([{ id: "img-new", mediaType: "image/jpeg" }]);
+    // The previous message's images should still be refs only.
+    const prevSaved = done.messages.find((m: ChatMessage) => m.content === "earlier");
+    expect(prevSaved!.images).toEqual([{ id: imgId, mediaType: "image/png" }]);
+    // No base64 data in the saved session.
+    expect(JSON.stringify(done)).not.toContain("fake-png-bytes");
   });
 });

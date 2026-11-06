@@ -51,6 +51,7 @@ import { startFromOptions, startTurnFromOptions } from "./runStart.ts";
 import * as runners from "./runners.ts";
 import { AUTO_KINDS, type AutoKind, withAuto } from "../src/autoApprove.ts";
 import { sessionFolder } from "./sessionFile.ts";
+import { validateRefs } from "./images.ts";
 
 export interface RunOptions {
   connectorId: string;
@@ -58,6 +59,8 @@ export interface RunOptions {
   toolsOn: boolean;
   thinkOn: boolean;
   freshSteps?: boolean;
+  // Image refs for a chat turn (validated refs to files in the session's images folder).
+  images?: { id: string; mediaType: string }[];
 }
 
 export interface CommandDeps {
@@ -130,15 +133,23 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
       await runners.stopRun(id);
       break;
     case "message": {
-      if (typeof body.text !== "string" || !body.text.trim()) throw new HttpError(400, "text must be given");
+      const images = body.images;
+      const text = body.text ?? "";
+      if (typeof text !== "string") throw new HttpError(400, "text must be given");
       if (runners.isRunning(id)) {
         // A plan: folded in before the next step; the answer says which one.
-        // (A reply that is streaming refuses it, see sendNote.)
-        extra = await runners.sendNote(id, body.text);
+        // Images are refused (a plan message has no images field).
+        if (images) throw new HttpError(409, "Images can't be attached while a plan is running. Send the text without the image and try again.", {
+          reason: "reply running",
+        });
+        if (!text.trim()) throw new HttpError(400, "text must be given");
+        extra = await runners.sendNote(id, text);
       } else {
         // No run: one chat reply, run here.
         if (body.planning !== undefined && typeof body.planning !== "boolean") throw new HttpError(400, "planning must be true or false");
-        await deps.chat(id, body.text, { ...parseRunOptions(body), planning: body.planning === true });
+        // Validate image refs (empty list is fine — no images is fine too).
+        const validated = images ? await validateRefs(id, images) : undefined;
+        await deps.chat(id, text, { ...parseRunOptions(body), planning: body.planning === true, images: validated });
       }
       break;
     }
