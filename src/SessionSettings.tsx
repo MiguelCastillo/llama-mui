@@ -11,10 +11,13 @@ import {
   Divider,
   IconButton,
   List,
+  ListItem,
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  Paper,
   Stack,
+  Switch,
   Tab,
   Tabs,
   TextField,
@@ -27,7 +30,8 @@ import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
 import InsertDriveFileOutlinedIcon from "@mui/icons-material/InsertDriveFileOutlined";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import TuneIcon from "@mui/icons-material/Tune";
-import { type Attachment, getRecentFolders, pickAttachments } from "./api";
+import TaskAltOutlinedIcon from "@mui/icons-material/TaskAltOutlined";
+import { type Attachment, type AutoApprove, type AutoKind, getRecentFolders, pickAttachments } from "./api";
 import RecentFolders from "./RecentFolders";
 
 const SOURCE_LABEL: Record<Attachment["source"], string> = {
@@ -38,13 +42,27 @@ const SOURCE_LABEL: Record<Attachment["source"], string> = {
 export const AttachmentIcon = ({ kind }: { kind: Attachment["kind"] }) =>
   kind === "folder" ? <FolderOutlinedIcon fontSize="small" /> : <InsertDriveFileOutlinedIcon fontSize="small" />;
 
-type SectionId = "workingDir" | "attachments";
+type SectionId = "workingDir" | "attachments" | "approvals";
 
 // Shown, and used as the error, when the working directory or attachments are changed while a plan or a reply runs.
 export const ATTACHMENTS_LOCKED_NOTE = "Folders can't change while a plan or a reply is running. Pause the plan, stop the reply, or wait until it finishes.";
 
+// What can be approved for the rest of the session (see autoApprove.ts).
+const APPROVALS: { kind: AutoKind; label: string; text: string }[] = [
+  {
+    kind: "changes",
+    label: "Approve all file changes",
+    text: "Every file the model creates, replaces or edits is approved without asking. Each diff still shows in the chat.",
+  },
+  {
+    kind: "commands",
+    label: "Approve all commands",
+    text: "Every command the model runs, git or not, is approved without asking. They run as you, with your network access and credentials.",
+  },
+];
+
 // Button next to the message box that opens this chat's settings: its working
-// directory and what's attached. Laid out like Settings, but everything here
+// directory, what's attached and what is approved. Laid out like Settings, but everything here
 // belongs to this chat and New chat clears it.
 export default function SessionSettings({
   attachments,
@@ -54,6 +72,8 @@ export default function SessionSettings({
   onSetWorkingDir,
   checkCommands,
   onSetCheckCommand,
+  autoApprove,
+  onAutoApprove,
   locked = false,
 }: {
   // The extra files and folders the model may read (not the working directory).
@@ -66,6 +86,10 @@ export default function SessionSettings({
   onSetWorkingDir: (path: string | null) => void;
   checkCommands: Record<string, string>;
   onSetCheckCommand: (folder: string, command: string) => void;
+  // What is approved for the rest of this session without asking, and the way to change it.
+  // It can change while a run is going: that is when it is wanted.
+  autoApprove: AutoApprove;
+  onAutoApprove: (kind: AutoKind, on: boolean) => void;
   // A plan or reply is running: its session belongs to the server until it
   // ends, so the working directory and attachments can't change. The check
   // commands can (they aren't the session's).
@@ -77,11 +101,12 @@ export default function SessionSettings({
   const sections = [
     { id: "workingDir" as const, label: "Working directory", icon: <FolderOutlinedIcon />, count: workingDir ? 1 : 0 },
     { id: "attachments" as const, label: "Attachments", icon: <AttachFileIcon />, count: attachments.length },
+    { id: "approvals" as const, label: "Approvals", icon: <TaskAltOutlinedIcon />, count: APPROVALS.filter((r) => autoApprove[r.kind]).length },
   ];
 
   return (
     <>
-      <Tooltip title="Session settings: working directory and attachments">
+      <Tooltip title="Session settings: working directory, attachments and approvals">
         <IconButton onClick={() => setOpen(true)}>
           <TuneIcon />
         </IconButton>
@@ -134,6 +159,7 @@ export default function SessionSettings({
             {section === "attachments" && (
               <AttachmentsSection attachments={attachments} onAdd={onAttach} onRemove={onDetach} locked={locked} />
             )}
+            {section === "approvals" && <ApprovalsSection autoApprove={autoApprove} onChange={onAutoApprove} />}
           </Box>
         </DialogContent>
       </Dialog>
@@ -241,6 +267,41 @@ function WorkingDirSection({
       </Stack>
       <RecentFolders folders={others} disabled={locked} onChoose={onSet} />
       {error && <Alert severity="error">{error}</Alert>}
+    </Stack>
+  );
+}
+
+// What the model may do without asking, for this session only: a prompt's
+// "Approve all ... in this session" button turns these on, and they are turned
+// off here. Removing a worktree always asks.
+function ApprovalsSection({ autoApprove, onChange }: { autoApprove: AutoApprove; onChange: (kind: AutoKind, on: boolean) => void }) {
+  return (
+    <Stack spacing={3}>
+      <Box>
+        <Typography variant="h6">Approvals</Typography>
+        <Typography variant="body2" color="text.secondary">
+          Approve a kind of thing without being asked each time, for this session only. A new session asks again.
+          Removing a git worktree always asks, and so do paths outside this chat's folders.
+        </Typography>
+      </Box>
+      <Paper variant="outlined">
+        {APPROVALS.map((r, i) => (
+          <ListItem
+            key={r.kind}
+            divider={i < APPROVALS.length - 1}
+            secondaryAction={
+              <Switch
+                edge="end"
+                checked={autoApprove[r.kind] === true}
+                onChange={(e) => onChange(r.kind, e.target.checked)}
+                slotProps={{ input: { "aria-label": r.label } }}
+              />
+            }
+          >
+            <ListItemText primary={r.label} secondary={r.text} sx={{ pr: 6 }} />
+          </ListItem>
+        ))}
+      </Paper>
     </Stack>
   );
 }

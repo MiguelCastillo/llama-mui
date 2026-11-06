@@ -1154,6 +1154,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // A command the server couldn't do shows as the error, in its own words.
   const showFailure = (command: Promise<unknown>) =>
     void command.catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  // Turns an approval for the rest of this session on or off (Session settings,
+  // Approvals). The page's copy changes at once; the server's, by a command, so
+  // a run that is going sees it too.
+  const changeAutoApprove = (kind: AutoKind, on: boolean) => {
+    setAutoApproveState((a) => {
+      const { [kind]: _old, ...rest } = a;
+      return on ? { ...rest, [kind]: true } : rest;
+    });
+    showFailure(sendAutoApprove(sessionId, kind, on));
+  };
   // Escape stops a streaming reply (a phone has the Stop button instead). It
   // leaves alone an Escape that closes a dialog or menu, or that another
   // handler already used.
@@ -1853,30 +1863,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           {/* On a wide screen Enter sends and there is no Send button: the settings button
               and the box are centered beside the context meter. On a phone Send has the
               meter under it, the box is as tall as both, and the settings button is centered. */}
-          {/* What is approved for the rest of this session; the x asks again. */}
-          {(["changes", "commands"] as const).some((k) => autoApprove[k]) && (
-            <Stack direction="row" useFlexGap spacing={1} sx={{ mb: 1, flexWrap: "wrap", alignItems: "center" }}>
-              {(["changes", "commands"] as const).map(
-                (k) =>
-                  autoApprove[k] && (
-                    <Chip
-                      key={k}
-                      size="small"
-                      color="warning"
-                      variant="outlined"
-                      label={k === "changes" ? "Approving all changes" : "Approving all commands"}
-                      onDelete={() => {
-                        setAutoApproveState(({ [k]: _off, ...rest }) => rest);
-                        sendAutoApprove(sessionId, k, false).catch((e) => setError(e instanceof Error ? e.message : String(e)));
-                      }}
-                    />
-                  ),
-              )}
-              <Typography variant="caption" color="text.secondary">
-                for this session. The x asks again.
-              </Typography>
-            </Stack>
-          )}
           <Stack direction="row" spacing={1} sx={{ alignItems: narrow ? "stretch" : "center" }}>
             <Box sx={{ display: "flex", alignSelf: "center" }}>
             <SessionSettings
@@ -1887,6 +1873,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               onDetach={(p) => changeAttachments((as) => as.filter((x) => x.path !== p))}
               onSetWorkingDir={changeWorkingDir}
               checkCommands={toolContext.checkCommands}
+              autoApprove={autoApprove}
+              onAutoApprove={changeAutoApprove}
               onSetCheckCommand={(folder, command) =>
                 setCheckCommand(folder, command)
                   .then(() => setContextVersion((v) => v + 1))
@@ -2668,7 +2656,7 @@ function ApprovalPrompt({ approval, onDecide, onAlways }: { approval: Approval; 
         </Button>
       </Stack>
       {/* Approves this and the same kind of thing for the rest of this session;
-          the chip above the message box turns it off. */}
+          Session settings, Approvals, turns it off. */}
       {onAlways && approval.type === "change" && (
         <Button size="small" onClick={() => onAlways("changes")} sx={{ mt: 0.5, ml: -1 }}>
           Approve all changes in this session

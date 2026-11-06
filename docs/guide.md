@@ -169,8 +169,9 @@ The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 expressions over file contents). They read only the chat's working directory
 and what's attached to it.
 
-**Session settings** (the sliders icon next to the message box) has two sections.
-A new chat starts with neither.
+**Session settings** (the sliders icon next to the message box) has three
+sections: Working directory, Attachments and Approvals. A new chat starts with
+none of them set.
 
 - **Working directory** is the folder relative paths and `run_command` start
   in, and the system prompt names it. It's a setting of the chat, separate
@@ -193,6 +194,10 @@ A new chat starts with neither.
   marked with whether you added it or the model asked for it, and buttons to
   choose more files or folders. The model can read the working directory and the attachments;
   only the working directory is where relative paths start.
+- **Approvals** has a switch for approving all file changes and one for approving
+  all commands, for this session only (see "Approving for a session" below):
+  a prompt's "Approve all ... in this session" button turns them on, and they
+  can be turned off or on here, also while a plan or reply is running.
 
 Chats saved before the working directory was a setting are converted when
 they're read: their first attached folder becomes the working directory and
@@ -279,8 +284,8 @@ git or not; it runs as you, with your network access and credentials). There is
 no special handling of git: a command is approved or it isn't. Removing a
 worktree is always asked. The choice is saved in the session (`autoApprove` in
 `session.json`), so a reload keeps it, and a new session starts without it; it
-is not inherited by a thread. A chip above the message box says what is
-approved, and its x asks again. Only the question is skipped: the paths a chat
+is not inherited by a thread. **Session settings → Approvals** shows what is
+on, and its switches turn each off (or on, before any prompt). Only the question is skipped: the paths a chat
 may reach and the files that are off limits (`settings.json`, the keys) are
 checked as before, and an approved change still shows its diff in the chat.
 
