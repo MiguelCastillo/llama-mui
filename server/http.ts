@@ -3,13 +3,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export class HttpError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    // More fields for the JSON answer, next to `error` (a 409 carries the current revision).
-    public extra: Record<string, unknown> = {},
-  ) {
+  status: number;
+  // More fields for the JSON answer, next to `error` (a 409 carries the current revision).
+  extra: Record<string, unknown>;
+  // Fields are written out, not constructor parameter properties, so Node can
+  // run this file as it is (server/main.ts).
+  constructor(status: number, message: string, extra: Record<string, unknown> = {}) {
     super(message);
+    this.status = status;
+    this.extra = extra;
   }
 }
 

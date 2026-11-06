@@ -216,12 +216,14 @@ export type TestResult = { ok: true; models: number } | { ok: false; error: stri
 // and `data` (the rest of its JSON, e.g. a 409's `reason` and `revision`) are
 // for the caller that has to tell one refusal from another.
 export class ApiError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-    public data: Record<string, any> = {},
-  ) {
+  // Fields are written out, not constructor parameter properties, so Node can
+  // run this file as it is (server/main.ts).
+  status: number;
+  data: Record<string, any>;
+  constructor(message: string, status: number, data: Record<string, any> = {}) {
     super(message);
+    this.status = status;
+    this.data = data;
   }
 }
 

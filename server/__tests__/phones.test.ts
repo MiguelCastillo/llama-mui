@@ -120,7 +120,7 @@ describe("pairing", () => {
     setListenAddress({ address: "127.0.0.1", family: "IPv4", port: 5173 });
     const r = await run(["phone", "pairing"], "POST");
     expect(r.status).toBe(409);
-    expect(r.body.error).toContain("npm run dev:lan");
+    expect(r.body.error).toContain("npm run prod:lan");
   });
 });
 

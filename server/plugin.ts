@@ -54,7 +54,7 @@ function isCrossSite(req: Connect.IncomingMessage): boolean {
   }
 }
 
-const handler: Connect.NextHandleFunction = (req, res) => {
+export const handler: Connect.NextHandleFunction = (req, res) => {
   if (isCrossSite(req)) return sendJson(res, 403, { error: "Cross-site requests aren't allowed" });
   // Mounted at /api, so req.url is relative to it.
   const url = new URL(req.url ?? "/", "http://x");
@@ -85,7 +85,7 @@ const handler: Connect.NextHandleFunction = (req, res) => {
 // What a server does when it starts. Plans run on the server call its own /api over http (see setApiOrigin), so
 // once the server is listening it tells the client code where that is. Plain
 // http only: a server started with https would need to trust its own certificate.
-function whenServing(httpServer: Server | null) {
+export function whenServing(httpServer: Server | null) {
   // A run that was going when the last server stopped is marked as interrupted
   // (see restart.ts); this server's own runs end if it is closed meanwhile.
   void recoverOnce();

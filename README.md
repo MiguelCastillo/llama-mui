@@ -27,8 +27,14 @@ through it step by step, so you review instead of doing it yourself.
 
 ```sh
 npm install
-npm run dev     # http://localhost:5173
+npm run prod    # builds the app and serves it: http://localhost:5173
 ```
+
+For the phone, `npm run prod:lan` does the same on every network interface.
+Changing the code? `npm run dev` runs Vite on http://localhost:5174 (`dev:lan`
+for the network). There are two because Vite restarts the API whenever a server
+file changes, which cuts off replies that are streaming; the built app on 5173
+isn't touched by edits to the source.
 
 Then open Settings (the gear icon) → Connectors and add your server.
 

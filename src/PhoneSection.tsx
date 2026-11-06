@@ -98,7 +98,7 @@ export default function PhoneSection() {
       ) : !info.reachable ? (
         <Alert severity="info">
           llama-mui is only listening on this computer, so a phone can't reach it. Stop it and start it with{" "}
-          <code>npm run dev:lan</code>, then come back here.
+          <code>npm run prod:lan</code>, then come back here.
         </Alert>
       ) : info.addresses.length === 0 ? (
         <Alert severity="warning">This computer has no network address to reach it by. Connect it to a network first.</Alert>

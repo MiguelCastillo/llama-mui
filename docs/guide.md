@@ -17,15 +17,26 @@ file. Like `ssh` with a private key, llama-mui refuses a `secret.key` that other
 users can read and tells you the `chmod 600` to run. If the unlocking key is
 lost, Settings asks for the keys again; keys from an older `settings.json` are
 moved into `.keys` and checked on the first start. This doesn't stop a program
-running as you that can read both places. They're
-served by a Vite plugin (`server/plugin.ts`) that runs under both
-`npm run dev` and `npm run preview`. It refuses requests from other websites
+running as you that can read both places.
+
+The `/api` is served by `server/plugin.ts`, a Vite plugin that runs under
+`npm run dev` (Vite, port 5174), and by `server/main.ts`, a plain Node server
+that serves the built `dist/` and mounts the same handler. `npm run prod` and
+`npm run prod:lan` build the client and start it on port 5173; an edit to the
+source never restarts it, which is why day-to-day use is there and dev is on
+its own port. Set `PORT` or `HOST` to change where it listens. Ctrl+C stops
+accepting requests, gives open ones 5 seconds, then exits (a second Ctrl+C
+exits at once). Both servers use the same `~/.llama-mui`, but a run lives in the
+memory of the process that started it, so don't open and run the same chat in
+both at once. A run records which process owns it, and a server starting up
+leaves the runs of another live process alone instead of marking them
+interrupted. The handler refuses requests from other websites
 (by their `Origin` and `Sec-Fetch-Site` headers): any page open in your browser
 can send requests to localhost, and without that check one could run the
 model's tools, commands included, on its own.
 
 **Using it from your phone.** By default the server only listens on this
-computer. Start it with `npm run dev:lan` (it runs `vite --host`) and it
+computer. Start it with `npm run prod:lan` (it serves the built app on every interface; `npm run dev:lan` does the same for Vite) and it
 listens on your network too. Nothing else on the network is let in until it is
 paired: in **Settings → Phone**, **Show QR code** makes a code for one phone,
 good once, for five minutes. Scan it with the phone's camera; the phone opens

@@ -63,8 +63,10 @@ export interface AccessRequest {
 // asks the user, who can allow it (the call runs again), pick the right file
 // or folder instead, or deny it.
 export class AccessNeeded extends Error {
-  constructor(readonly target: AccessRequest) {
+  readonly target: AccessRequest;
+  constructor(target: AccessRequest) {
     super(`${target.path} isn't attached to this chat`);
+    this.target = target;
   }
 }
 
@@ -72,8 +74,10 @@ export class AccessNeeded extends Error {
 // project") but not where it is. Chat asks the user to pick it; the call
 // never runs on the server.
 export class LocateNeeded extends Error {
-  constructor(readonly request: { description: string; kind: AttachmentTarget["kind"] }) {
+  readonly request: { description: string; kind: AttachmentTarget["kind"] };
+  constructor(request: { description: string; kind: AttachmentTarget["kind"] }) {
     super(`The user needs to locate ${request.description}`);
+    this.request = request;
   }
 }
 
@@ -95,8 +99,10 @@ export type Approval =
 // Thrown until the user approves. Chat runs the call again with the approval
 // it showed, serialized, in ToolContext.approved.
 export class ApprovalNeeded extends Error {
-  constructor(readonly approval: Approval) {
+  readonly approval: Approval;
+  constructor(approval: Approval) {
     super("This needs the user's approval");
+    this.approval = approval;
   }
 }
 

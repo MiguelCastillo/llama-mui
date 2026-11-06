@@ -157,7 +157,7 @@ let listening: AddressInfo | string | null = null;
 export const setListenAddress = (a: AddressInfo | string | null) => void (listening = a);
 
 // Whether other devices can reach the server at all: it is listening on every
-// interface (npm run dev:lan), not just this computer's loopback.
+// interface (npm run prod:lan), not just this computer's loopback.
 export function reachable(): boolean {
   if (!listening || typeof listening === "string") return false;
   return !LOOPBACK.has(listening.address) && listening.address !== "localhost";
@@ -226,7 +226,7 @@ export async function phoneRoutes({ req, res, parts, method }: Route, now = Date
   }
   if (parts.length === 2 && parts[1] === "pairing" && method === "POST") {
     if (!reachable()) {
-      throw new HttpError(409, "llama-mui is only listening on this computer. Stop it and start it with `npm run dev:lan`, then try again.");
+      throw new HttpError(409, "llama-mui is only listening on this computer. Stop it and start it with `npm run prod:lan`, then try again.");
     }
     sendJson(res, 200, newCode(now));
     return true;
