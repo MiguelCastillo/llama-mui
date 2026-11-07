@@ -1,5 +1,5 @@
 // PlanView: the plan as a checklist. Steps can be edited, removed and rerun
-// while the plan isn't running, and a disputed step accepted as done.
+// while the plan isn't running, and a disputed or failed step accepted as done.
 // A step that has run can be opened to see its turns (the "Do step" message,
 // the reply, its tool calls), which the chat itself doesn't show; `details`
 // draws them, or returns null for a step with none.
@@ -34,7 +34,7 @@ import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
 import DoneIcon from "@mui/icons-material/Done";
 import { type PlanStep } from "./api";
-import { stepLine } from "./agent/plan";
+import { canMarkDone, stepLine } from "./agent/plan";
 import MarkdownRenderer from "./MarkdownRenderer";
 
 const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
@@ -332,7 +332,7 @@ export function PlanView({
                 {!running && !readOnly && (
                   // Shown on hover so the list stays quiet.
                   <Box className="step-actions" sx={{ visibility: "hidden", display: "flex", flexShrink: 0 }}>
-                    {s.status === "disputed" && (
+                    {canMarkDone(s.status) && (
                       <Tooltip title="The check is wrong: mark it done">
                         <IconButton
                           size="small"

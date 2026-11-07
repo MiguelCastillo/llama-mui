@@ -90,6 +90,13 @@ export function stepLine(step: { text: string; summary?: string | null }): strin
   return step.text.replace(/\s+/g, " ").trim();
 }
 
+// Whether a step offers "The check is wrong: mark it done": a step the check
+// rejected, whether the dispute flow left it disputed or failed. The check is
+// a model and can be wrong either way, so the user can override both.
+export function canMarkDone(status: PlanStep["status"]): boolean {
+  return status === "disputed" || status === "failed";
+}
+
 // The plan's summary from an update_plan call's arguments, alongside extractContext.
 export function extractPlanSummary(args: string): string | null {
   try {
@@ -264,7 +271,23 @@ export const REVIEW_PROMPT =
   "wrote it, and a claim the code doesn't back up doesn't. When you're done reading, answer with exactly " +
   "one line: DONE, or `MISSING: <one short plain sentence saying what is not done, no more than about " +
   "20 words>`. Keep it short: the line is shown as you write it. A step that only needed reading or " +
-  "checking is DONE if the reply reports what it found.";
+  "checking is DONE if the reply reports what it found. What the step's commands and reads printed is " +
+  "shown too: command output shown there counts as evidence, for example a test run, a git listing or a " +
+  "page measurement.";
+
+// How much of a step's output the check sees. The end, like a recovery round:
+// what a command printed last (a test run's summary, a commit listing) is what
+// settles the step.
+const MAX_REVIEW_OUTPUT = 3000;
+
+// The check's section on what the step's commands and reads printed: "" when
+// there is nothing, the end of it when it is long.
+function printedSection(messages: ChatMessage[]): string {
+  const output = stepOutput(messages);
+  if (!output) return "";
+  const shown = output.length > MAX_REVIEW_OUTPUT ? `(earlier output cut)\n${output.slice(-MAX_REVIEW_OUTPUT)}` : output;
+  return `What the step's commands and reads printed:\n${shown}\n\n`;
+}
 
 // Asks the model whether the step's changes do what the step says, letting
 // it read with the read-only disk tools. `messages` is the step's turn: from
@@ -309,6 +332,7 @@ export async function reviewStep(
       content:
         `Step: ${step}\n\nThe files it changed, as they are now:\n${files || "(none)"}\n\n` +
         `Changes made during this step:\n${changesIn(messages) || "(no file changes)"}\n\n` +
+        printedSection(messages) +
         `The reply:\n${clip(replyText, MAX_CHANGE_CHARS) || "(empty)"}`,
     },
   ];

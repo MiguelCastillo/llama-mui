@@ -1,6 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+const { mockStreamChat } = vi.hoisted(() => ({ mockStreamChat: vi.fn() }));
+
+vi.mock("../../api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api")>();
+  return { ...actual, streamChat: mockStreamChat };
+});
+
 import { type ChatMessage, type PlanStep } from "../../api";
 import {
+  reviewStep,
   planFromCall,
   stepPrompt,
   filesChanged,
@@ -461,6 +470,67 @@ describe("REVIEW_PROMPT", () => {
   it("asks for one short plain sentence after MISSING, about 20 words", () => {
     expect(REVIEW_PROMPT).toContain("MISSING: <one short plain sentence");
     expect(REVIEW_PROMPT).toContain("no more than about 20 words");
+  });
+
+  it("says command output counts as evidence", () => {
+    expect(REVIEW_PROMPT).toContain("command output shown there counts as evidence");
+  });
+});
+
+// ── reviewStep: what the commands printed ───────────────────────────────────
+
+describe("reviewStep input", () => {
+  const call = (id: string, command: string): ChatMessage => ({
+    role: "assistant",
+    content: "",
+    toolCalls: [{ id, name: "run_command", arguments: JSON.stringify({ command }) }],
+  });
+  const result = (id: string, content: string): ChatMessage => ({ role: "tool", toolCallId: id, content });
+
+  // Runs the check on a step's turn and returns the user message it was sent.
+  async function sentFor(messages: ChatMessage[]): Promise<string> {
+    mockStreamChat.mockReset();
+    mockStreamChat.mockImplementation(async (_req: unknown, onDelta: (d: { content?: string }) => void) => {
+      onDelta({ content: "DONE" });
+      return { toolCalls: [] };
+    });
+    await reviewStep(
+      { connectorId: "c", model: "m", think: false, room: 10000, tools: [], read: async () => "" },
+      "Do the thing",
+      messages,
+      [],
+      [],
+      new AbortController().signal,
+    );
+    const sent: ChatMessage[] = mockStreamChat.mock.calls[0][0].messages;
+    return sent.find((m) => m.role === "user")!.content;
+  }
+
+  it("shows what a command printed, before the reply", async () => {
+    const text = await sentFor([
+      call("c1", "npx vitest run"),
+      result("c1", "Tests  12 passed (12)"),
+      { role: "assistant", content: "All tests pass" },
+    ]);
+    expect(text).toContain("What the step's commands and reads printed:\n$ run_command npx vitest run\nTests  12 passed (12)");
+    expect(text.indexOf("What the step's commands")).toBeLessThan(text.indexOf("The reply:"));
+  });
+
+  it("cuts a long output from the start and keeps the end", async () => {
+    const long = "early-line\n" + "x".repeat(5000) + "\nlast-line";
+    const text = await sentFor([call("c1", "npm test"), result("c1", long), { role: "assistant", content: "ok" }]);
+    // The changes section lists commands too, so look at the printed section only.
+    const section = text.slice(text.indexOf("What the step's commands and reads printed:"), text.indexOf("The reply:"));
+    expect(section).toContain("(earlier output cut)");
+    expect(section).toContain("last-line");
+    expect(section).not.toContain("early-line");
+    expect(section.length).toBeLessThan(3200);
+  });
+
+  it("leaves the section out when the step ran no commands", async () => {
+    const text = await sentFor([{ role: "assistant", content: "Read it, nothing to change" }]);
+    expect(text).not.toContain("What the step's commands and reads printed");
+    expect(text).toContain("The reply:");
   });
 });
 

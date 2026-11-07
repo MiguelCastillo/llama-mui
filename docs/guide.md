@@ -612,6 +612,12 @@ vitest (`npm test`).
     count too: a step whose work was already done (by a rerun, or by an
     earlier step) changed nothing, and the check, seeing no file, said the
     file was never created.
+  - What the step's commands and reads printed, clipped to the end like the
+    recovery prompt's (about 3,000 characters; left out when the step ran
+    nothing). Command output counts as evidence: a test run, a git listing or
+    a page measurement. Without it, a step whose proof was a command's output
+    (a measured 16px, a commit listing) had no evidence the check could see
+    and was marked failed although the work was done and committed.
   - Tools, because a check that only gets what fits couldn't judge big
     files: every step of a refactor touching `Chat.tsx` (~25,000 tokens) was
     "too big for the check", even one that only changed imports, and the plan
@@ -666,6 +672,9 @@ vitest (`npm test`).
     turns.
   - **Rounds used up**: the step gets ✗ with the check's own note,
     in its own words and never cut, and the plan stops.
+  - **You can overrule a ✗ too**: the check is a model, so hover a failed
+    step, as a disputed one, and press **The check is wrong: mark it done**
+    when the work is there. The plan can then go on.
   - No round starts if the reply failed or the run was stopped.
 - **Paused or failed**: if you press **Pause** on the card, or the reply
   fails, the step
