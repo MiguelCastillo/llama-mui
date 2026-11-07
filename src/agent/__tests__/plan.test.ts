@@ -21,6 +21,7 @@ import {
   recoveryPrompt,
   stepOutput,
   REVIEW_PROMPT,
+  parseVerdict,
 } from "../plan";
 
 // ── summaries ───────────────────────────────────────────────────────────────
@@ -802,5 +803,49 @@ describe("stepPrompt for a fresh step", () => {
     expect(contextIdx).toBeLessThan(requestIdx);
     expect(requestIdx).toBeLessThan(planIdx);
     expect(planIdx).toBeLessThan(filesIdx);
+  });
+});
+
+// ── the check's verdict ─────────────────────────────────────────────────────
+
+describe("parseVerdict", () => {
+  it("takes a DONE line, plain or wrapped in markup", () => {
+    expect(parseVerdict("DONE")).toEqual({ done: true });
+    expect(parseVerdict("I read the file.\n\n**DONE**")).toEqual({ done: true });
+    expect(parseVerdict("DONE: the limit is 300 now")).toEqual({ done: true });
+  });
+
+  it("takes MISSING with what is missing, even next to other words", () => {
+    expect(parseVerdict("MISSING: the limit isn't 300")).toEqual({ done: false, missing: "the limit isn't 300" });
+    expect(parseVerdict("DONE\nMISSING: nothing was saved")).toEqual({ done: false, missing: "nothing was saved" });
+  });
+
+  it("does not take NOT DONE, 'not done yet' or 'isn't done' as done", () => {
+    for (const said of ["NOT DONE", "Not done yet.", "**NOT DONE**", "The step isn't done.\nNot done", "STEP NOT DONE"]) {
+      expect(parseVerdict(said)).toBeNull();
+    }
+  });
+
+  it("does not take a sentence that has the word DONE in it", () => {
+    expect(parseVerdict("The work was DONE badly")).toBeNull();
+    expect(parseVerdict("")).toBeNull();
+  });
+
+  it("reviewStep calls a 'NOT DONE' answer unclear, not done", async () => {
+    mockStreamChat.mockReset();
+    mockStreamChat.mockImplementation(async (_req: unknown, onDelta: (d: { content?: string }) => void) => {
+      onDelta({ content: "NOT DONE" });
+      return { toolCalls: [] };
+    });
+    const r = await reviewStep(
+      { connectorId: "c", model: "m", think: false, room: 10000, tools: [], read: async () => "" },
+      "Do the thing",
+      [],
+      [],
+      [],
+      new AbortController().signal,
+    );
+    expect(r.done).toBe(false);
+    expect(r.missing).toMatch(/no clear answer/);
   });
 });

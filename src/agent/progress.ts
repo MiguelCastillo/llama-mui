@@ -94,15 +94,27 @@ export class ProgressWatch {
 
     if (call.name === "run_command") {
       const command = String(argsOf(call).command ?? "");
-      this.streak = this.lastPrint === print ? this.streak + 1 : 1;
-      this.lastPrint = print;
+      // What the command printed: the server starts every result with "$ <command>",
+      // which would make two different commands that fail the same way look
+      // different. A command that succeeded keeps it, so a run of silent
+      // successes (mkdir, mv, cp: all "(no output)") is never mistaken for a loop.
+      const header = `$ ${command.trim()}\n`;
+      const succeeded = /\[exit code 0\]\s*$/.test(result);
+      const shown = succeeded ? print : fingerprint(result.startsWith(header) ? result.slice(header.length) : result);
+      if (succeeded) {
+        this.streak = 0;
+        this.lastPrint = null;
+      } else {
+        this.streak = this.lastPrint === shown ? this.streak + 1 : 1;
+        this.lastPrint = shown;
+      }
       if (this.streak >= SAME_OUTPUT_LIMIT && !this.stuck) {
         this.stuck = `the last ${this.streak} commands all gave the same output (the last: \`${brief(command)}\`).`;
       }
       // Output it hasn't seen from any command before is news; the same again is not.
-      if (!this.prints.has(print)) this.newThisRound = true;
-      this.prints.add(print);
-      this.seen.add(`${key}\n${print}`);
+      if (!this.prints.has(shown)) this.newThisRound = true;
+      this.prints.add(shown);
+      this.seen.add(`${key}\n${shown}`);
       return;
     }
 

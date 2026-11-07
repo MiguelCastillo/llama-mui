@@ -353,10 +353,21 @@ export async function reviewStep(
       history.push({ role: "tool", toolCallId: call.id, content: result });
     }
   }
+  const verdict = parseVerdict(answer);
+  if (verdict) return verdict;
+  return { done: false, missing: `the check gave no clear answer: ${clip(answer.trim(), 200) || "(empty)"}` };
+}
+
+// The check's answer: `MISSING: <what>` anywhere, or else a line that is DONE
+// (the last such line wins). "NOT DONE", "not done yet" and a DONE inside a
+// sentence are no verdict: an answer that says the step isn't done must not
+// tick it off. Markup a model wraps the word in (`**DONE**`) is ignored.
+export function parseVerdict(answer: string): { done: boolean; missing?: string } | null {
   const missing = answer.match(/MISSING:\s*(.+)/i);
   if (missing) return { done: false, missing: missing[1].trim() };
-  if (/\bDONE\b/i.test(answer)) return { done: true };
-  return { done: false, missing: `the check gave no clear answer: ${clip(answer.trim(), 200) || "(empty)"}` };
+  const lines = answer.split("\n").map((l) => l.replace(/[*_`>#]/g, "").trim());
+  const done = lines.reverse().find((l) => /^DONE\b/i.test(l) || /\b(NOT|ISN'T|ISNT)\s+(YET\s+)?DONE\b/i.test(l));
+  return done && /^DONE\b/i.test(done) && !/\bnot\b/i.test(done) ? { done: true } : null;
 }
 
 // The retry after a failed check. The check is a model too and can be wrong,

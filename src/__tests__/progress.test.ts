@@ -126,3 +126,42 @@ describe("a long honest job", () => {
     expect(said).toBeNull();
   });
 });
+
+// What the server really returns for run_command: "$ <command>", the output,
+// then "[exit code N]" (see exec in server/terminal.ts).
+const printed = (command: string, output: string, code = 1) => `$ ${command}\n${output}\n[exit code ${code}]`;
+
+describe("commands as the server really prints them", () => {
+  it(`stop a model that changes the command but gets the same failure ${SAME_OUTPUT_LIMIT} times`, () => {
+    const w = new ProgressWatch();
+    const out = "FAIL x\nError: expected undefined to be defined";
+    let said: string | null = null;
+    for (let i = 0; i < SAME_OUTPUT_LIMIT; i++) said = round(w, [run(`npx vitest run # ${i}`), printed(`npx vitest run # ${i}`, out)]);
+    expect(said).toMatch(/^the last 4 commands all gave the same output/);
+  });
+
+  it("does not take a run of silent successes for a loop", () => {
+    const w = new ProgressWatch();
+    let said: string | null = null;
+    for (let i = 0; i < IDLE_ROUNDS * 2; i++) said ??= round(w, [run(`mkdir d${i}`), printed(`mkdir d${i}`, "(no output)", 0)]);
+    expect(said).toBeNull();
+  });
+
+  it("a success in between starts the count over", () => {
+    const w = new ProgressWatch();
+    const out = "Error: boom";
+    for (let i = 0; i < SAME_OUTPUT_LIMIT - 1; i++) expect(round(w, [run(`t ${i}`), printed(`t ${i}`, out)])).toBeNull();
+    expect(round(w, [run("ls"), printed("ls", "a b", 0)])).toBeNull();
+    expect(round(w, [run("t 9"), printed("t 9", out)])).toBeNull();
+  });
+
+  it("handles a command that spans lines", () => {
+    const w = new ProgressWatch();
+    let said: string | null = null;
+    for (let i = 0; i < SAME_OUTPUT_LIMIT; i++) {
+      const cmd = `echo ${i}\nfalse`;
+      said = round(w, [run(cmd), printed(cmd, "Error: boom")]);
+    }
+    expect(said).not.toBeNull();
+  });
+});

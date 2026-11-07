@@ -227,8 +227,12 @@ export async function runTurn(
           kind,
           api,
           model,
+          // The system prompt goes with every request, the last one included:
+          // the working directory and the way to answer are in it. Only the
+          // tools are left off, so the model says what it has instead of
+          // calling another.
           messages:
-            toolsOn && !lastTurn && systemPrompt
+            toolsOn && systemPrompt
               ? [{ role: "system", content: systemPrompt }, ...history]
               : history,
           think: thinkOn && !planning && round === 0,

@@ -63,6 +63,33 @@ describe("a reply that is stuck", () => {
     expect(i).toBe(SAME_OUTPUT_LIMIT);
   });
 
+  it("stops the same way when the results are what the server really prints, with the command on top", async () => {
+    let i = 0;
+    mockStream.mockImplementation(async (req: any) => (req.tools ? { toolCalls: [runCall(++i, `npx vitest run # ${i}`)], usage: undefined } : { toolCalls: [], usage: undefined }));
+    mockRunTool.mockImplementation(async (call: any) => ({ result: `$ ${JSON.parse(call.arguments).command}\nFAIL x\nError: expected undefined to be defined\n[exit code 1]` }));
+    const t = setup();
+    const r = await runTurn(t.config, t.cb);
+    expect(r.ok).toBe(false);
+    expect(t.errors.at(-1)).toMatch(/^Stopped: the last 4 commands all gave the same output/);
+    expect(i).toBe(SAME_OUTPUT_LIMIT);
+  });
+
+  it("keeps the system prompt on the last request, which has no tools", async () => {
+    let i = 0;
+    const requests: any[] = [];
+    mockStream.mockImplementation(async (req: any) => {
+      requests.push(req);
+      return req.tools ? { toolCalls: [runCall(++i, `npx vitest run # ${i}`)], usage: undefined } : { toolCalls: [], usage: undefined };
+    });
+    mockRunTool.mockResolvedValue({ result: "FAIL x\nError: expected undefined to be defined" });
+    const t = setup();
+    t.config.toolDefinitions = [{ type: "function", function: { name: "run_command" } }];
+    await runTurn(t.config, t.cb);
+    const last = requests.at(-1);
+    expect(last.tools).toBeUndefined();
+    expect(last.messages[0]).toEqual({ role: "system", content: "sys" });
+  });
+
   it("stops on the same command giving the same output", async () => {
     let i = 0;
     mockStream.mockImplementation(async (req: any) => (req.tools ? { toolCalls: [runCall(++i, "npx vitest run")], usage: undefined } : { toolCalls: [], usage: undefined }));
