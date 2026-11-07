@@ -37,7 +37,7 @@ export const PLANNING_TOOLS = new Set([
 export const PLANNING_NOTE =
   "If this message is a question or otherwise doesn't change files, just answer it, and don't mention plans. " +
   "If it asks for changes to files, only plan for now: read what you need, then call update_plan with the " +
-  "steps, and stop. Don't change any files yet: the user reviews the plan and runs it.";
+  "steps, explain in plain words what it will change for the user, and stop. Don't change any files yet: the user reviews the plan and runs it.";
 
 // The plan from an update_plan call's arguments, merged with the plan so far.
 // Only chat's check ticks a step off, so a step keeps its id, status and note

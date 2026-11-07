@@ -9,8 +9,9 @@ const step = (over: Record<string, unknown> = {}) => ({ summary: "Make a stuck s
 
 describe("update_plan", () => {
   it("accepts steps with a summary and text", async () => {
-    expect(await run({ steps: [step(), step({ summary: "Add a test" })] })).toBe("Plan saved: 2 steps. Stop here; the user runs it.");
-    expect(await run({ steps: [step()] })).toBe("Plan saved: 1 step. Stop here; the user runs it.");
+    const tail = "Now tell the user in plain words what the plan changes for them, then stop; they run it.";
+    expect(await run({ steps: [step(), step({ summary: "Add a test" })] })).toBe(`Plan saved: 2 steps. ${tail}`);
+    expect(await run({ steps: [step()] })).toBe(`Plan saved: 1 step. ${tail}`);
   });
 
   it("accepts an optional plan summary and context", async () => {

@@ -435,8 +435,9 @@ vitest (`npm test`).
 - Your message gets a note, sent to the model after it but not shown: "If
   this message is a question or otherwise doesn't change files, just answer
   it, and don't mention plans. If it asks for changes to files, only plan for
-  now: read what you need, then call update_plan with the steps, and stop.
-  Don't change any files yet…" The question case comes first: led by "only
+  now: read what you need, then call update_plan with the steps, explain in
+  plain words what it will change for the user, and stop. Don't change any
+  files yet…" The question case comes first: led by "only
   plan", the model began its answers with "This is a question, not a file
   change request", replying to a note you never see. In that turn the model
   can only use `update_plan`, the read tools (`list_directory`,
@@ -464,6 +465,18 @@ vitest (`npm test`).
     calls in one turn, each slightly different, so the repeat guard never
     fired). A call the plan tool refuses (say, over 12 steps) doesn't end
     the turn, so the model can try again.
+  - **The model explains the plan in plain words first.** The tool's
+    instructions (`planInstructions` in `server/plan.ts`) tell it to write two
+    or three plain sentences before calling `update_plan`, as if to someone who
+    hasn't read the code: what is wrong or missing as you see it, what will
+    look or work differently afterwards, and what stays the same, with no file
+    or internal names unless you used them. That text is the chat message above
+    the plan card. The plan's one-sentence summary says the same effect, and
+    step summaries use everyday words. The instructions and the tool's
+    "Plan saved" result also ask for a plain wrap-up after saving, pointing at
+    the plan; but because the turn ends as soon as the plan lands (above), the
+    model gets no round to write it, so the explanation before the call is the
+    one you can count on.
   - **It answers instead**, which is what it should do for a question: you
     get the answer and no plan. A small model may still plan something
     simple, or answer something it should have planned.
@@ -481,8 +494,9 @@ vitest (`npm test`).
   A plan over a limit is refused with an error such as "at most 12 steps;
   merge some", and the model has to try again.
 - **Summaries**: every step also has a short `summary`, a to-do line of about
-  8 words (at most 80 characters) such as "Make a stuck step retry twice",
-  and the plan can have a one-sentence summary of its own. The card shows the
+  8 words (at most 80 characters) such as "Make a stuck step retry twice", in
+  everyday words, and the plan can have a one-sentence summary of its own that
+  says what will be different for you. The card shows the
   summary as the step's main line, with the full instruction at the top of the
   step's chevron (the same one that shows what happened); the model still gets
   the instruction when the step runs. Plans saved before summaries show the
