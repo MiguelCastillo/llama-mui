@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ToolError, type ToolSpec, fn, requireApproval } from "./toolkit.ts";
+import { ToolError, type ToolSpec, fn, reasonOf, requireApproval } from "./toolkit.ts";
 
 const TIME_LIMIT_MS = 30_000;
 export const MAX_CHARS = 12_000;
@@ -223,6 +223,11 @@ const inspectPage: ToolSpec = {
           description:
             "Optional JavaScript to run in the page: an expression, or statements ending in return. The result must be JSON-serializable.",
         },
+        reason: {
+          type: "string",
+          description:
+            "One plain sentence on why this page needs opening, in terms of what the user asked for. Don't repeat the URL.",
+        },
       },
       required: ["url"],
     },
@@ -238,7 +243,10 @@ const inspectPage: ToolSpec = {
     if (args.script !== undefined && typeof args.script !== "string") throw new ToolError("script must be a string of JavaScript");
     const chrome = findChrome();
     if (!chrome) throw new ToolError(NO_CHROME);
-    if (!isLocalHost(url)) requireApproval(ctx, { type: "page", url: url.href, host: url.host });
+    if (!isLocalHost(url)) {
+      const reason = reasonOf(args);
+      requireApproval(ctx, { type: "page", url: url.href, host: url.host, ...(reason ? { reason } : {}) });
+    }
     return inspect(url, args.script, chrome);
   },
 };

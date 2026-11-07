@@ -317,6 +317,14 @@ changes; the thread's own Result shows it once the plan has stopped. Nothing
 shows when the session has no worktree, or its worktree was removed. A branch
 that was squash-merged still counts its commits as not on main.
 
+**Why you're asked.** Every approval prompt (a file change, a command, a
+worktree removal, a page outside localhost) starts with a line, "Why: ...", with
+the model's one-sentence reason in terms of what you asked for. The model fills
+it in on the tool call and is told to always do so; it is cut at 200
+characters. If the model gave none, the line reads "No reason given" in muted
+text. The reason is the model's own account, not something the server checks, so
+the command, diff, path or URL under it is still what you approve.
+
 **Approving for a session.** An approval prompt has a button under Approve and
 Deny that approves the same kind of thing for the rest of that session, so a
 plan that makes ten edits or runs a dozen commands doesn't stop ten or twelve

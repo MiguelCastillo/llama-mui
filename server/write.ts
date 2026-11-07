@@ -10,9 +10,12 @@ import path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { inSessionWorktrees, isInside, isSettingsFile, looksBinary, needAccess, toAbsolute } from "./disk.ts";
 import { markRead, requireRead } from "./reads.ts";
-import { type Approval, type ToolContext, ToolError, type ToolSpec, fn, reachableRoots, requireApproval } from "./toolkit.ts";
+import { type Approval, type ToolContext, ToolError, type ToolSpec, fn, reachableRoots, reasonOf, requireApproval } from "./toolkit.ts";
 
 const MAX_WRITE_BYTES = 1024 * 1024;
+
+const REASON_DESCRIPTION =
+  "One plain sentence on why this change is needed, in terms of what the user asked for. Don't repeat the path or the change.";
 
 // Where a write lands, with symlinks resolved. The file may not exist yet;
 // then its nearest existing folder is resolved, so a symlink can't lead the
@@ -66,12 +69,25 @@ const countLines = (s: string) => (s ? s.split("\n").length - (s.endsWith("\n") 
 // Writes `after` once the user has approved exactly this change.
 type ChangeAction = Extract<Approval, { type: "change" }>["action"];
 
-async function commit(ctx: ToolContext, file: string, before: string | null, after: string, action: ChangeAction) {
+async function commit(
+  ctx: ToolContext,
+  file: string,
+  before: string | null,
+  after: string,
+  action: ChangeAction,
+  reason?: string,
+) {
   if (Buffer.byteLength(after) > MAX_WRITE_BYTES) throw new ToolError("the new content is over 1 MB");
   if (before === after) throw new ToolError(`${file} already has that content; nothing to change`);
   // `file` is already resolved (see resolveWritable), so a worktree is checked by its real path.
   if (!(await inSessionWorktrees(file))) {
-    requireApproval(ctx, { type: "change", path: file, action, diff: hunks(file, before ?? "", after) });
+    requireApproval(ctx, {
+      type: "change",
+      path: file,
+      action,
+      diff: hunks(file, before ?? "", after),
+      ...(reason ? { reason } : {}),
+    });
   }
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, after);
@@ -94,6 +110,7 @@ const writeTextFile: ToolSpec = {
       properties: {
         path: { type: "string", description: "Path of the file, absolute or relative to the working directory." },
         content: { type: "string", description: "The complete new content of the file." },
+        reason: { type: "string", description: REASON_DESCRIPTION },
       },
       required: ["path", "content"],
     },
@@ -103,7 +120,7 @@ const writeTextFile: ToolSpec = {
     const file = await resolveWritable(ctx, args.path);
     const before = await readText(file);
     if (before !== null) requireRead(ctx.chatId, file, before);
-    await commit(ctx, file, before, args.content, before === null ? "create" : "overwrite");
+    await commit(ctx, file, before, args.content, before === null ? "create" : "overwrite", reasonOf(args));
     const lines = countLines(args.content);
     return `${before === null ? "Created" : "Replaced"} ${file} (${lines} line${lines === 1 ? "" : "s"})`;
   },
@@ -127,6 +144,7 @@ const editTextFile: ToolSpec = {
         old_text: { type: "string", description: "The exact text to replace." },
         new_text: { type: "string", description: "The text to put in its place." },
         replace_all: { type: "boolean", description: "Replace every occurrence. Default false." },
+        reason: { type: "string", description: REASON_DESCRIPTION },
       },
       required: ["path", "old_text", "new_text"],
     },
@@ -146,7 +164,7 @@ const editTextFile: ToolSpec = {
     const newText = String(args.new_text ?? "");
     // A replacer function, so "$&" and the like in new_text stay literal.
     const after = args.replace_all ? before.split(oldText).join(newText) : before.replace(oldText, () => newText);
-    await commit(ctx, file, before, after, "edit");
+    await commit(ctx, file, before, after, "edit", reasonOf(args));
     const n = args.replace_all ? count : 1;
     return `Edited ${file}: replaced ${n} occurrence${n === 1 ? "" : "s"}`;
   },

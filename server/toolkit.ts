@@ -92,11 +92,26 @@ export type Approval =
       action: "create" | "overwrite" | "edit";
       // Unified diff hunks, without the file header.
       diff: string;
+      reason?: string;
     }
-  | { type: "command"; command: string; cwd: string }
-  | { type: "worktree"; action: "remove"; repo: string; branch: string; path: string }
+  | { type: "command"; command: string; cwd: string; reason?: string }
+  | { type: "worktree"; action: "remove"; repo: string; branch: string; path: string; reason?: string }
   // inspect_page on a host other than this computer.
-  | { type: "page"; url: string; host: string };
+  | { type: "page"; url: string; host: string; reason?: string };
+
+const REASON_MAX = 200;
+
+// The model's own words on why a call needs approval, from a tool call's
+// arguments: trimmed and clipped, or undefined when missing or blank. Callers
+// add it to the Approval only when defined, so the same arguments always give
+// the same Approval (requireApproval compares them serialized).
+export function reasonOf(args: unknown): string | undefined {
+  const raw = args && typeof args === "object" ? (args as { reason?: unknown }).reason : undefined;
+  if (typeof raw !== "string") return undefined;
+  const text = raw.trim();
+  if (!text) return undefined;
+  return text.length > REASON_MAX ? text.slice(0, REASON_MAX).trimEnd() : text;
+}
 
 // Thrown until the user approves. Chat runs the call again with the approval
 // it showed, serialized, in ToolContext.approved.

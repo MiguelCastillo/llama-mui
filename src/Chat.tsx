@@ -113,6 +113,7 @@ import {
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { pickModel } from "./modelChoice";
 import { copyText } from "./clipboard";
+import { approvalWhy } from "./approvalWhy";
 import { loadDraft, saveDraft } from "./drafts";
 import { submitDraft } from "./submitDraft";
 import { optimisticSend } from "./optimisticSend";
@@ -2979,6 +2980,7 @@ const CHANGE_VERB: Record<ChangeApproval["action"], string> = {
 // the user approves.
 function ApprovalPrompt({ approval, onDecide, onAlways }: { approval: Approval; onDecide: (allow: boolean) => void; onAlways?: (kind: AutoKind) => void }) {
   const isCommand = approval.type === "command";
+  const why = approvalWhy(approval.reason);
   return (
     <Alert
       severity={isCommand ? "warning" : "info"}
@@ -2995,6 +2997,9 @@ function ApprovalPrompt({ approval, onDecide, onAlways }: { approval: Approval; 
       }
       sx={{ "& .MuiAlert-message": { minWidth: 0, flexGrow: 1 } }}
     >
+      <Typography variant="body2" color={why.missing ? "text.secondary" : "text.primary"} sx={{ mb: 0.5, overflowWrap: "anywhere" }}>
+        {why.text}
+      </Typography>
       {approval.type === "command" ? (
         <>
           <Typography variant="body2">The model wants to run this command:</Typography>

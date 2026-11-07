@@ -542,11 +542,13 @@ export type Approval =
       action: "create" | "overwrite" | "edit";
       // Unified diff hunks.
       diff: string;
+      // Why the model needs this, in its own words (may be missing).
+      reason?: string;
     }
-  | { type: "command"; command: string; cwd: string }
-  | { type: "worktree"; action: "remove"; repo: string; branch: string; path: string }
+  | { type: "command"; command: string; cwd: string; reason?: string }
+  | { type: "worktree"; action: "remove"; repo: string; branch: string; path: string; reason?: string }
   // inspect_page on a host other than this computer.
-  | { type: "page"; url: string; host: string };
+  | { type: "page"; url: string; host: string; reason?: string };
 
 // Text for the model, a path outside the attachments that the user must allow
 // before the call can run, or something the user must approve.

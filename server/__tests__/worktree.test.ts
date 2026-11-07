@@ -193,6 +193,27 @@ describe("remove_worktree", () => {
     expect(git(repo, "branch", "--list", "llama/clean")).toContain("llama/clean");
   });
 
+  it("carries the model's reason in the approval when given, and omits it otherwise", async () => {
+    await call("create_worktree", { repo, name: "why" });
+    const plain = await call("remove_worktree", { name: "why" });
+    expect("reason" in plain.needsApproval).toBe(false);
+
+    const args = { name: "why", reason: "  Cleaning up the worktree you're done with  " };
+    const first = await call("remove_worktree", args);
+    expect(first.needsApproval).toEqual({
+      type: "worktree",
+      action: "remove",
+      repo,
+      branch: "llama/why",
+      path: worktree("why"),
+      reason: "Cleaning up the worktree you're done with",
+    });
+    // Re-run with the same args, it matches what was shown and goes ahead.
+    const done = await call("remove_worktree", args, "sess-1", first.needsApproval);
+    expect(done.result).toContain("Removed the worktree");
+    expect(await exists(worktree("why"))).toBe(false);
+  });
+
   it("refuses a name that isn't one of this session's worktrees", async () => {
     expect((await call("remove_worktree", { name: "ghost" })).result).toContain("no worktree named ghost");
     expect((await call("remove_worktree", { name: "made" }, "sess-2")).result).toContain("no worktree named made");

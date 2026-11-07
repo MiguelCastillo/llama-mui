@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { resolveAllowed } from "./disk.ts";
-import { type ToolContext, ToolError, type ToolSpec, fn, requireApproval } from "./toolkit.ts";
+import { type ToolContext, ToolError, type ToolSpec, fn, reasonOf, requireApproval } from "./toolkit.ts";
 
 const TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_OUTPUT_CHARS = 50_000;
@@ -108,6 +108,11 @@ const runCommand: ToolSpec = {
           type: "string",
           description: "Folder to run in, absolute or relative to the working directory. Defaults to the working directory.",
         },
+        reason: {
+          type: "string",
+          description:
+            "One plain sentence on why this is needed, in terms of what the user asked for. Don't repeat the command.",
+        },
       },
       required: ["command"],
     },
@@ -116,7 +121,8 @@ const runCommand: ToolSpec = {
     const command = String(args.command ?? "").trim();
     if (!command) throw new ToolError("command is required");
     const cwd = await workingDir(ctx, args.cwd);
-    requireApproval(ctx, { type: "command", command, cwd });
+    const reason = reasonOf(args);
+    requireApproval(ctx, { type: "command", command, cwd, ...(reason ? { reason } : {}) });
     return exec(command, cwd);
   },
 };

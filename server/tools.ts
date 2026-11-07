@@ -112,7 +112,9 @@ const GROUPS: Group[] = [
       "You can run shell commands with run_command, for example git, gh or npm; it runs on the user's computer, " +
       "which has network access and their credentials even though you don't. The user approves each command " +
       "before it runs. Run one command at a time, explain what it's for, and never run anything destructive " +
-      "(rm -rf, force pushes, resets) unless the user asked for it.",
+      "(rm -rf, force pushes, resets) unless the user asked for it. Whenever a tool needs the user's approval, " +
+      "always fill `reason` with one plain sentence about why, in terms of what the user asked for, not a " +
+      "restatement of the command or path (good: 'Checking which commit that hash is'; bad: 'Running git log').",
   },
   {
     id: "web",

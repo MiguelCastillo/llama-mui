@@ -18,7 +18,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { isInside, toAbsolute } from "./disk.ts";
 import { sessionFolder } from "./sessions.ts";
-import { type ToolContext, ToolError, type ToolSpec, fn, requireApproval } from "./toolkit.ts";
+import { type ToolContext, ToolError, type ToolSpec, fn, reasonOf, requireApproval } from "./toolkit.ts";
 
 const run = promisify(execFile);
 
@@ -165,7 +165,14 @@ const removeWorktree: ToolSpec = {
       "changes. The branch stays, with its commits.",
     {
       type: "object",
-      properties: { name: { type: "string", description: "The worktree's name, as create_worktree returned it." } },
+      properties: {
+        name: { type: "string", description: "The worktree's name, as create_worktree returned it." },
+        reason: {
+          type: "string",
+          description:
+            "One plain sentence on why this is needed, in terms of what the user asked for. Don't repeat the worktree's name or path.",
+        },
+      },
       required: ["name"],
     },
   ),
@@ -187,7 +194,8 @@ const removeWorktree: ToolSpec = {
       throw new ToolError(`${name} has ${dirty.length} uncommitted change${dirty.length === 1 ? "" : "s"}; commit or discard them first`);
     }
 
-    requireApproval(ctx, { type: "worktree", action: "remove", repo, branch, path: target });
+    const reason = reasonOf(args);
+    requireApproval(ctx, { type: "worktree", action: "remove", repo, branch, path: target, ...(reason ? { reason } : {}) });
     await git(repo, "worktree", "remove", target);
     return `Removed the worktree ${target}. The branch ${branch} is kept in ${repo}, with its commits.`;
   },
