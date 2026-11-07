@@ -146,6 +146,55 @@ describe("image base64 collection in makeReply", () => {
     expect(callArgs.images![img2Id]).toBe(Buffer.from("bytes-2").toString("base64"));
   });
 
+  it("passes base64 for an image attached to the message being sent (history has none)", async () => {
+    const newId = "aaaaaaaa-bbbb-cccc-dddd-444444444444";
+    const imgDir = path.join(home.dir, ".llama-mui", "sessions", "e", "images");
+    await mkdir(imgDir, { recursive: true });
+    await writeFile(path.join(imgDir, `${newId}.png`), Buffer.from("new-bytes"));
+
+    putFile("e", { ...makeSession("e", 0), plan: null, messages: [], revision: 4 });
+
+    const { makeReply: realMakeReply } = await import("../../src/runnerReply.ts");
+
+    const started = await runners.startTurn(
+      "e",
+      env,
+      { text: "look", planning: false, images: [{ id: newId, mediaType: "image/png" }] },
+      { reply: realMakeReply, save: (s) => hub.save(s.id, s) },
+    );
+    await vi.waitFor(() => expect(streamChatSpy).toHaveBeenCalled());
+    await started.done;
+
+    const callArgs = streamChatSpy.mock.calls[0][0] as any;
+    expect(callArgs.images).toBeDefined();
+    expect(callArgs.images![newId]).toBe(Buffer.from("new-bytes").toString("base64"));
+
+    // The ref is saved with the message, the bytes are not.
+    const done = fileOf("e");
+    const sent = done.messages.find((m: ChatMessage) => m.content === "look");
+    expect(sent.images).toEqual([{ id: newId, mediaType: "image/png" }]);
+    expect(JSON.stringify(done)).not.toContain(Buffer.from("new-bytes").toString("base64"));
+  });
+
+  it("leaves a missing file for the new message undefined, without throwing", async () => {
+    const missingId = "aaaaaaaa-bbbb-cccc-dddd-555555555555";
+    putFile("f", { ...makeSession("f", 0), plan: null, messages: [], revision: 4 });
+
+    const { makeReply: realMakeReply } = await import("../../src/runnerReply.ts");
+
+    const started = await runners.startTurn(
+      "f",
+      env,
+      { text: "look", planning: false, images: [{ id: missingId, mediaType: "image/png" }] },
+      { reply: realMakeReply, save: (s) => hub.save(s.id, s) },
+    );
+    await vi.waitFor(() => expect(streamChatSpy).toHaveBeenCalled());
+    await started.done; // rejects if the missing file broke the reply
+
+    const callArgs = streamChatSpy.mock.calls[0][0] as any;
+    expect(callArgs.images?.[missingId]).toBeUndefined();
+  });
+
   it("does not include base64 in the saved session or events", async () => {
     const imgId = "aaaaaaaa-bbbb-cccc-dddd-333333333333";
     const imgDir = path.join(home.dir, ".llama-mui", "sessions", "d", "images");

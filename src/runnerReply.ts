@@ -60,22 +60,21 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     // only when they changed since the last one the model saw.
     const seen = [...before.slice(start)].reverse().find((m) => m.update)?.update;
 
-    // Collect every image ref from the history the model sees, read them as
-    // base64, and build the map so streamChat gets the data (never saved).
+    // Collect every image ref from the history the model sees, plus the refs
+    // of the message being sent (runTurn adds it to history later), read them
+    // as base64, and build the map so streamChat gets the data (never saved).
     const history = before.slice(start);
     const imageMap: Record<string, string> = {};
-    for (const m of history) {
-      if (m.images?.length) {
-        for (const img of m.images) {
-          if (!(img.id in imageMap)) {
-            try {
-              const buf = await h.readImage!(h.sessionId, img.id);
-              imageMap[img.id] = buf.toString("base64");
-            } catch {
-              // Missing file: skip it (the wire step adds a note).
-            }
-          }
-        }
+    const refs = [...history.flatMap((m) => m.images ?? []), ...(images ?? [])];
+    const tried = new Set<string>();
+    for (const img of refs) {
+      if (tried.has(img.id)) continue;
+      tried.add(img.id);
+      try {
+        const buf = await h.readImage!(h.sessionId, img.id);
+        imageMap[img.id] = buf.toString("base64");
+      } catch {
+        // Missing file: skip it (the wire step adds a note).
       }
     }
 

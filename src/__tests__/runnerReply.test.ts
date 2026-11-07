@@ -160,6 +160,30 @@ describe("makeReply", () => {
     });
   });
 
+  it("reads the new message's image refs, once each, and tolerates a missing file", async () => {
+    const h = makeHandle();
+    okTurn();
+    h.readImage.mockImplementation(async (_sid: string, id: string) => {
+      if (id === "gone") throw new Error("ENOENT");
+      return Buffer.from(id);
+    });
+    const refs = [
+      { id: "new1", mediaType: "image/png" },
+      { id: "gone", mediaType: "image/png" },
+    ];
+    const history = [{ ...user("earlier"), images: [{ id: "new1", mediaType: "image/png" }] }];
+    const result = await makeReply(h.handle)("look", history, { images: refs });
+
+    expect(result.ok).toBe(true);
+    expect(h.readImage).toHaveBeenCalledWith("a", "new1");
+    expect(h.readImage).toHaveBeenCalledWith("a", "gone");
+    // "new1" is in both history and the new message: read once.
+    expect(h.readImage.mock.calls.filter((c) => c[1] === "new1")).toHaveLength(1);
+    const config = mockRunTurn.mock.calls[0][0] as RunTurnConfig;
+    expect(config.images).toEqual(refs);
+    expect(config.imagesBase64).toEqual({ new1: Buffer.from("new1").toString("base64") });
+  });
+
   it("fixes the prompt directory from the working directory, once", async () => {
     const h = makeHandle();
     okTurn();
