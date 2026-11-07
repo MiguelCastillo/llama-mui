@@ -5,6 +5,13 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import { reportParts, threadLabel, type NoteView } from "./planThread";
 import WorktreeLines from "./WorktreeLines";
+import MarkdownRenderer from "./MarkdownRenderer";
+
+// Puts the "Follow-up:" / "Next:" label at the start of a line in bold, so the
+// follow-up stands out at the regular message size.
+function boldLabels(text: string): string {
+  return text.replace(/^([ \t]*)(follow-up|next):/gim, "$1**$2:**");
+}
 
 // The note where a plan moved out to its own session (a thread): one line,
 // "Running in a thread: <summary>" with a spinner while the thread's run is
@@ -40,13 +47,13 @@ export default function ThreadNote({
   const isDone = ended && status === "done";
   const isTrouble = ended && (status === "failed" || status === "unfinished");
   const parts = isDone && view.report ? reportParts(view.report) : undefined;
+  // The same size and colour as a regular message: the text goes through
+  // MarkdownRenderer. No pre-wrap here, the renderer keeps line breaks itself.
   const reportStyle = {
-    display: "block",
     px: 1,
     pb: 0.5,
     textAlign: "left",
     userSelect: "text",
-    whiteSpace: "pre-wrap",
   } as const;
 
   return (
@@ -55,7 +62,14 @@ export default function ThreadNote({
         size="small"
         onClick={onOpen}
         disabled={status === "missing"}
-        sx={{ textTransform: "none", justifyContent: "flex-start", textAlign: "left", width: "100%" }}
+        sx={{
+          textTransform: "none",
+          justifyContent: "flex-start",
+          textAlign: "left",
+          width: "100%",
+          fontSize: "1rem",
+          lineHeight: "inherit",
+        }}
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
           {view.running && <CircularProgress size="0.875rem" sx={{ flexShrink: 0 }} aria-label="Running" />}
@@ -85,9 +99,9 @@ export default function ThreadNote({
       {parts ? (
         <>
           {parts.followUp.length > 0 && (
-            <Typography variant="caption" color="text.secondary" sx={reportStyle}>
-              {parts.followUp.join("\n")}
-            </Typography>
+            <Box sx={reportStyle}>
+              <MarkdownRenderer content={boldLabels(parts.followUp.join("\n"))} breaks />
+            </Box>
           )}
           {parts.body && (
             <>
@@ -100,18 +114,18 @@ export default function ThreadNote({
                 {showDetails ? "Hide details" : "Details"}
               </Button>
               <Collapse in={showDetails} unmountOnExit>
-                <Typography variant="caption" color="text.secondary" sx={reportStyle}>
-                  {parts.body}
-                </Typography>
+                <Box sx={reportStyle}>
+                  <MarkdownRenderer content={parts.body} breaks />
+                </Box>
               </Collapse>
             </>
           )}
         </>
       ) : (
         view.report && (
-          <Typography variant="caption" color="text.secondary" sx={reportStyle}>
-            {view.report}
-          </Typography>
+          <Box sx={reportStyle}>
+            <MarkdownRenderer content={boldLabels(view.report)} breaks />
+          </Box>
         )
       )}
       {isTrouble && !prompt && !needsYou && (
