@@ -112,6 +112,8 @@ import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { pickModel } from "./modelChoice";
 import { copyText } from "./clipboard";
 import { loadDraft, saveDraft } from "./drafts";
+import { submitDraft } from "./submitDraft";
+import { optimisticSend } from "./optimisticSend";
 import { newId } from "./uuid";
 import SessionSettings, { ATTACHMENTS_LOCKED_NOTE, AttachmentIcon } from "./SessionSettings";
 import SessionsPanel from "./SessionsPanel";
@@ -1033,10 +1035,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
   const attach = (a: Attachment) => changeAttachments((as) => (as.some((x) => x.path === a.path) ? as : [...as, a]));
 
-  // Sends what the user typed. Returns whether it went, so the message box
-  // clears only then: it waits there while the session is saved and the server
-  // is told.
-  const send = async (text: string, images?: PendingImage[]) => {
+  // Sends what the user typed. Returns whether it went. `accepted` is called
+  // once the send is certain to start (not refused above), so the message box
+  // can clear at once instead of waiting while the session is saved and the
+  // server is told; if the send then fails, it returns false and the box
+  // gets its text back.
+  const send = async (text: string, images: PendingImage[] | undefined, accepted: () => void) => {
     // While a plan runs, a message goes to the run: the server folds it in
     // before the next step and says which one (see the notes under the chat),
     // or refuses, and then the text stays in the box.
@@ -1070,6 +1074,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // says in the reply if the model isn't loaded or is still loading. That is
     // one request from the tap instead of two.
     toBottom();
+    accepted();
     return chatTurn(text, messages, planOn, images);
   };
 
@@ -1090,7 +1095,24 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // question for the user, an error. `planning`: the reply only writes a plan
   // (see PLANNING_NOTE). Returns whether it went; a refusal shows as the error,
   // in the server's own words, and the text stays where it was typed.
-  const chatTurn = async (text: string, before: ChatMessage[], planning: boolean, pendingImages?: PendingImage[], existingRefs?: ImageRef[]): Promise<boolean> => {
+  const chatTurn = (text: string, before: ChatMessage[], planning: boolean, pendingImages?: PendingImage[], existingRefs?: ImageRef[]): Promise<boolean> => {
+    if (!runOptions()) return Promise.resolve(false);
+    const id = sessionId;
+    // Show the message at once; the saves and the server's answer follow. Its
+    // images have no refs until they're uploaded, so they appear later. If it
+    // doesn't go, what was shown before comes back (unless the server's copy of
+    // the session has arrived and replaced it already).
+    return optimisticSend({
+      before,
+      message: { role: "user", content: text },
+      prior: messages,
+      setMessages,
+      canShow: () => openId.current === id,
+      canRestore: () => openId.current === id && !getView(id)?.session,
+      work: () => runTurn(text, before, planning, pendingImages, existingRefs),
+    });
+  };
+  const runTurn = async (text: string, before: ChatMessage[], planning: boolean, pendingImages?: PendingImage[], existingRefs?: ImageRef[]): Promise<boolean> => {
     const options = runOptions();
     if (!options) return false;
     const id = sessionId;
@@ -1120,9 +1142,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           const uploads = pendingImages.map((img) => uploadImage(id, img.blob));
           refs = await Promise.all(uploads);
         } catch (e) {
-          // Upload failed: revoke previews, delete any images that did upload,
-          // and clean up the empty session if one was created.
-          pendingImages.forEach((img) => revokePreview(img.preview));
+          // Upload failed: delete any images that did upload, and clean up the
+          // empty session if one was created. The previews stay alive because
+          // submitDraft restores these images to the box.
           const name = pendingImages[0]?.name ?? "Image";
           setError(`${name}: upload failed — ${e instanceof Error ? e.message : String(e)}`);
           // Delete any images that uploaded before the failure.
@@ -1524,7 +1546,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       setPendingStart({ ...action, boundary: false });
     } else {
       setPendingStart(null);
-      send(action.text).then((sent) => {
+      send(action.text, undefined, () => {}).then((sent) => {
         if (!sent) setFill({ text: action.text, n: Date.now() });
       });
     }
@@ -1995,8 +2017,10 @@ function Composer({
   placeholder: string;
   // Text to put in the box and focus it (not sent); a new `n` is a new request.
   fill?: { text: string; n: number } | null;
-  // Resolves to whether the message went; the box clears only then.
-  onSend: (text: string, images?: PendingImage[]) => Promise<boolean>;
+  // Resolves to whether the message went. `accepted` is called as soon as the
+  // send is certain to start (never for a refused one), so the box can clear
+  // before the server has answered; a false result then means it failed.
+  onSend: (text: string, images: PendingImage[] | undefined, accepted: () => void) => Promise<boolean>;
   onStop?: () => void;
   disabled: boolean;
   // Whether a plan is running (attach button disabled with explanation).
@@ -2029,8 +2053,8 @@ function Composer({
     inputRef.current?.focus();
   }, [fill]);
   // From the tap until the message has gone (or been refused): the button shows
-  // it, and a second tap or Enter doesn't send the text again. The text stays
-  // in the box meanwhile and clears only when it went.
+  // it, and a second tap or Enter doesn't send the text again. The box clears
+  // as soon as the send is accepted, and gets the text back if it fails.
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   // Drop/paste helpers: validate, resize, store; revoke on remove.
@@ -2087,15 +2111,35 @@ function Composer({
     sendingRef.current = true;
     setSending(true);
     const sentFrom = sessionId;
+    const sentImages = pendingImages;
     try {
-      if (await onSend(t, pendingImages.length ? pendingImages : undefined)) {
+      // The box empties as soon as the send is accepted, without waiting for
+      // the server. Previews stay alive until the outcome is known, so a
+      // refused send can put them back (see submitDraft).
+      await submitDraft({
+        text: t,
+        images: sentImages,
+        stillShown: () => shownFor.current === sentFrom,
+        send: (accepted) => onSend(t, sentImages.length ? sentImages : undefined, accepted),
+        clear: () => {
+          setText("");
+          saveDraft(sentFrom, "");
+          setPendingImages([]);
+        },
+        restore: () => {
+          setText(text);
+          saveDraft(sentFrom, text);
+          setPendingImages(sentImages);
+        },
         // It went: that chat's draft is gone, the previews are revoked, and the
         // box is cleared unless another chat was opened meanwhile.
-        pendingImages.forEach((img) => revokePreview(img.preview));
-        setPendingImages([]);
-        saveDraft(sentFrom, "");
-        if (shownFor.current === sentFrom) setText("");
-      }
+        done: (shown) => {
+          sentImages.forEach((img) => revokePreview(img.preview));
+          setPendingImages([]);
+          saveDraft(sentFrom, "");
+          if (shown) setText("");
+        },
+      });
     } finally {
       sendingRef.current = false;
       setSending(false);
