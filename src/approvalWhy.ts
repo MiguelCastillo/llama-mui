@@ -22,11 +22,13 @@ export function readOnlyLabel(readOnly?: boolean | null): ReadOnlyLabel {
   return { text: "Not stated by the model", missing: true };
 }
 
-// Whether a prompt offers "Make plan": only for a command or a file change, and
-// only while the open run is a chat reply (where the model can still call
-// update_plan), not a plan step and not a thread's prompt shown in a note.
+// Whether a prompt offers "Make plan": every kind of approval (a command, a
+// file change, a worktree being removed, a page being opened), but only while
+// the open run is a chat reply (where the model can still call update_plan),
+// not a plan step and not a thread's prompt shown in a note.
+export const PLANNABLE = ["command", "change", "worktree", "page"];
 export function canMakePlan(approvalType: string, runKind?: string | null): boolean {
-  return (approvalType === "command" || approvalType === "change") && runKind === "turn";
+  return PLANNABLE.includes(approvalType) && runKind === "turn";
 }
 
 export function approvalWhy(reason?: string | null): ApprovalWhy {

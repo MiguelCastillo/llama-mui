@@ -22,7 +22,12 @@ describe("canMakePlan", () => {
     }
   });
 
-  it("is off for approvals that are neither a command nor a change", () => {
-    for (const type of ["page", "worktree"]) expect(canMakePlan(type, "turn")).toBe(false);
+  it("is on for a worktree removal and a page opening in a chat reply", () => {
+    for (const type of ["worktree", "page"]) expect(canMakePlan(type, "turn")).toBe(true);
+    for (const type of ["worktree", "page"]) expect(canMakePlan(type, "plan")).toBe(false);
+  });
+
+  it("is off for a kind of prompt that isn't an approval", () => {
+    for (const type of ["access", "location", ""]) expect(canMakePlan(type, "turn")).toBe(false);
   });
 });

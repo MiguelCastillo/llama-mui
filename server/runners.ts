@@ -699,12 +699,10 @@ export async function answerAsk(id: string, askId: string, answer: Answer) {
   if (location && answer === true) {
     throw new HttpError(409, "That question asks for a file or folder. Pick one, or say no.", { reason: "wrong answer" });
   }
-  if (answer === "plan") {
-    const ask = e.ask.ask;
-    if (!("needsApproval" in ask) || (ask.needsApproval as { type?: string }).type !== "command") {
-      throw new HttpError(409, "Only a command can be turned into a plan.", { reason: "wrong answer" });
-    }
-  } else if (!location && typeof answer !== "boolean") {
+  // "plan" is never refused: on an approval it turns the work into a plan; on
+  // a question that has no plan to make (a path to find, a folder to open) the
+  // run reads it as a no.
+  if (answer !== "plan" && !location && typeof answer !== "boolean") {
     throw new HttpError(409, "That question is a yes or no. A picked file or folder doesn't answer it.", {
       reason: "wrong answer",
     });

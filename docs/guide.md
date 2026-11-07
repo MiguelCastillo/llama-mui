@@ -484,14 +484,16 @@ vitest (`npm test`).
   only**, **Changes things**, or **Not stated by the model**. The label is the
   model's claim, not a check: the prompt still appears either way, and
   nothing is blocked by it.
-- Command and file-change prompts offer **Allow**, **Deny** and **Make
-  plan**. Make plan runs and writes nothing: the model's tool result says the
-  user wants this as a plan, so it calls `update_plan` with the steps, this
-  command or change included, and stops. It is how you turn simple work into
-  a plan when the model chose to do it in the chat. The button shows only for
-  a command or file-change approval while the open run is a chat turn
-  (`canMakePlan` in `src/approvalWhy.ts`). Approvals of a plan's own run, and
-  the ones in a thread's notes, have only Allow and Deny.
+- Every approval prompt (a command, a file change, a worktree being removed,
+  a page being opened) offers **Allow**, **Deny** and **Make plan**. Make plan
+  runs and writes nothing: the model's tool result says the user wants this as
+  a plan, so it calls `update_plan` with the steps, this command, change,
+  removal or page included, and stops. It is how you turn simple work into a
+  plan when the model chose to do it in the chat. The button shows while the
+  open run is a chat turn (`canMakePlan` in `src/approvalWhy.ts`). Approvals
+  of a plan's own run, and the ones in a thread's notes, have only Allow and
+  Deny. The server never refuses a Make plan answer; on a question with no
+  plan to make (a path to find) the run reads it as a no.
 - Why it's done that way: llama.cpp reuses its cache for the part of a
   prompt that matches the last one from the start. Putting the note in the
   system prompt, or offering fewer tools, changed that start, and the server

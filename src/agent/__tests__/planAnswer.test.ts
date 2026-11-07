@@ -8,7 +8,7 @@ vi.mock("../../api", async (importOriginal) => {
   return { ...actual, streamChat: mockStream, runTool: mockRunTool };
 });
 
-import { runTurn, PLAN_INSTEAD_RESULT, PLAN_INSTEAD_CHANGE_RESULT } from "../agent";
+import { runTurn, PLAN_INSTEAD_RESULT, PLAN_INSTEAD_CHANGE_RESULT, PLAN_INSTEAD_WORKTREE_RESULT, PLAN_INSTEAD_PAGE_RESULT } from "../agent";
 
 // The model calls a tool that needs the user's answer; "plan" is the third
 // answer to a command's approval. The model and the tool server are mocks.
@@ -96,11 +96,29 @@ describe("Make plan on a command approval", () => {
     expect(toolText(r.messages)[0]).toMatch(/^Error: the user didn't approve this change/);
   });
 
-  it("is a refusal for a worktree or page approval", async () => {
+  it("on a worktree removal changes nothing and tells the model to call update_plan", async () => {
     const t = setup({ needsApproval: { type: "worktree", path: "/w/x" } }, "plan", "remove_worktree");
     const r = await runTurn(t.config, t.cb);
     expect(t.ran).toEqual([]);
-    expect(toolText(r.messages)[0]).toMatch(/^Error: the user didn't approve removing the worktree/);
+    expect(toolText(r.messages)).toEqual([PLAN_INSTEAD_WORKTREE_RESULT]);
+    expect(PLAN_INSTEAD_WORKTREE_RESULT).toMatch(/update_plan/);
+  });
+
+  it("on a page opening opens nothing and tells the model to call update_plan", async () => {
+    const t = setup({ needsApproval: { type: "page", url: "https://example.com", host: "example.com" } }, "plan", "inspect_page");
+    const r = await runTurn(t.config, t.cb);
+    expect(t.ran).toEqual([]);
+    expect(toolText(r.messages)).toEqual([PLAN_INSTEAD_PAGE_RESULT]);
+    expect(PLAN_INSTEAD_PAGE_RESULT).toMatch(/update_plan/);
+  });
+
+  it("a no on a worktree removal or a page is still a refusal", async () => {
+    const wt = setup({ needsApproval: { type: "worktree", path: "/w/x" } }, false, "remove_worktree");
+    expect(toolText((await runTurn(wt.config, wt.cb)).messages)[0]).toMatch(/^Error: the user didn't approve removing the worktree/);
+    mockStream.mockReset();
+    mockRunTool.mockReset();
+    const page = setup({ needsApproval: { type: "page", url: "https://example.com", host: "example.com" } }, false, "inspect_page");
+    expect(toolText((await runTurn(page.config, page.cb)).messages)[0]).toMatch(/^Error: the user didn't allow opening https:\/\/example.com/);
   });
 
   it("is a refusal for an access question", async () => {

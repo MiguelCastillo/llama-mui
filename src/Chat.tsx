@@ -3115,7 +3115,17 @@ function ApprovalPrompt({ approval, onDecide, onAlways, canMakePlan: offerPlan }
           Deny
         </Button>
         {offerPlan && (
-          <Tooltip title={isCommand ? "Don't run it now; the model turns it into a plan to review and run" : "Don't make this change now; the model turns it into a plan to review and run"}>
+          <Tooltip
+            title={
+              isCommand
+                ? "Don't run it now; the model turns it into a plan to review and run"
+                : approval.type === "worktree"
+                  ? "Don't remove it now; the model turns it into a plan to review and run"
+                  : approval.type === "page"
+                    ? "Don't open it now; the model turns it into a plan to review and run"
+                    : "Don't make this change now; the model turns it into a plan to review and run"
+            }
+          >
             <Button size="small" variant="outlined" onClick={() => onDecide("plan")}>
               Make plan
             </Button>

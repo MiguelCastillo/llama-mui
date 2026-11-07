@@ -173,24 +173,31 @@ describe("approve and answer", () => {
     await vi.waitFor(() => expect(askedAnswer("a", "s1")).toBe("plan"));
   });
 
-  it("plan is refused for anything but a command, and with a yes", async () => {
-    saved("a", 1);
-    askOn("a", "s1", { needsApproval: { type: "change", path: "/w/a", diff: "" } } as any);
-    await command("a", "run", options);
-    const askId = await waitingFor();
-    expect(await command("a", "approve", { askId, allow: false, plan: true })).toMatchObject({ status: 409, body: { reason: "wrong answer" } });
-    expect((await command("a", "approve", { askId, allow: true, plan: true })).status).toBe(400);
-    expect((await command("a", "approve", { askId, allow: false, plan: "yes" })).status).toBe(400);
-    expect(hub.liveRun("a")!.ask!.id).toBe(askId);
-  });
+  for (const [name, needsApproval] of [
+    ["a file change", { type: "change", path: "/w/a", diff: "" }],
+    ["a worktree removal", { type: "worktree", action: "remove", repo: "/r", branch: "b", path: "/w/x" }],
+    ["a page", { type: "page", url: "https://example.com", host: "example.com" }],
+  ] as const) {
+    it(`plan is accepted on ${name}, and still refused with a yes`, async () => {
+      saved("a", 1);
+      askOn("a", "s1", { needsApproval } as any);
+      await command("a", "run", options);
+      const askId = await waitingFor();
+      expect((await command("a", "approve", { askId, allow: true, plan: true })).status).toBe(400);
+      expect((await command("a", "approve", { askId, allow: false, plan: "yes" })).status).toBe(400);
+      expect(hub.liveRun("a")!.ask!.id).toBe(askId);
+      expect((await command("a", "approve", { askId, allow: false, plan: true })).status).toBe(200);
+      await vi.waitFor(() => expect(askedAnswer("a", "s1")).toBe("plan"));
+    });
+  }
 
-  it("plan is refused for a location ask", async () => {
+  it("plan on a question with no plan to make (a path to find) is not refused; the run reads it as a no", async () => {
     saved("a", 1);
     askOn("a", "s1", { needsLocation: { description: "the notes", kind: "folder" } });
     await command("a", "run", options);
     const askId = await waitingFor();
-    expect(await command("a", "approve", { askId, allow: false, plan: true })).toMatchObject({ status: 409, body: { reason: "wrong answer" } });
-    expect(hub.liveRun("a")!.ask!.id).toBe(askId);
+    expect((await command("a", "approve", { askId, allow: false, plan: true })).status).toBe(200);
+    await vi.waitFor(() => expect(askedAnswer("a", "s1")).toBe("plan"));
   });
 
   it("refuses an ask id that isn't the pending one", async () => {

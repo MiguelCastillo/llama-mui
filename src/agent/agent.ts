@@ -27,6 +27,25 @@ export const PLAN_INSTEAD_RESULT =
   "The user doesn't want this run now; they want it as a plan. Call update_plan with the steps, this command included, then stop.";
 export const PLAN_INSTEAD_CHANGE_RESULT =
   "The user doesn't want this done now; they want it as a plan. Call update_plan with the steps, this change included, then stop.";
+export const PLAN_INSTEAD_WORKTREE_RESULT =
+  "The user doesn't want this worktree removed now; they want it as a plan. Call update_plan with the steps, removing it included, then stop.";
+export const PLAN_INSTEAD_PAGE_RESULT =
+  "The user doesn't want this page opened now; they want it as a plan. Call update_plan with the steps, opening it included, then stop.";
+
+// What the model is told when "Make plan" answers this approval. Every kind of
+// approval can be turned into a plan: nothing ran, and the work goes into one.
+export function planInsteadResult(approval: { type: string }): string {
+  switch (approval.type) {
+    case "change":
+      return PLAN_INSTEAD_CHANGE_RESULT;
+    case "worktree":
+      return PLAN_INSTEAD_WORKTREE_RESULT;
+    case "page":
+      return PLAN_INSTEAD_PAGE_RESULT;
+    default:
+      return PLAN_INSTEAD_RESULT;
+  }
+}
 
 // ── repeat guard ────────────────────────────────────────────────────────────
 
@@ -361,11 +380,11 @@ export async function runTurn(
             } else {
               const approval = (outcome as any).needsApproval;
               // "plan" is truthy, so it is checked before the no.
-              if (answer === "plan" && (approval.type === "command" || approval.type === "change")) {
-                outcome = { result: approval.type === "change" ? PLAN_INSTEAD_CHANGE_RESULT : PLAN_INSTEAD_RESULT };
+              if (answer === "plan") {
+                outcome = { result: planInsteadResult(approval) };
                 break;
               }
-              if (!answer || answer === "plan") {
+              if (!answer) {
                 outcome = {
                   result:
                     approval.type === "change"
