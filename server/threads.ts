@@ -19,22 +19,47 @@
 // steps and the short report instead.
 
 import { type ChatMessage, type PlanStep, type PlanThread, streamChat } from "../src/api.ts";
-import { finalMessage, threadStatus } from "../src/planThread.ts";
+import { filesChanged, stepOutput } from "../src/agent/plan.ts";
+import { type ThreadResultParts, threadResultParts, threadStatus, worktreeLines } from "../src/planThread.ts";
 import { liveRun } from "./runHub.ts";
 import { readSession } from "./sessionFile.ts";
 import { ToolError, type ToolSpec, fn } from "./toolkit.ts";
+import { worktreeStatuses } from "./worktreeStatus.ts";
 
 // How long the thread's model has to write the summary.
 export const SUMMARY_TIMEOUT_MS = 180_000;
 const NOTE_MAX = 300;
+// The most read_thread answers for one step. When it is more, the start is cut:
+// what a step said and ran last is what explains how it ended.
+export const STEP_DETAIL_MAX = 6000;
+// The most read_thread's overview answers, whatever the thread holds. What the
+// chat needs to decide comes first and is kept whole up to its own limit: the
+// outcome, the result (its end, which is what the thread said last), what to do
+// next, and the note of the step that went wrong. The other steps' notes, then
+// the other steps, then the files and worktrees only take what room is left.
+export const OVERVIEW_MAX = 4000;
+export const RESULT_MAX = 1500;
+export const PROBLEM_NOTE_MAX = 800;
+export const OTHER_NOTE_MAX = 200;
+const STEP_HEAD_MAX = 240;
+const SUMMARY_MAX = 200;
 
 export const threadInstructions =
-  "When a plan ran in a thread, the chat gets a note with a short report, and a Chat update lists how each thread " +
-  "ended. If that isn't enough (the user asks what the thread did or found, or you need its result to go on), call " +
-  "read_thread: it gives the steps and the thread's own final message. Only if that still isn't enough, call " +
-  "summarize_thread: the thread's own model reads everything and writes a summary for you (say in `focus` what you " +
-  "need), but it sends the whole thread to a model and costs money, so don't use it first. Don't guess what a " +
-  "thread did from its report alone.";
+  "Threads do work apart from this chat, in parallel; this chat stays on the main train of thought with the user, " +
+  "so keep the thread's details out of it and pass on only what the user needs. When a plan ran in a thread, the " +
+  "chat gets a note with a short report, and a Chat update lists how each thread ended: start from those. When a " +
+  "thread ended done, say so in one line and don't recap its results; for trouble, state what went wrong and the " +
+  "next move. When a " +
+  "thread ended failed or not finished, or its report mentions a failed or disputed check, a step not done, " +
+  "something unconfirmed, or work that was not committed, call read_thread on your own, before you answer and " +
+  "without waiting to be asked. Also call it when the user asks what a thread did or found, or you need its result " +
+  "to go on. It gives a short overview: the outcome, each step with its note, the result, the files changed and the " +
+  "worktrees. State the outcome and the next move in plain words (make a plan when files must change); don't " +
+  "make the user ask. Call read_thread with `step` (the step's number) only to see why one step went wrong. Call " +
+  "summarize_thread, with in `focus` what you need, only when you need a digest the overview and a step can't " +
+  "give: the thread's own model reads everything and writes a summary for you, but it sends the whole thread to " +
+  "a model and costs money, so don't use it first. Never say you don't know what a thread did without reading it, " +
+  "and don't guess from the report alone.";
 
 const clip = (text: string, max: number) => {
   const one = text.replace(/\s+/g, " ").trim();
@@ -55,6 +80,95 @@ const stepLine = (s: PlanStep, i: number) => {
   const note = s.note ? ` (${clip(s.note, NOTE_MAX)})` : "";
   return `${i + 1}. ${clip(text, NOTE_MAX)}: ${STATE[s.status] ?? s.status}${note}`;
 };
+
+const keepEnd = (text: string, max: number) =>
+  text.length > max ? `…${text.slice(text.length - max + 1).trimStart()}` : text;
+
+// The overview of a thread, never longer than OVERVIEW_MAX, in the order
+// Thread, Outcome, steps, Result, Next, files, worktrees, and ending with a
+// line that says how to get more. When it has to be short, notes of steps that
+// went fine go first, then those steps, then the files and worktree lines; the
+// step the thread is stuck on keeps its note.
+export function overview(summary: string, parts: ThreadResultParts, files: string[], worktrees: string[]): string {
+  const count = parts.steps.length;
+  const more = count
+    ? `More: read_thread with \`step\` (1 to ${count}) for one step in detail, or summarize_thread with a \`focus\` for a digest (it costs money).`
+    : "More: summarize_thread with a `focus` for a digest (it costs money).";
+  const top = `Thread: ${clip(summary, SUMMARY_MAX)}`;
+  const tail = [
+    `${parts.result.head}${parts.result.text ? ` ${keepEnd(parts.result.text, RESULT_MAX)}` : ""}`,
+    parts.next,
+  ].filter(Boolean);
+  const build = (steps: string[], facts: string[]) =>
+    [top, [parts.outcome, ...steps, ...tail].join("\n"), ...facts, more].join("\n\n");
+
+  const lines = parts.steps.map((s) => ({
+    head: clip(s.head, STEP_HEAD_MAX),
+    note: clip(s.note, s.problem ? PROBLEM_NOTE_MAX : OTHER_NOTE_MAX),
+    problem: s.problem,
+  }));
+  const mode: ("full" | "head" | "hidden")[] = lines.map(() => "full");
+  const render = () => {
+    const out = lines.flatMap((l, i) =>
+      mode[i] === "hidden" ? [] : [mode[i] === "full" && l.note ? `${l.head} - ${l.note}` : l.head],
+    );
+    const hidden = mode.filter((m) => m === "hidden").length;
+    return hidden ? [...out, `(${hidden} more ${hidden === 1 ? "step" : "steps"} not shown)`] : out;
+  };
+  const fits = (steps: string[], facts: string[] = []) => build(steps, facts).length <= OVERVIEW_MAX;
+  for (const level of ["head", "hidden"] as const) {
+    for (let i = count - 1; i >= 0 && !fits(render()); i--) {
+      if (!lines[i].problem && mode[i] !== "hidden") mode[i] = level;
+    }
+  }
+  const steps = render();
+
+  const facts: string[] = [];
+  const add = (block: string) => {
+    if (fits(steps, [...facts, block])) facts.push(block);
+  };
+  if (files.length === 0) add("Files changed: none");
+  else {
+    for (let k = files.length; k >= 0; k--) {
+      const block =
+        k === 0
+          ? `Files changed: ${files.length} (not listed)`
+          : `Files changed:\n${files.slice(0, k).map((f) => `- ${f}`).join("\n")}${k < files.length ? `\n- …and ${files.length - k} more` : ""}`;
+      if (fits(steps, [block])) {
+        facts.push(block);
+        break;
+      }
+    }
+  }
+  for (const line of worktrees) add(line);
+  return build(steps, facts);
+}
+
+// The step number the model asked for (1-based, a number or digits), or null.
+const stepNumber = (value: unknown, count: number): number | null => {
+  const n = typeof value === "string" && /^\s*\d+\s*$/.test(value) ? Number(value) : value;
+  return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= count ? n : null;
+};
+
+// One step in detail: its text and state, what the model said during it and
+// what its commands and reads printed, cut at the start to STEP_DETAIL_MAX.
+export function stepDetail(step: PlanStep, n: number, messages: ChatMessage[]): string {
+  const mine = messages.filter((m) => m.planStep === step.id);
+  const said = mine.filter((m) => m.role === "assistant" && m.content?.trim()).map((m) => m.content.trim());
+  const printed = stepOutput(mine);
+  const head = [
+    `Step ${n}: ${step.text}`,
+    `State: ${STATE[step.status] ?? step.status}${step.note ? `\nNote: ${step.note}` : ""}`,
+  ].join("\n");
+  const body = [
+    `What the model said during the step:\n${said.length ? said.join("\n\n") : "(nothing)"}`,
+    `What its commands and reads printed:\n${printed || "(nothing)"}`,
+  ].join("\n\n");
+  if (head.length + 2 + body.length <= STEP_DETAIL_MAX) return `${head}\n\n${body}`;
+  const cut = "(the start was cut; this is the end)\n";
+  const room = Math.max(0, STEP_DETAIL_MAX - head.length - 2 - cut.length);
+  return `${head}\n\n${cut}${room ? body.slice(-room) : ""}`;
+}
 
 const WORDS: Record<string, string> = { done: "done", failed: "failed", unfinished: "not finished" };
 
@@ -159,11 +273,14 @@ const readThread: ToolSpec = {
   name: "read_thread",
   group: "threads",
   label: "Read a thread",
-  summary: "Read a thread's steps and its final message.",
+  summary: "Read how a thread's plan went: outcome, steps, result, files.",
   definition: fn(
     "read_thread",
-    "Read a thread this chat started: its steps and how each ended, and the thread's own final message, whole. " +
-      "Nothing is asked of a model. Works on a thread that has finished.",
+    "Read a thread this chat started: its outcome, its steps and how each ended (with their notes), the plan's " +
+      "result, the files changed and where its work lives. With `step`, read that one step in detail instead: what " +
+      "the model said during it and what its commands and reads printed (the end, if it is long). Use `step` only to " +
+      "see why one step went wrong. Answers are cut to a few thousand characters and say how to get more. Nothing is " +
+      "asked of a model. Works on a thread that has finished.",
     {
       type: "object",
       properties: {
@@ -171,14 +288,34 @@ const readThread: ToolSpec = {
           type: "string",
           description: "The thread's id, or a few words of its summary. Optional when this chat started only one thread.",
         },
+        step: {
+          type: "integer",
+          description: "A step's number, starting at 1, to read that step in detail instead of the overview. Optional.",
+        },
       },
     },
   ),
   async run(ctx, args) {
     const opened = await openThread(ctx.chatId, args?.thread, "read");
     if (opened.answer !== undefined) return opened.answer;
-    const text = finalMessage(opened.child.messages);
-    return `${opened.head}\n\n${text ? `The thread's final message:\n${text}` : "The thread has no final message."}`;
+    const { note, child } = opened;
+    const messages: ChatMessage[] = Array.isArray(child.messages) ? child.messages : [];
+    if (args?.step !== undefined && args.step !== null && args.step !== "") {
+      const steps: PlanStep[] = Array.isArray(child.plan) ? child.plan : [];
+      const n = stepNumber(args.step, steps.length);
+      if (n === null) {
+        throw new ToolError(
+          steps.length
+            ? `there is no step ${JSON.stringify(args.step)} in this thread; the steps are numbered 1 to ${steps.length}`
+            : "this thread has no steps to read",
+        );
+      }
+      return `Thread: ${note.summary}\n\n${stepDetail(steps[n - 1], n, messages)}`;
+    }
+    const files = filesChanged(messages.filter((m) => m.planStep));
+    // A git read that fails leaves the worktree lines out; it never fails the answer.
+    const worktrees = await worktreeStatuses(note.sessionId, messages).then(worktreeLines, () => [] as string[]);
+    return overview(note.summary, threadResultParts({ plan: child.plan, messages }), files, worktrees);
   },
 };
 

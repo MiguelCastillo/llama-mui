@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment, ChatMessage, PlanStep, PlanThread, Session } from "../api";
-import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage, noteAskKind, worktreeLine, worktreeLines } from "../planThread";
+import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage, threadResult, noteAskKind, worktreeLine, worktreeLines, reportParts } from "../planThread";
 
 const step = (id: string, status: PlanStep["status"] = "pending", extra: Partial<PlanStep> = {}): PlanStep => ({
   id,
@@ -350,6 +350,20 @@ describe("threadsUpdate", () => {
       ].join("\n"),
     );
   });
+
+  it("clips a long report to 400 characters and points to read_thread", () => {
+    const long = "x".repeat(1000);
+    const text = threadsUpdate([note({ status: "done", report: { text: long, at: 1 } })]);
+    expect(text).toContain(`  Report: ${"x".repeat(400)}… (read_thread for the rest)`);
+    expect(text).not.toContain("x".repeat(401));
+  });
+
+  it("keeps a report of exactly 400 characters whole", () => {
+    const exact = "y".repeat(400);
+    const text = threadsUpdate([note({ status: "done", report: { text: exact, at: 1 } })]);
+    expect(text).toContain(`  Report: ${exact}`);
+    expect(text).not.toContain("read_thread");
+  });
 });
 
 describe("finalMessage and planResult", () => {
@@ -368,12 +382,111 @@ describe("finalMessage and planResult", () => {
     expect(finalMessage(undefined)).toBe("");
   });
 
+  it("finalMessage removes a trailing verdict line", () => {
+    const m = (content: string): ChatMessage[] => [{ role: "assistant", content }];
+    expect(finalMessage(m("The check is wrong.\n\nSTEP DONE"))).toBe("The check is wrong.");
+    expect(finalMessage(m("Not fixed yet.\nstep not done"))).toBe("Not fixed yet.");
+  });
+
+  it("finalMessage skips a message that is only a verdict", () => {
+    const verdict: ChatMessage[] = [
+      { role: "assistant", content: "Changed the limit to 300.", planStep: "2" },
+      { role: "assistant", content: "STEP NOT DONE", planStep: "2" },
+    ];
+    expect(finalMessage(verdict)).toBe("Changed the limit to 300.");
+    expect(finalMessage([{ role: "assistant", content: "  step done \n" }])).toBe("");
+    expect(planResult([step("2", "done")], verdict)).toBe("Changed the limit to 300.");
+  });
+
+  it("finalMessage leaves normal text unchanged", () => {
+    const text = "All good.\nThe step is not done by hand; it is done by a script.";
+    expect(finalMessage([{ role: "assistant", content: `  ${text}\n` }])).toBe(text);
+  });
+
   it("planResult is the last step's last words, once the plan is done", () => {
     const done = [step("1", "done"), step("2", "done")];
     expect(planResult(done, msgs)).toBe("All done.\nFollow-up: restart the server.");
     expect(planResult([step("1", "done"), step("2", "pending")], msgs)).toBe("");
     expect(planResult(null, msgs)).toBe("");
     expect(planResult(done, [{ role: "assistant", content: "x", planStep: "1" }])).toBe("");
+  });
+});
+
+describe("threadResult", () => {
+  const said = (id: string, content: string): ChatMessage => ({ role: "assistant", content, planStep: id });
+
+  it("a successful thread: SUCCESS, each step with its time, and the plan's result", () => {
+    const text = threadResult({
+      plan: [step("1", "done", { ms: 12_000 }), step("2", "done", { ms: 125_000, note: "checked twice" })],
+      messages: [
+        said("1", "first"),
+        said("2", "All done.\nSTEP DONE"),
+        { role: "user", content: "thanks" },
+        { role: "assistant", content: "a later chat reply" },
+      ],
+    });
+    expect(text).toBe(
+      [
+        "Outcome: SUCCESS",
+        "1. [done, 12s] Step 1",
+        "2. [done, 2m 5s] Step 2 - checked twice",
+        "Result: All done.",
+      ].join("\n"),
+    );
+    expect(text).not.toContain("Next:");
+  });
+
+  it("a failed thread: FAILED, the whole note, the step's last words and a Next line", () => {
+    const note = "Check failed: the limit is still 200.\nSecond line of the note.";
+    const text = threadResult({
+      plan: [step("1", "done", { ms: 400 }), step("2", "failed", { note }), step("3")],
+      messages: [said("1", "ok"), said("2", "I changed the limit."), said("2", "STEP NOT DONE")],
+    });
+    expect(text).toContain("Outcome: FAILED");
+    expect(text).toContain("1. [done, <1s] Step 1");
+    expect(text).toContain("2. [failed] Step 2 - Check failed: the limit is still 200.\n    Second line of the note.");
+    expect(text).toContain("3. [pending] Step 3");
+    expect(text).toContain("Result: none yet. Step 2 last said: I changed the limit.");
+    expect(text).not.toContain("STEP NOT DONE");
+    expect(text).toMatch(/Next: step 2 failed\. Open the thread.*Continue/);
+  });
+
+  it("a disputed step asks the user to decide", () => {
+    const text = threadResult({
+      plan: [step("1", "disputed", { note: "check says no" })],
+      messages: [said("1", "It is done, see the file."), said("1", "STEP NOT DONE")],
+    });
+    expect(text).toContain("Outcome: FAILED");
+    expect(text).toContain("1. [disputed] Step 1 - check says no");
+    expect(text).toContain("Step 1 last said: It is done, see the file.");
+    expect(text).toMatch(/Next: the check said step 1 is not done, but the model showed it is\. Open the thread and decide/);
+  });
+
+  it("a waiting step shows its question and asks for an answer", () => {
+    const text = threadResult({
+      plan: [step("1", "done"), step("2", "waiting", { note: "Which folder?" })],
+      messages: [said("2", "I need to know where.")],
+    });
+    expect(text).toContain("Outcome: NOT FINISHED");
+    expect(text).toContain("2. [waiting] Step 2 - Which folder?");
+    expect(text).toMatch(/Next: step 2 is waiting for an answer\. Open the thread and answer it, then Continue/);
+  });
+
+  it("a thread stopped by a restart is NOT FINISHED and can be continued", () => {
+    const text = threadResult({
+      plan: [step("1", "done"), step("2", "running"), step("3")],
+      messages: [said("1", "ok")],
+    });
+    expect(text).toContain("Outcome: NOT FINISHED");
+    expect(text).toContain("2. [running] Step 2");
+    expect(text).toContain("Result: none yet. Step 2 last said: (nothing)");
+    expect(text).toMatch(/Next: the thread stopped before step 2 finished.*Open the thread and Continue/);
+  });
+
+  it("copes with a thread without a plan", () => {
+    const text = threadResult({ plan: null, messages: [] });
+    expect(text).toContain("Outcome: NOT FINISHED");
+    expect(text).toContain("Next:");
   });
 });
 
@@ -410,5 +523,31 @@ describe("worktreeLine", () => {
   it("shows nothing without worktrees", () => {
     expect(worktreeLines([])).toEqual([]);
     expect(worktreeLines(undefined)).toEqual([]);
+  });
+});
+
+describe("reportParts", () => {
+  it("pulls the follow-up line out of a success report", () => {
+    expect(reportParts("Added the toggle and tests.\nFollow-up: reload the page.")).toEqual({
+      body: "Added the toggle and tests.",
+      followUp: ["Follow-up: reload the page."],
+    });
+  });
+  it("treats 'Follow-up: none' as no follow-up", () => {
+    expect(reportParts("All done.\nFollow-up: none")).toEqual({ body: "All done.", followUp: [] });
+    expect(reportParts("All done.\n  follow-up: None.")).toEqual({ body: "All done.", followUp: [] });
+  });
+  it("pulls the Next line out of a failure report", () => {
+    expect(reportParts("The tests failed in step 2.\n  NEXT: fix the import and rerun.")).toEqual({
+      body: "The tests failed in step 2.",
+      followUp: ["NEXT: fix the import and rerun."],
+    });
+  });
+  it("leaves a long old report with no such line in the body", () => {
+    const old = "Outcome: done\n\n1. Step one - did it\n2. Step two - did it\n\nResult: all good, nothing next to do";
+    expect(reportParts(old)).toEqual({ body: old, followUp: [] });
+  });
+  it("copes with an empty string", () => {
+    expect(reportParts("")).toEqual({ body: "", followUp: [] });
   });
 });

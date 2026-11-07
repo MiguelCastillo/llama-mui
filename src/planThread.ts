@@ -152,25 +152,51 @@ const OUTCOME_WORDS: Record<ThreadOutcome, string> = {
   unfinished: "not finished",
 };
 
+// Each report is clipped so old, long reports don't fill the main chat.
+export const UPDATE_REPORT_MAX = 400;
+const CLIP_MARK = "… (read_thread for the rest)";
+
+const clipReport = (text: string): string => {
+  const one = text.replace(/\s*\n\s*/g, " ").trim();
+  return one.length > UPDATE_REPORT_MAX ? `${one.slice(0, UPDATE_REPORT_MAX).trimEnd()}${CLIP_MARK}` : one;
+};
+
 export function threadsUpdate(threads: PlanThread[] | undefined): string {
   const ended = (threads ?? []).filter((t) => t.status);
   if (ended.length === 0) return "";
   return [
     "Plans that ran in their own sessions (threads), and how they ended:",
     ...ended.map(
-      (t) =>
-        `- ${OUTCOME_WORDS[t.status!]}: ${t.summary}` +
-        (t.report?.text ? `\n  Report: ${t.report.text.replace(/\s*\n\s*/g, " ")}` : ""),
+      (t) => `- ${OUTCOME_WORDS[t.status!]}: ${t.summary}` + (t.report?.text ? `\n  Report: ${clipReport(t.report.text)}` : ""),
     ),
   ].join("\n");
 }
 
-// The thread's own last words: the last assistant message that has any text,
-// whole; "" when there is none. The note shows it on request and read_thread
-// gives it to the chat's model.
+// A text without the lines that are only a verdict of the step check ("STEP
+// DONE" or "STEP NOT DONE", any case, an ending . or ! allowed): a verdict is
+// a signal for the plan runner, not something the thread said. Trimmed.
+const VERDICT_LINE = /^\s*step\s+(not\s+)?done\s*[.!]?\s*$/i;
+
+export function withoutVerdictLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !VERDICT_LINE.test(line))
+    .join("\n")
+    .trim();
+}
+
+// The thread's own last words: the last assistant message that has any text
+// besides a verdict line (withoutVerdictLines), whole and without that line;
+// "" when there is none. A message that is only a verdict is skipped, so the
+// words before it count. The note shows it on request and read_thread gives
+// it to the chat's model.
 export function finalMessage(messages: ChatMessage[] | undefined): string {
-  const last = [...(messages ?? [])].reverse().find((m) => m?.role === "assistant" && typeof m.content === "string" && m.content.trim());
-  return last ? last.content.trim() : "";
+  for (const m of [...(messages ?? [])].reverse()) {
+    if (m?.role !== "assistant" || typeof m.content !== "string") continue;
+    const text = withoutVerdictLines(m.content);
+    if (text) return text;
+  }
+  return "";
 }
 
 // A finished plan's result: the last words the model said in its last step
@@ -181,6 +207,103 @@ export function planResult(steps: PlanStep[] | null | undefined, messages: ChatM
   if (!steps || steps.length === 0 || !steps.every((s) => s.status === "done")) return "";
   const id = steps[steps.length - 1].id;
   return finalMessage(messages.filter((m) => m.planStep === id));
+}
+
+// "850ms" -> "<1s", 12 000 -> "12s", 125 000 -> "2m 5s", 3 720 000 -> "1h 2m".
+function duration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 1) return "<1s";
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return s % 60 ? `${m}m ${s % 60}s` : `${m}m`;
+  return m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 60)}h`;
+}
+
+const OUTCOME_LINE: Record<Exclude<ThreadStatus, "missing">, string> = {
+  done: "SUCCESS",
+  failed: "FAILED",
+  unfinished: "NOT FINISHED",
+};
+
+// What a thread's plan came to, in pieces, so a caller that has to fit a size
+// can keep the important ones (server/threads.ts does). `steps` has one entry
+// per step: its line without the note, the whole note, and whether it is the
+// step the thread is stuck on. `result` is the head of the Result line and the
+// words after it (empty when the head says it all).
+export interface ThreadResultParts {
+  outcome: string;
+  steps: { head: string; note: string; problem: boolean }[];
+  result: { head: string; text: string };
+  next: string;
+}
+
+export function threadResultParts(child: Pick<Session, "plan" | "messages">): ThreadResultParts {
+  const steps = child.plan ?? [];
+  const messages = child.messages ?? [];
+  const status = threadStatus(child) as Exclude<ThreadStatus, "missing">;
+  const parts: ThreadResultParts = {
+    outcome: `Outcome: ${OUTCOME_LINE[status]}`,
+    steps: steps.map((s, i) => ({
+      head: `${i + 1}. [${[s.status, s.ms !== undefined ? duration(s.ms) : ""].filter(Boolean).join(", ")}] ${stepLine(s)}`,
+      note: s.note?.trim() ?? "",
+      problem: false,
+    })),
+    result: { head: "Result:", text: "" },
+    next: "",
+  };
+
+  if (steps.length === 0) {
+    parts.result.head = "Result: none yet. The thread has no plan.";
+    parts.next = "Next: open the thread and make a plan, or ask there.";
+    return parts;
+  }
+
+  const open = steps.findIndex((s) => s.status !== "done");
+  if (open < 0) {
+    parts.result.text = planResult(steps, messages) || "(the last step said nothing)";
+    return parts;
+  }
+
+  const stuck = steps[open];
+  const said = finalMessage(messages.filter((m) => m.planStep === stuck.id));
+  parts.result = { head: `Result: none yet. Step ${open + 1} last said:`, text: said || "(nothing)" };
+
+  const n = open + 1;
+  const problem = steps.find((s) => s.status === "failed" || s.status === "disputed" || s.status === "waiting") ?? stuck;
+  const pn = steps.indexOf(problem) + 1;
+  parts.steps[pn - 1].problem = true;
+  switch (problem.status) {
+    case "failed":
+      parts.next = `Next: step ${pn} failed. Open the thread, fix what its note says, then Continue.`;
+      break;
+    case "disputed":
+      parts.next = `Next: the check said step ${pn} is not done, but the model showed it is. Open the thread and decide; Continue after.`;
+      break;
+    case "waiting":
+      parts.next = `Next: step ${pn} is waiting for an answer. Open the thread and answer it, then Continue.`;
+      break;
+    default:
+      parts.next = `Next: the thread stopped before step ${n} finished (no run is going). Open the thread and Continue.`;
+  }
+  return parts;
+}
+
+// What a thread's plan came to, as plain text for the chat that started it
+// (read_thread and the report prompt). Built from the plan and the steps'
+// messages, never from the chat's last message:
+//   Outcome: SUCCESS | FAILED | NOT FINISHED
+//   Steps: one line each with its state, how long it took and its whole note
+//   Result: the plan's result when every step is done; otherwise the last
+//     words of the first step that is not done
+//   Next: what to do, for a failed, disputed, waiting or unfinished thread
+export function threadResult(child: Pick<Session, "plan" | "messages">): string {
+  const p = threadResultParts(child);
+  return [
+    p.outcome,
+    ...p.steps.map((s) => (s.note ? `${s.head} - ${s.note.replace(/\n/g, "\n    ")}` : s.head)),
+    p.result.text ? `${p.result.head} ${p.result.text}` : p.result.head,
+    ...(p.next ? [p.next] : []),
+  ].join("\n");
 }
 
 // The note's line, in plain words. Before the status is known (undefined) the
@@ -198,6 +321,25 @@ export function threadLabel(status: ThreadStatus | undefined, summary: string): 
     default:
       return `Running in a thread: ${summary}`;
   }
+}
+
+// Splits a report into the lines worth showing on their own and the rest.
+// Lines starting with "Follow-up:" (success) or "Next:" (failure), in any case
+// and with leading spaces allowed, go to followUp, kept whole and trimmed. One
+// that says "none" counts as no follow-up and is dropped. Everything else, in
+// order and trimmed, is the body.
+export function reportParts(text: string): { body: string; followUp: string[] } {
+  const followUp: string[] = [];
+  const rest: string[] = [];
+  for (const line of (text ?? "").split("\n")) {
+    const m = /^\s*(follow-up|next):\s*(.*)$/i.exec(line);
+    if (!m) {
+      rest.push(line);
+      continue;
+    }
+    if (!/^none\.?$/i.test(m[2].trim())) followUp.push(line.trim());
+  }
+  return { body: rest.join("\n").trim(), followUp };
 }
 
 // How a note shows its thread's pending question: "answer" when the note can

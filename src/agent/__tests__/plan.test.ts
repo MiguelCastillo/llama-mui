@@ -323,7 +323,7 @@ describe("stepPrompt", () => {
     expect(prompt.split("\n").pop()?.trim()).toBe("Do step 2 of 3: Merge y into main");
   });
 
-  it("tells the last step, and only the last, to end with the result and a Follow-up line", () => {
+  it("tells the last step, and only the last, to give a short result and a Follow-up line only if needed", () => {
     const steps: PlanStep[] = [
       { id: "1", text: "One", status: "done" },
       { id: "2", text: "Two", status: "pending" },
@@ -331,7 +331,9 @@ describe("stepPrompt", () => {
     expect(stepPrompt(steps, 0)).not.toContain("Follow-up:");
     const last = stepPrompt(steps, 1);
     expect(last).toContain("This is the last step");
-    expect(last).toContain('"Follow-up: none"');
+    expect(last).toContain("one or two plain sentences");
+    expect(last).toContain('"Follow-up:" only if something must happen after');
+    expect(last).not.toContain("Follow-up: none");
     expect(last.indexOf("Do step 2 of 2")).toBeLessThan(last.indexOf("This is the last step"));
   });
 

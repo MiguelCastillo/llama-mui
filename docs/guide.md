@@ -134,20 +134,62 @@ far (`context`, written in the same call, so a thread started later has it), `li
 (`todos`), so copying that file carries them; chat applies each call to the
 session, as it does for `update_plan`, since the server never writes that file.
 
-A plan's last step is told to end its reply with the result and a "Follow-up:"
-line, and once every step is done the plan card shows that reply under the
-checkmarks as **Result**, open, as text you can select and copy. It is the
-last step's reply, not the chat's last message. When the session worked in a
+A plan's last step is told to say in a sentence or two whether it all worked
+(paths, branches or commands only if you need them next), and to add a
+"Follow-up:" line only when something must happen after (restart the server,
+commit, answer a question). Once every step is done the plan card shows that
+reply under the checkmarks as **Result**, open, as text you can select and
+copy. It is the last step's reply, not the chat's last message. A plan that
+worked doesn't list its results; one that didn't says what went wrong and
+what to do next. When the session worked in a
 git worktree, a line under the Result says where that work lives (see
 Worktrees, below: "In worktree ui-updates (llama/ui-updates): 5 files
 uncommitted, 2 commits not on main", or "all committed and on main").
 
-The **Threads** group (`server/threads.ts`) has two tools, each costing more
-than the one before. Before them, the chat's model already has the note's
-report and the "Chat update" with each ended thread's outcome. `read_thread`
-gives the thread's steps and its final message, whole, with no request to a
-model. If that isn't enough, `summarize_thread` asks the thread for a summary
-(it costs money: the whole thread goes to a model). The thread's own model is given the whole record of the thread (what was said,
+Threads run a plan apart from the chat, in parallel, so the chat stays on the
+main train of thought with you and keeps the thread's details out. It pulls
+only what it needs, in tiers that each cost more than the one before:
+
+1. **Always there, free:** the note's report and the "Chat update" with each
+   ended thread's outcome. The report is written from the plan's real result
+   (the overview below), not from the last thing said in the thread, which can
+   be a check's "STEP NOT DONE" line.
+2. **`read_thread`, no request to a model:** an overview of the thread, in this
+   order: `Thread:` (its summary); `Outcome:` SUCCESS, FAILED or NOT FINISHED;
+   one line per step with its state, how long it took and its note; `Result:`
+   (the plan's result when every step is done, otherwise the last words of the
+   first step that isn't); `Next:` for a thread that failed, was disputed, is
+   waiting for an answer or didn't finish (open the thread, and Continue after
+   fixing or answering); `Files changed:` (or "none"); and the worktree lines.
+   A git read that fails leaves the worktree lines out. Verdict lines ("STEP
+   DONE", "STEP NOT DONE") are dropped from the result.
+3. **`read_thread` with `step` (the step's number, from 1):** that one step in
+   detail instead of the overview: its text and state, its replies, and what
+   its commands and reads printed. A number out of range or missing answers
+   with the valid numbers.
+4. **`summarize_thread`, costs money:** the whole thread goes to a model that
+   writes a digest; `focus` says what the chat needs from it.
+
+Every answer is size-capped, so details can't flood the chat. The overview is
+at most 4000 characters: the outcome, the result (its last 1500 characters),
+the `Next:` line and the note of the step that went wrong (800) come first,
+then the other steps (notes cut to 200), then the files and worktrees. When
+something is left out, the last line says how to get more: `step` for one
+step, or `summarize_thread` with a `focus`. A step's detail is at most 6000
+characters; when it is longer the start is cut, since what the step said and
+ran last explains how it ended, and the answer says it was cut. The limits are
+named constants in `server/threads.ts`.
+
+The chat's model doesn't wait to be asked: when a thread ended failed or not
+finished, or its report hints at trouble (a step not done, a check failed or
+disputed, something unconfirmed, nothing committed), it reads the thread on its
+own, then states the outcome and what to do next (a plan, if files must
+change). It calls `read_thread` with `step` only to see why one step went
+wrong, and `summarize_thread` only when it needs a digest. It never says it
+doesn't know what a thread did without reading it. Both tools work in a
+planning turn too.
+
+`summarize_thread`: the thread's own model is given the whole record of the thread (what was said,
 every tool call and its result) in one request with no tools, and asked to
 write what the chat needs: what was done and found, decided, the paths and
 branches, and what is left, ending with a "Follow-up:" line for what still has
@@ -398,10 +440,14 @@ vitest (`npm test`).
   plan", the model began its answers with "This is a question, not a file
   change request", replying to a note you never see. In that turn the model
   can only use `update_plan`, the read tools (`list_directory`,
-  `read_file`, `find_files`, `grep`, `locate_path`) and the web tools
-  (`web_search`, `fetch_url`), so a question can still be answered from the
-  web: it's offered every tool, but the others are refused when called, so it
-  can't change anything.
+  `read_file`, `find_files`, `grep`, `locate_path`), the web tools
+  (`web_search`, `fetch_url`) and the thread tools (`read_thread`,
+  `summarize_thread`), so a question can still be answered from the web, and
+  you can ask how a thread went in the same turn: the thread tools only read
+  what the chat's threads did and change no files. It's offered every tool,
+  but the others are refused when called ("X isn't available while
+  planning"). `run_command` and the tools that write files are still refused,
+  so it can't change anything.
 - Why it's done that way: llama.cpp reuses its cache for the part of a
   prompt that matches the last one from the start. Putting the note in the
   system prompt, or offering fewer tools, changed that start, and the server
@@ -812,8 +858,9 @@ the step, not in the chat.
   says how it ended: **Done in a thread** (every step done), **Failed in a
   thread** (a step failed, or one didn't pass its check) or **Not finished in
   a thread** (stopped, or waiting for you). Under it is a short report of
-  what happened, ending with a **Follow-up:** line for anything still to do
-  (restart the server, run a command) or "Follow-up: none". Click the note to open the thread, with
+  what happened: a sentence or two when it worked, with a **Follow-up:** line
+  only if something is still to do (restart the server, commit); when it
+  didn't, what went wrong and a **Next:** line with the move to make. Click the note to open the thread, with
   the chat scrolled to the plan.
 - Pressing Run does not open the thread: you stay in the chat. When the thread
   needs you, its note shows the question with the same buttons the thread shows:
@@ -831,13 +878,17 @@ the step, not in the chat.
   any text (the line above it is the button that opens the thread).
 - The chat's model is told how each ended thread went: its next message carries
   a "Chat update" with the outcome and report of every thread that has one, so
-  you can say "go on from what the thread found" and it knows. (Like the other
+  you can say "go on from what the thread found" and it knows. Each report is
+  clipped to 400 characters there (ending "… (read_thread for the rest)"), so
+  older long reports don't fill the chat, and the model is told to say a done
+  thread is done in one line, without recapping it. (Like the other
   parts of the update, it is only sent when tools are on, and only when it
   changed since the model last saw it.)
 - The report is written by the model that ran the plan, in one more request
   with no tools, once the run has ended. It is shown the thread's last message
-  whole. It says what the plan did and found, or what went wrong, with the paths
-  and commands needed, and ends with the follow-up (at most about 1500
+  whole. If every step is done it says so in a sentence or two, with no list of
+  results, and adds a follow-up line only if you must do something after. If
+  not, it says what went wrong and ends with a "Next:" line (at most 600
   characters; a longer answer is cut there). If that request fails, or you
   stopped the run yourself, the report is a plain sentence made from the
   steps instead (for example "Step 2 failed. Open the thread to see what

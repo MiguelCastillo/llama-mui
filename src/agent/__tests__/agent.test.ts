@@ -175,6 +175,16 @@ describe("isBlockedByPlanning", () => {
     const call = toolCall("update_plan", { steps: ["A"] });
     expect(isBlockedByPlanning(call, true)).toBe(false);
   });
+
+  it("allows read_thread and summarize_thread during planning", () => {
+    expect(isBlockedByPlanning(toolCall("read_thread", { thread: "x" }), true)).toBe(false);
+    expect(isBlockedByPlanning(toolCall("summarize_thread", { thread: "x" }), true)).toBe(false);
+  });
+
+  it("still blocks run_command during planning", () => {
+    const call = toolCall("run_command", { command: "ls" });
+    expect(isBlockedByPlanning(call, true)).toBe(true);
+  });
 });
 
 // ── MAX_REPEATS constant ────────────────────────────────────────────────────

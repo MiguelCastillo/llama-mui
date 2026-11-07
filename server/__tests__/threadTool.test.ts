@@ -12,6 +12,10 @@ vi.mock("node:os", async (importOriginal) => {
 const mockStream = vi.hoisted(() => vi.fn());
 vi.mock("../../src/api.ts", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../src/api.ts")>()), streamChat: mockStream }));
 
+const mockWorktrees = vi.hoisted(() => vi.fn());
+vi.mock("../worktreeStatus.ts", () => ({ worktreeStatuses: mockWorktrees }));
+mockWorktrees.mockResolvedValue([]);
+
 const { THREAD_TOOLS, summaryPrompt, transcript } = await import("../threads.ts");
 const { writeSession } = await import("../sessionFile.ts");
 import type { ToolContext } from "../toolkit.ts";
@@ -45,24 +49,169 @@ const child = (extra = {}) => ({
   ...extra,
 });
 
+const done = (extra = {}) =>
+  child({
+    plan: [
+      { id: "1", text: "Make a worktree", status: "done", ms: 12_000 },
+      { id: "2", text: "Start the server", status: "done", note: "checked" },
+    ],
+    messages: [
+      { role: "user", content: "Do the thing" },
+      { role: "assistant", content: "Made it.", planStep: "1" },
+      { role: "assistant", content: "", planStep: "2", toolCalls: [{ id: "w1", name: "write_file", arguments: '{"path":"src/a.ts","content":"x"}' }] },
+      { role: "tool", content: "Wrote src/a.ts", toolCallId: "w1", planStep: "2" },
+      { role: "assistant", content: "The server answers 200 on 5174.\nSTEP DONE", planStep: "2" },
+      { role: "assistant", content: "STEP DONE", planStep: "2" },
+      { role: "user", content: "thanks, what is a worktree?" },
+      { role: "assistant", content: "A worktree is a second checkout." },
+    ],
+    ...extra,
+  });
+
 describe("read_thread", () => {
-  it("gives the steps and the thread's final message whole, without asking a model", async () => {
+  it("gives the outcome, steps, the plan's result and the files, without asking a model", async () => {
     mockStream.mockClear();
-    const long = "word ".repeat(5000).trim();
-    await writeSession("r1", child({ messages: [{ role: "assistant", content: "early" }, { role: "assistant", content: long }, { role: "assistant", content: "  " }] }));
-    await writeSession("rp1", { threads: [note("r1", "Set up the server", { status: "failed" })] });
+    await writeSession("r1", done());
+    await writeSession("rp1", { threads: [note("r1", "Set up the server", { status: "done" })] });
     const text = await read("rp1");
-    expect(text).toContain("Outcome: failed");
-    expect(text).toContain("2. Start the server: failed (port was busy)");
-    expect(text).toContain(`The thread's final message:\n${long}`);
-    expect(text).not.toContain("early");
+    expect(text).toMatch(/^Thread: Set up the server\n\nOutcome: SUCCESS/);
+    expect(text).toContain("1. [done, 12s] Make a worktree");
+    expect(text).toContain("Result: The server answers 200 on 5174.");
+    expect(text).toContain("Files changed:\n- src/a.ts");
+    expect(text).not.toContain("STEP DONE");
+    expect(text).not.toContain("second checkout");
+    expect(text).not.toContain("Next:");
     expect(mockStream).not.toHaveBeenCalled();
+  });
+
+  it("is not changed by a later chat reply or a verdict line", async () => {
+    await writeSession("r3", done());
+    await writeSession("r4", done({ messages: done().messages.slice(0, 5) }));
+    await writeSession("rp3", { threads: [note("r3", "With chat"), note("r4", "Without chat")] });
+    const result = (t: string) => t.slice(t.indexOf("Outcome:"));
+    expect(result(await read("rp3", { thread: "r3" }))).toBe(result(await read("rp3", { thread: "r4" })));
+  });
+
+  it("shows FAILED with the step's note and a Next line", async () => {
+    await writeSession("r1f", child());
+    await writeSession("rp1f", { threads: [note("r1f", "Set up the server", { status: "failed" })] });
+    const text = await read("rp1f");
+    expect(text).toContain("Outcome: FAILED");
+    expect(text).toContain("2. [failed] Start the server - port was busy");
+    expect(text).toContain("Result: none yet.");
+    expect(text).toMatch(/Next: step 2 failed/);
+    expect(text).toContain("Files changed: none");
+  });
+
+  it("adds the worktree lines, and leaves them out when git can't be read", async () => {
+    await writeSession("r5", done());
+    await writeSession("rp5", { threads: [note("r5", "Worktree")] });
+    mockWorktrees.mockResolvedValueOnce([{ name: "ui", branch: "llama/ui", uncommitted: 2, unmerged: 1, base: "main" }]);
+    expect(await read("rp5")).toContain("In worktree ui (llama/ui): 2 files uncommitted, 1 commit not on main");
+    mockWorktrees.mockRejectedValueOnce(new Error("git is gone"));
+    const text = await read("rp5");
+    expect(text).toContain("Outcome: SUCCESS");
+    expect(text).not.toContain("In worktree");
+  });
+
+  it("caps the overview, keeps the result and the failing note first, and says how to get more", async () => {
+    const { OVERVIEW_MAX, RESULT_MAX } = await import("../threads.ts");
+    const ids = Array.from({ length: 10 }, (_, i) => String(i + 1));
+    const plan = ids.map((id, i) => ({
+      id,
+      text: `Step text ${i + 1}`,
+      status: i === 8 ? "failed" : i < 8 ? "done" : "pending",
+      note: i === 8 ? `FAIL-START ${"f".repeat(5000)}` : `note ${i + 1} ${"n".repeat(3000)}`,
+    }));
+    const writes = Array.from({ length: 80 }, (_, i) => [
+      { role: "assistant", content: "", planStep: "1", toolCalls: [{ id: `w${i}`, name: "write_file", arguments: JSON.stringify({ path: `src/some/long/path/file${i}.ts`, content: "x" }) }] },
+      { role: "tool", content: "Wrote", toolCallId: `w${i}`, planStep: "1" },
+    ]).flat();
+    await writeSession("c9", {
+      plan,
+      messages: [
+        ...writes,
+        { role: "assistant", content: `SAID-START ${"s".repeat(20_000)} SAID-END`, planStep: "9" },
+      ],
+    });
+    await writeSession("cp9", { threads: [note("c9", "Long thread")] });
+    mockWorktrees.mockResolvedValueOnce([{ name: "ui", branch: "llama/ui", uncommitted: 2, unmerged: 1, base: "main" }]);
+    const text = await read("cp9");
+    expect(text.length).toBeLessThanOrEqual(OVERVIEW_MAX);
+    expect(text).toContain("Outcome: FAILED");
+    expect(text).toContain("FAIL-START");
+    expect(text).toMatch(/Next: step 9 failed/);
+    expect(text).toContain("SAID-END");
+    expect(text).not.toContain("SAID-START");
+    expect(text.match(/s+/g)!.sort((a, b) => b.length - a.length)[0].length).toBeLessThanOrEqual(RESULT_MAX);
+    expect(text).toContain("9. [failed] Step text 9 - FAIL-START");
+    expect(text).toContain("7. [done] Step text 7");
+    expect(text).not.toContain("note 7");
+    expect(text).toContain("- …and ");
+    expect(text.trimEnd().split("\n").pop()).toMatch(/^More: read_thread with `step` \(1 to 10\).*summarize_thread with a `focus`/);
+
+    // A short thread is the same answer plus the pointer line, nothing cut.
+    await writeSession("c10", done());
+    await writeSession("cp10", { threads: [note("c10", "Short")] });
+    const short = await read("cp10");
+    expect(short).toContain("1. [done, 12s] Make a worktree");
+    expect(short).toContain("Files changed:\n- src/a.ts");
+    expect(short.trimEnd().split("\n").pop()).toMatch(/^More: read_thread with `step` \(1 to 2\)/);
+  });
+
+  it("with `step` gives that step's detail instead of the overview", async () => {
+    mockStream.mockClear();
+    await writeSession("s1", done({ messages: [
+      { role: "user", content: "Do step 2", planStep: "2" },
+      { role: "assistant", content: "Made it.", planStep: "1" },
+      { role: "assistant", content: "Starting.", planStep: "2", toolCalls: [{ id: "c1", name: "run_command", arguments: '{"command":"npm start"}' }] },
+      { role: "tool", content: "EADDRINUSE 5174", toolCallId: "c1", planStep: "2" },
+      { role: "assistant", content: "The port is busy.", planStep: "2" },
+      { role: "assistant", content: "A later chat reply." },
+    ] }));
+    await writeSession("sp1", { threads: [note("s1", "Set up the server")] });
+    for (const step of [2, "2"]) {
+      const text = await read("sp1", { step });
+      expect(text).toMatch(/^Thread: Set up the server\n\nStep 2: Start the server\nState: done\nNote: checked/);
+      expect(text).toContain("The port is busy.");
+      expect(text).toContain("$ run_command npm start\nEADDRINUSE 5174");
+      expect(text).not.toContain("Made it.");
+      expect(text).not.toContain("later chat reply");
+      expect(text).not.toContain("Outcome:");
+    }
+    expect(mockStream).not.toHaveBeenCalled();
+  });
+
+  it("keeps the end of a long step and says it was cut", async () => {
+    const { STEP_DETAIL_MAX } = await import("../threads.ts");
+    await writeSession("s2", done({ messages: [
+      { role: "assistant", content: "", planStep: "2", toolCalls: [{ id: "c1", name: "run_command", arguments: '{"command":"build"}' }] },
+      { role: "tool", content: `START-MARK ${"x".repeat(20_000)} END-MARK`, toolCallId: "c1", planStep: "2" },
+    ] }));
+    await writeSession("sp2", { threads: [note("s2", "Long")] });
+    const text = await read("sp2", { step: 2 });
+    const body = text.slice("Thread: Long\n\n".length);
+    expect(body.length).toBeLessThanOrEqual(STEP_DETAIL_MAX);
+    expect(text).toContain("the start was cut");
+    expect(text).toContain("END-MARK");
+    expect(text).not.toContain("START-MARK");
+    expect(text).toContain("Step 2: Start the server");
+  });
+
+  it("says plainly which steps exist when the step isn't one", async () => {
+    await writeSession("s3", done());
+    await writeSession("s4", child({ plan: [] }));
+    await writeSession("sp3", { threads: [note("s3", "Two steps"), note("s4", "No steps")] });
+    for (const step of [0, 3, -1, 1.5, "abc"]) {
+      await expect(read("sp3", { thread: "s3", step })).rejects.toThrow(/no step .*numbered 1 to 2/);
+    }
+    await expect(read("sp3", { thread: "s4", step: 1 })).rejects.toThrow(/has no steps to read/);
   });
 
   it("says when there is nothing to read, or the thread is gone", async () => {
     await writeSession("r2", child({ messages: [] }));
     await writeSession("rp2", { threads: [note("r2", "Quiet"), note("gone", "Lost")] });
-    expect(await read("rp2", { thread: "quiet" })).toContain("The thread has no final message.");
+    expect(await read("rp2", { thread: "quiet" })).toContain("Result: none yet. Step 2 last said: (nothing)");
     expect(await read("rp2", { thread: "lost" })).toMatch(/was deleted, so there is nothing to read/);
     await expect(read("rp2")).rejects.toThrow(/2 threads/);
     await expect(read("none")).rejects.toThrow(/nothing to read/);

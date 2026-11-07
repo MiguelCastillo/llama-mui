@@ -25,6 +25,10 @@ export const PLANNING_TOOLS = new Set([
   // A question gets a planning turn too, and may need the web to answer.
   "web_search",
   "fetch_url",
+  // These only read what this chat's threads did and change no files, and a
+  // planning turn is when the user asks how a thread went.
+  "read_thread",
+  "summarize_thread",
 ]);
 // A note: an instruction for one turn, sent after the message's text (see
 // docs/guide.md, "What the model is told"). A question comes first: led by "only
@@ -110,11 +114,12 @@ export function extractContext(args: string): string | null {
   }
 }
 
-// Added to the last step: its reply is the result, and it names the follow-up.
+// Added to the last step: its reply is the result, kept short, with a follow-up only when needed.
 export const LAST_STEP_NOTE =
-  "This is the last step, so your reply is the plan's result. Say what was done and found, with the paths, branches, " +
-  'commands and numbers someone will need. End with a line starting "Follow-up:" saying what still has to happen after ' +
-  '(for example restart or refresh the server, run a command, commit, answer a question), or "Follow-up: none".';
+  "This is the last step, so your reply is the plan's result. Say in one or two plain sentences whether it all worked. " +
+  "Mention paths, branches or commands only if the user needs them next. " +
+  'End with a line starting "Follow-up:" only if something must happen after ' +
+  "(for example restart the server, commit, answer a question); otherwise leave it out.";
 
 // The message that runs step i: just that step, with the plan for context.
 // Steps start with a fresh context (see runPlan), so the prompt carries what

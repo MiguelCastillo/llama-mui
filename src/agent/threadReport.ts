@@ -1,11 +1,13 @@
 // The short report a thread sends back to the session that started it when its
-// plan's run ends: a short report with a Follow-up line, written by the model
+// plan's run ends: a sentence or two saying it worked (plus a Follow-up line only
+// when the user must act), or what went wrong and a Next line, written by the model
 // that ran it. Three parts, like sessionNaming.ts: the prompt, reading the answer, and a
 // sentence of our own for when the model can't be asked or says nothing useful.
 // The thread's messages are only read to write the prompt; they are never copied.
 // No React in this file.
 
 import { type Api, type ChatMessage, type Kind, type PlanStep, type StreamDelta, streamChat } from "../api.ts";
+import { threadResult } from "../planThread.ts";
 import { stepLine } from "./plan.ts";
 
 export interface ReportInput {
@@ -14,7 +16,7 @@ export interface ReportInput {
   // What the user asked for: the thread's first message.
   request?: string;
   steps: PlanStep[];
-  // The thread's messages; only the model's last words are used.
+  // The thread's messages; read by threadResult for the plan's result.
   messages: ChatMessage[];
   // How the run ended if it went wrong, in its own plain words.
   error?: string | null;
@@ -24,7 +26,7 @@ export interface ReportInput {
 
 const NOTE_MAX = 200;
 // The report is asked to stay well under this; it is only a safety net.
-const REPORT_MAX = 1500;
+const REPORT_MAX = 600;
 
 const clip = (text: string, max: number) => {
   const one = text.replace(/\s+/g, " ").trim();
@@ -53,24 +55,27 @@ function stepState(s: PlanStep): string {
 }
 
 // The prompt: what was asked, each step and how it ended, how the run ended,
-// and the model's last words, then what to write.
+// and the plan's result (threadResult), then what to write.
 export function reportPrompt(input: ReportInput): string {
   const lines = input.steps.map((s, i) => {
     const note = s.note ? ` (${clip(s.note, NOTE_MAX)})` : "";
     return `${i + 1}. ${clip(stepLine(s), NOTE_MAX)}: ${stepState(s)}${note}`;
   });
-  const last = [...input.messages].reverse().find((m) => m.role === "assistant" && m.content.trim());
+  // The plan's real result (not the thread's last message, which can be a
+  // verdict line or a reply to something said after the plan).
+  const result = threadResult({ plan: input.steps, messages: input.messages });
   const parts = [
-    "A plan was run for the user in a separate thread, and it has ended. Write a short report for the chat that started it, which can't see the thread: what it did and found, or, if it didn't finish, what went wrong. " +
-      "Include the paths, branches, commands and numbers the chat will need. Then end with a line starting \"Follow-up:\" saying what still has to happen after this, by the chat or by the user " +
-      "(for example restart or refresh the server, run a command, commit, answer a question), or \"Follow-up: none\" if nothing does. " +
-      "Plain text, under about 1000 characters, no headings, no greeting. Reply with only the report.",
+    "A plan was run for the user in a separate thread, and it has ended. Write a short report for the chat that started it, which can't see the thread. " +
+      "If every step is done, say in one or two plain sentences that it worked: no file lists, numbers or commands. " +
+      "Add a line starting \"Follow-up:\" only if the user must do something after this (for example restart the server, commit, answer a question). " +
+      "If it didn't all work, say in plain words what went wrong, and end with a line starting \"Next:\" giving the one concrete move to make. " +
+      "Plain text, under about 400 characters, no headings, no greeting. Reply with only the report.",
     ...(input.request ? [`What the user asked for:\n${clip(input.request, 600)}`] : []),
     `The plan: ${clip(input.summary, NOTE_MAX)}`,
     `Steps:\n${lines.join("\n")}`,
     ...(input.stopped ? ["The user stopped the plan."] : []),
     ...(input.error ? [`The run ended with this error: ${clip(input.error, NOTE_MAX)}`] : []),
-    ...(last ? [`The last thing the model said in the thread:\n${last.content.trim()}`] : []),
+    `How the thread ended:\n${result}`,
   ];
   return parts.join("\n\n");
 }
