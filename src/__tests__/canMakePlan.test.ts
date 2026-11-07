@@ -27,7 +27,13 @@ describe("canMakePlan", () => {
     for (const type of ["worktree", "page"]) expect(canMakePlan(type, "plan")).toBe(false);
   });
 
-  it("is off for a kind of prompt that isn't an approval", () => {
-    for (const type of ["access", "location", ""]) expect(canMakePlan(type, "turn")).toBe(false);
+  it("is on for the questions about a path in a chat reply: one to allow, one to find", () => {
+    for (const type of ["access", "location"]) expect(canMakePlan(type, "turn")).toBe(true);
+    for (const type of ["access", "location"]) expect(canMakePlan(type, "plan")).toBe(false);
+  });
+
+  it("is off for a kind of prompt it doesn't know", () => {
+    expect(canMakePlan("", "turn")).toBe(false);
+    expect(canMakePlan("something-else", "turn")).toBe(false);
   });
 });

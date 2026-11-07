@@ -191,7 +191,7 @@ describe("approve and answer", () => {
     });
   }
 
-  it("plan on a question with no plan to make (a path to find) is not refused; the run reads it as a no", async () => {
+  it("plan on a question about a path (a thing to find) is not refused either", async () => {
     saved("a", 1);
     askOn("a", "s1", { needsLocation: { description: "the notes", kind: "folder" } });
     await command("a", "run", options);

@@ -699,9 +699,7 @@ export async function answerAsk(id: string, askId: string, answer: Answer) {
   if (location && answer === true) {
     throw new HttpError(409, "That question asks for a file or folder. Pick one, or say no.", { reason: "wrong answer" });
   }
-  // "plan" is never refused: on an approval it turns the work into a plan; on
-  // a question that has no plan to make (a path to find, a folder to open) the
-  // run reads it as a no.
+  // "plan" is never refused, whatever the question is: the work goes into a plan.
   if (answer !== "plan" && !location && typeof answer !== "boolean") {
     throw new HttpError(409, "That question is a yes or no. A picked file or folder doesn't answer it.", {
       reason: "wrong answer",

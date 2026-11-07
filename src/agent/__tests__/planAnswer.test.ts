@@ -8,7 +8,7 @@ vi.mock("../../api", async (importOriginal) => {
   return { ...actual, streamChat: mockStream, runTool: mockRunTool };
 });
 
-import { runTurn, PLAN_INSTEAD_RESULT, PLAN_INSTEAD_CHANGE_RESULT, PLAN_INSTEAD_WORKTREE_RESULT, PLAN_INSTEAD_PAGE_RESULT } from "../agent";
+import { runTurn, PLAN_INSTEAD_RESULT, PLAN_INSTEAD_CHANGE_RESULT, PLAN_INSTEAD_WORKTREE_RESULT, PLAN_INSTEAD_PAGE_RESULT, PLAN_INSTEAD_ACCESS_RESULT, PLAN_INSTEAD_LOCATION_RESULT } from "../agent";
 
 // The model calls a tool that needs the user's answer; "plan" is the third
 // answer to a command's approval. The model and the tool server are mocks.
@@ -121,8 +121,30 @@ describe("Make plan on a command approval", () => {
     expect(toolText((await runTurn(page.config, page.cb)).messages)[0]).toMatch(/^Error: the user didn't allow opening https:\/\/example.com/);
   });
 
-  it("is a refusal for an access question", async () => {
+  it("on an access question reads nothing and tells the model to call update_plan", async () => {
     const t = setup({ needsAccess: { path: "/x", kind: "folder" } }, "plan", "read_file");
+    const r = await runTurn(t.config, t.cb);
+    expect(t.ran).toEqual([]);
+    expect(toolText(r.messages)).toEqual([PLAN_INSTEAD_ACCESS_RESULT]);
+    expect(PLAN_INSTEAD_ACCESS_RESULT).toMatch(/update_plan/);
+  });
+
+  it("on a path that doesn't exist (the model guessed) tells the model to plan too", async () => {
+    const t = setup({ needsAccess: { path: "/nope", kind: null } }, "plan", "read_file");
+    const r = await runTurn(t.config, t.cb);
+    expect(toolText(r.messages)).toEqual([PLAN_INSTEAD_ACCESS_RESULT]);
+  });
+
+  it("on a thing to find (locate_path) tells the model to call update_plan", async () => {
+    const t = setup({ needsLocation: { description: "the notes", kind: "folder" } }, "plan", "locate_path");
+    const r = await runTurn(t.config, t.cb);
+    expect(t.ran).toEqual([]);
+    expect(toolText(r.messages)).toEqual([PLAN_INSTEAD_LOCATION_RESULT]);
+    expect(PLAN_INSTEAD_LOCATION_RESULT).toMatch(/update_plan/);
+  });
+
+  it("a no on an access question is still a refusal", async () => {
+    const t = setup({ needsAccess: { path: "/x", kind: "folder" } }, false, "read_file");
     const r = await runTurn(t.config, t.cb);
     expect(t.ran).toEqual([]);
     expect(toolText(r.messages)[0]).toMatch(/^Error: the user didn't allow access to \/x/);

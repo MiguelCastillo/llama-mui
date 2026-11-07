@@ -32,9 +32,18 @@ export const PLAN_INSTEAD_WORKTREE_RESULT =
 export const PLAN_INSTEAD_PAGE_RESULT =
   "The user doesn't want this page opened now; they want it as a plan. Call update_plan with the steps, opening it included, then stop.";
 
-// What the model is told when "Make plan" answers this approval. Every kind of
-// approval can be turned into a plan: nothing ran, and the work goes into one.
-export function planInsteadResult(approval: { type: string }): string {
+export const PLAN_INSTEAD_ACCESS_RESULT =
+  "The user doesn't want to give access to this path now; they want it as a plan. Call update_plan with the steps, using that path included, then stop.";
+export const PLAN_INSTEAD_LOCATION_RESULT =
+  "The user doesn't want to pick this now; they want it as a plan. Call update_plan with the steps, finding it included, then stop.";
+
+// What the model is told when "Make plan" answers a question. Every kind can
+// be turned into a plan: nothing ran, and the work goes into one. `ask` is
+// what the tool asked for: an approval, a path to allow, or a thing to find.
+export function planInsteadResult(ask: object): string {
+  if ("needsAccess" in ask) return PLAN_INSTEAD_ACCESS_RESULT;
+  if ("needsLocation" in ask) return PLAN_INSTEAD_LOCATION_RESULT;
+  const approval = "needsApproval" in ask ? (ask.needsApproval as { type?: string }) : { type: undefined };
   switch (approval.type) {
     case "change":
       return PLAN_INSTEAD_CHANGE_RESULT;
@@ -336,6 +345,12 @@ export async function runTurn(
             const answer = await askUser(outcome as any, controller.signal);
             if (controller.signal.aborted) return { ok, messages: [...forgotten, ...history], attached, error };
             toolStarted = performance.now();
+            // Make plan answers any question the same way: nothing was done, and
+            // the work goes into a plan.
+            if (answer === "plan") {
+              outcome = { result: planInsteadResult(outcome) };
+              break;
+            }
             if (Array.isArray(answer)) {
               // The working directory is not also an attachment. Only for a folder,
               // and only when the chat has none (the prompt offers it only then).
@@ -370,7 +385,7 @@ export async function runTurn(
                 outcome = { result: `Error: nothing exists at ${target.path}, and the user didn't point to where it is` };
                 break;
               }
-              if (!answer || answer === "plan") {
+              if (!answer) {
                 outcome = { result: `Error: the user didn't allow access to ${target.path}` };
                 break;
               }
@@ -379,11 +394,6 @@ export async function runTurn(
               outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model });
             } else {
               const approval = (outcome as any).needsApproval;
-              // "plan" is truthy, so it is checked before the no.
-              if (answer === "plan") {
-                outcome = { result: planInsteadResult(approval) };
-                break;
-              }
               if (!answer) {
                 outcome = {
                   result:

@@ -23,10 +23,12 @@ export function readOnlyLabel(readOnly?: boolean | null): ReadOnlyLabel {
 }
 
 // Whether a prompt offers "Make plan": every kind of approval (a command, a
-// file change, a worktree being removed, a page being opened), but only while
-// the open run is a chat reply (where the model can still call update_plan),
-// not a plan step and not a thread's prompt shown in a note.
-export const PLANNABLE = ["command", "change", "worktree", "page"];
+// file change, a worktree being removed, a page being opened) and the two
+// questions about paths ("access", a path to allow, and "location", a thing to
+// find), but only while the open run is a chat reply (where the model can
+// still call update_plan), not a plan step and not a thread's prompt shown in
+// a note.
+export const PLANNABLE = ["command", "change", "worktree", "page", "access", "location"];
 export function canMakePlan(approvalType: string, runKind?: string | null): boolean {
   return PLANNABLE.includes(approvalType) && runKind === "turn";
 }

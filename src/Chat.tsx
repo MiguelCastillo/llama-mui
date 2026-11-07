@@ -2826,11 +2826,12 @@ function PendingPrompt({ ask, onDecide, onAlways, runKind }: { ask: Ask; onDecid
         kinds={kind === "file" ? ["file", "folder"] : ["folder", "file"]}
         canSetWorkingDir={canSetWorkingDir}
         onDecide={onDecide}
+        canMakePlan={canMakePlan("location", runKind)}
       />
     );
   }
   const { path, kind } = ask.needsAccess;
-  if (kind) return <AccessPrompt target={{ path, kind }} onDecide={onDecide} />;
+  if (kind) return <AccessPrompt target={{ path, kind }} onDecide={onDecide} canMakePlan={canMakePlan("access", runKind)} />;
   // A name with an extension is probably a file.
   const likelyFile = /\.[^/]+$/.test(path);
   return (
@@ -2841,13 +2842,14 @@ function PendingPrompt({ ask, onDecide, onAlways, runKind }: { ask: Ask; onDecid
       icon={<SearchOffIcon fontSize="small" />}
       kinds={likelyFile ? ["file", "folder"] : ["folder", "file"]}
       onDecide={onDecide}
+      canMakePlan={canMakePlan("access", runKind)}
     />
   );
 }
 
 // Shown while a reply waits: the model asked for a path that exists but
 // isn't attached. Allowing attaches it for the rest of the chat.
-function AccessPrompt({ target, onDecide }: { target: AttachmentTarget; onDecide: (allow: boolean) => void }) {
+function AccessPrompt({ target, onDecide, canMakePlan: offerPlan }: { target: AttachmentTarget; onDecide: (answer: Answer) => void; canMakePlan?: boolean }) {
   return (
     <Alert severity="warning" icon={<AttachmentIcon kind={target.kind} />}>
       <Typography variant="body2">
@@ -2867,8 +2869,21 @@ function AccessPrompt({ target, onDecide }: { target: AttachmentTarget; onDecide
         <Button size="small" variant="outlined" color="inherit" onClick={() => onDecide(false)}>
           Deny
         </Button>
+        {offerPlan && <MakePlanButton title="Don't give access now; the model turns it into a plan to review and run" onClick={() => onDecide("plan")} />}
       </Stack>
     </Alert>
+  );
+}
+
+// "Make plan", the third answer to a prompt in a chat reply: do nothing now,
+// and the model turns the work into a plan.
+function MakePlanButton({ title, onClick }: { title: string; onClick: () => void }) {
+  return (
+    <Tooltip title={title}>
+      <Button size="small" variant="outlined" onClick={onClick}>
+        Make plan
+      </Button>
+    </Tooltip>
   );
 }
 
@@ -2915,6 +2930,7 @@ function FindPrompt({
   kinds,
   canSetWorkingDir = false,
   onDecide,
+  canMakePlan: offerPlan = false,
 }: {
   heading: string;
   subject: string;
@@ -2926,6 +2942,8 @@ function FindPrompt({
   // The chat has no working directory, so a folder chosen here can become it.
   canSetWorkingDir?: boolean;
   onDecide: (answer: Answer) => void;
+  // Offers Make plan (a chat reply only; see canMakePlan in approvalWhy.ts).
+  canMakePlan?: boolean;
 }) {
   const [picking, setPicking] = useState(false);
   const [asWorkingDir, setAsWorkingDir] = useState(true);
@@ -2999,6 +3017,7 @@ function FindPrompt({
         <Button size="small" variant="outlined" color="inherit" onClick={() => onDecide(false)} disabled={picking}>
           Deny
         </Button>
+        {offerPlan && <MakePlanButton title="Don't pick it now; the model turns it into a plan to review and run" onClick={() => onDecide("plan")} />}
         {picking && <CircularProgress size="1.125rem" />}
       </Stack>
       {wantsFolder && recent.length > 0 && (
