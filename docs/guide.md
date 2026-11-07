@@ -444,6 +444,24 @@ vitest (`npm test`).
   several files or needs checking along the way becomes a plan. If the model
   starts and finds the work bigger than it looked, it stops and makes a plan.
   Questions need no plan. A main-chat reply still skips thinking, as before.
+- **How "size" is judged.** It is the model's judgment, not a count: the
+  rule's "a command or two" is an example, not a threshold. The model weighs
+  four things. What it can foresee: does it know the whole job up front, or
+  does each step depend on what the last one finds? What is unknown: does it
+  have to look around before it knows what to do? The blast radius: is the
+  change small, local and easy to undo? And the verification: does a quick
+  look (a `git show --stat`, a build) prove it worked, or does it need tests,
+  measuring or a long check? Work that is foreseeable, has nothing to find
+  out first, is easy to undo and is proved by a quick look is done in the
+  chat. If any of those flips, it becomes a plan. A history rewrite of many
+  commits, with reordering that can conflict and a diff to prove the code is
+  unchanged, is plan-sized; folding one file into the newest commit is not.
+  Misjudging happens in both directions, the common one being work that
+  starts small and grows over several rounds; the rule says to stop and make
+  a plan once that is clear. If this needs tightening, the rule can be given
+  concrete limits (for example, more than three commands or edits means a
+  plan) in `workPolicy`, and Make plan is the way to correct a call in the
+  moment.
 - Your message gets a note, sent to the model after it but not shown. It
   starts: "If this message is a question or otherwise doesn't change files,
   just answer it, and don't mention plans." Then comes the rule text from
