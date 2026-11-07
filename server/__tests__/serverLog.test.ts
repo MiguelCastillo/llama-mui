@@ -17,7 +17,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { load, save } = await import("../store.ts");
 const { connectorRoutes } = await import("../connectors.ts");
-const { errorFields, log, logsDir, pruneLogs } = await import("../log.ts");
+const { errorFields, log, logHint, logsDir, pruneLogs } = await import("../log.ts");
 const { checkOnce, resetWatch } = await import("../watch.ts");
 const { HttpError } = await import("../http.ts");
 
@@ -114,6 +114,13 @@ describe("log", () => {
   it("says what an error's cause was, where Node's fetch keeps the real reason", () => {
     const e = Object.assign(new TypeError("terminated"), { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) });
     expect(errorFields(e)).toMatchObject({ error: "terminated", errorName: "TypeError", cause: "UND_ERR_SOCKET", causeMessage: "other side closed" });
+  });
+
+  it("tells where today's log is and the command to follow it", () => {
+    const hint = logHint(new Date("2026-11-06T12:00:00Z"));
+    const file = path.join(logsDir(), "server-2026-11-06.log");
+    expect(hint).toContain(`llama-mui log: ${file}`);
+    expect(hint).toContain(`tail -f ${file}`);
   });
 
   it("removes logs older than two weeks and keeps the rest", async () => {

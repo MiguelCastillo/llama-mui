@@ -22,6 +22,14 @@ const KEEP_DAYS = 14;
 export const logsDir = () => path.join(os.homedir(), ".llama-mui", "logs");
 const fileFor = (d: Date) => path.join(logsDir(), `server-${d.toISOString().slice(0, 10)}.log`);
 
+// Where today's log is and how to follow it, for the server to print when it
+// starts so nobody has to dig for it. Days are UTC, as in the file name.
+export function logHint(now = new Date()): string {
+  const file = fileFor(now);
+  const quoted = /[^\w./-]/.test(file) ? `'${file}'` : file;
+  return `llama-mui log: ${file}\n  follow it with: tail -f ${quoted}`;
+}
+
 let ensured: string | null = null;
 
 export function log(event: string, fields: Record<string, unknown> = {}): void {

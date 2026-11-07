@@ -7,7 +7,7 @@
 
 import type { Server } from "node:http";
 import type { Plugin } from "vite";
-import { log, logProcessEnd, pruneLogs } from "./log.ts";
+import { log, logHint, logProcessEnd, pruneLogs } from "./log.ts";
 import { openRequests } from "./upstreamLog.ts";
 import { startWatching } from "./watch.ts";
 
@@ -21,6 +21,7 @@ export function logServing(httpServer: Server | null, mode: Mode): void {
     const announce = () => {
       const a = httpServer.address();
       log("server.listening", a && typeof a === "object" ? { address: a.address, port: a.port } : { address: String(a) });
+      console.log(logHint());
     };
     if (httpServer.listening) announce();
     else httpServer.once("listening", announce);

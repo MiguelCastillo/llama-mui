@@ -1088,7 +1088,8 @@ include an author, so the owner comes from the model id ("owner/repo").
 llama-mui's server (the one `npm run prod` or `npm run dev` starts, not the page)
 writes a log to `~/.llama-mui/logs/server-<day>.log`, one JSON object per line,
 and keeps two weeks of it. It is for finding out afterwards why a reply was cut
-off or a step "couldn't be checked". Each line has `t` (time), `pid` and `event`:
+off or a step "couldn't be checked". The server prints where today's log is, and
+the `tail -f` command that follows it, when it starts. Each line has `t` (time), `pid` and `event`:
 
 - `server.start`, `server.listening`, `server.shutdown`, `server.force-close`,
   `server.close`, `server.error`, `process.crash`, `process.exit`: the server's own
