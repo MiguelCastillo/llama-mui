@@ -119,6 +119,15 @@ export interface RunTurnConfig {
   thinkOn: boolean;
   planning: boolean;
   planStep?: string;
+  // A side question asked while a plan runs (server/aside.ts): every message
+  // the reply makes carries `aside`, so the plan's steps never see it.
+  aside?: boolean;
+  // Instructions for this message, sent after its text, in place of the
+  // planning note.
+  note?: string;
+  // When set, only these tools may run; a call to another gets an error
+  // result, like a planning turn's (see PLANNING_TOOLS).
+  allowedTools?: ReadonlySet<string>;
   systemPrompt: string | null;
   toolDefinitions: any[];
   toolContextUpdate: string;
@@ -164,7 +173,9 @@ export async function runTurn(
   } = config;
   const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setWorkingDir, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, setPlanSummary, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext, planSummary } = callbacks;
 
-  const tag = planStep ? { planStep } : {};
+  const tag = { ...(planStep ? { planStep } : {}), ...(config.aside ? { aside: true } : {}) };
+  const noteText = config.note ?? (planning ? PLANNING_NOTE : undefined);
+  const { allowedTools } = config;
   let error: string | undefined;
   let ok = false;
 
@@ -179,7 +190,7 @@ export async function runTurn(
   // after it, so it's closed here, and the repaired history is what's kept.
   let history: ChatMessage[] = [
     ...closeOpenToolCalls(baseHistory),
-    { role: "user", content: text, ...update, ...(planning && { note: PLANNING_NOTE }), ...(images ? { images } : {}), ...tag },
+    { role: "user", content: text, ...update, ...(noteText && { note: noteText }), ...(images ? { images } : {}), ...tag },
   ];
   setError(null);
   setFailed(null);
@@ -280,6 +291,11 @@ export async function runTurn(
           if (planning && !PLANNING_TOOLS.has(call.name)) {
             throw new Error(
               `${call.name} isn't available while planning; read what you need, then call update_plan with the steps`,
+            );
+          }
+          if (allowedTools && !allowedTools.has(call.name)) {
+            throw new Error(
+              `${call.name} isn't available here: this reply can only read, and can't change files or the plan. Say what you found, and what the user could tell the plan to do.`,
             );
           }
           if (times >= MAX_REPEATS) {
@@ -474,6 +490,7 @@ import {
   type Dispute,
 } from "./plan.ts";
 import { newId } from "../uuid.ts";
+import { withoutAsides } from "../asides.ts";
 
 // ── checkStep helpers ───────────────────────────────────────────────────────
 
@@ -587,7 +604,10 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
   if (!connector || !model || abort || planRunningRef.current) return;
   planRunningRef.current = true;
   setPlanRunning(true);
-  let msgs = messages;
+  // The plan works with its own messages only: a side question (see
+  // src/asides.ts) is never in a step's history, prompt, files-changed list or
+  // check. The runner that owns the session keeps them and puts them back.
+  let msgs = withoutAsides(messages);
   // What the user said to the run so far, for the prompts of the steps after.
   const noted: string[] = [];
   try {

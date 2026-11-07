@@ -21,6 +21,7 @@ import { type Connector, type Model, type Session, type ToolContext, getConnecto
 import { isFreshPlan, planToThread } from "../src/planThread.ts";
 import { attachedPaths } from "../src/runnerReply.ts";
 import type { RunnerEnv } from "../src/runnerTypes.ts";
+import { type AsideDeps, startAside } from "./aside.ts";
 import { chooseThread } from "./chooseThread.ts";
 import type { RunOptions } from "./commands.ts";
 import { HttpError } from "./http.ts";
@@ -136,6 +137,18 @@ export async function startTurnFromOptions(
   if (!disk) throw new HttpError(404, "No such session");
   const env = await buildEnv(disk, options);
   await startTurn(id, env, { text, planning: options.planning, images: options.images }, deps);
+}
+
+// Starts a side question in a session whose plan is running: the `ask`
+// command. Built from the same choices as the run. Answers once the question
+// is in the session; the answer streams after that. Refused (409) if no plan
+// runs here or a side question is being answered already; 404 for a session
+// with no file.
+export async function startAsideFromOptions(id: string, text: string, options: RunOptions, deps: AsideDeps = {}): Promise<void> {
+  const disk = await readSession(id);
+  if (!disk) throw new HttpError(404, "No such session");
+  const env = await buildEnv(disk, options);
+  await startAside(id, env, text, deps);
 }
 
 // Starts the saved session's plan and says which session it runs in. Answers

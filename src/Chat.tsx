@@ -30,6 +30,8 @@ import {
   Popover,
   Stack,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
   type TypographyProps,
@@ -142,6 +144,7 @@ import {
 import { applyThreadEvent, noteAskKind, noteView, planResult, threadStatus, worktreeLines, type ThreadStatus } from "./planThread";
 import {
   allViews,
+  askAside,
   dismiss,
   getView,
   isLive,
@@ -151,6 +154,7 @@ import {
   setAutoApprove as sendAutoApprove,
   startRun as startRemoteRun,
   stop as stopRunner,
+  stopAside,
   subscribe,
   subscribeAll,
   type RunOptions,
@@ -341,6 +345,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const runActive = !!runnerView && runnerView.status !== "stopped";
   const turnRunning = runActive && runnerView?.kind === "turn";
   const planRunning = runActive && !turnRunning;
+  // While a plan runs, the message box either asks a side question (the
+  // default: answered beside the plan, which never sees it) or tells the plan
+  // (a note the next step sees). `asideRunning`: one is being answered.
+  const [tellPlan, setTellPlan] = useState(false);
+  const asideRunning = planRunning && !!runnerView?.aside;
   // The last runner error put in `error` (see mirrorView).
   const mirroredError = useRef<string | null>(null);
   // What the run of the open session is waiting on the user for, if
@@ -1041,9 +1050,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // server is told; if the send then fails, it returns false and the box
   // gets its text back.
   const send = async (text: string, images: PendingImage[] | undefined, accepted: () => void) => {
-    // While a plan runs, a message goes to the run: the server folds it in
-    // before the next step and says which one (see the notes under the chat),
-    // or refuses, and then the text stays in the box.
+    // While a plan runs, a message is a side question (Ask) or goes to the run
+    // (Tell the plan): the server folds that in before the next step and says
+    // which one (see the notes under the chat). Either way a refusal shows as
+    // the error, and the text is back in the box.
     if (planRunning) {
       // A message to a running plan is text only (the server refuses images too):
       // say so and keep the images where they are.
@@ -1052,7 +1062,20 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         return false;
       }
       try {
-        await sendToRun(sessionId, text);
+        if (!tellPlan) {
+          // A side question: answered beside the plan, which never sees it. The
+          // box empties once it is certain to go, and gets the text back if the
+          // server refuses (no plan any more, one being answered already).
+          const options = runOptions();
+          if (!options) {
+            setError("Choose a server and a model to ask a side question, or switch to Tell the plan.");
+            return false;
+          }
+          accepted();
+          await askAside(sessionId, text, options);
+        } else {
+          await sendToRun(sessionId, text);
+        }
         // A refusal shown earlier is out of date now; the run's own error stays.
         if (error !== mirroredError.current) setError(null);
         toBottom();
@@ -1239,6 +1262,20 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+  // Escape ends the side question being answered, and only it: the plan goes
+  // on (Pause is on its card). Same exceptions as above.
+  useEffect(() => {
+    if (!asideRunning || !visible) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) return;
+      showFailure(stopAside(sessionId));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  // Each chat starts with Ask again.
+  useEffect(() => setTellPlan(false), [sessionId]);
   // Says why a refused Run or a refused save didn't happen. A save refused
   // because the session changed (or runs) elsewhere shows the server's copy.
   const runRefused = (e: unknown) => {
@@ -1368,7 +1405,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // told to send it again (see chatTurn). Like a first try it isn't a planning
   // turn, as before. Its images are sent again as the refs it already has.
   const retry = async () => {
-    const userMsg = [...messages].reverse().find((m) => m.role === "user");
+    const userMsg = [...messages].reverse().find((m) => m.role === "user" && !m.aside);
     if (!userMsg || runActive || starting.current) return;
     if (!model || !connector) return;
     const index = messages.indexOf(userMsg);
@@ -1386,18 +1423,24 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   messages.forEach((m, i) => {
     if (m.role === "tool") return;
     const prev = turns[turns.length - 1];
-    if (m.role === "assistant" && prev?.parts[0].role === "assistant" && i !== contextStart) prev.parts.push(m);
+    // A side question's answer is a bubble of its own, never part of the plan's reply.
+    if (m.role === "assistant" && prev?.parts[0].role === "assistant" && !prev.parts[0].aside === !m.aside && i !== contextStart) prev.parts.push(m);
     else turns.push({ parts: [m], start: i });
   });
-  // The last turn that's a user message; only its reply can fail.
-  const lastUserTurn = turns.map((t) => t.parts[0].role).lastIndexOf("user");
+  // The last turn that's a user message (not a side question: it has no Resend);
+  // only its reply can fail.
+  const lastUserTurn = turns.map((t) => t.parts[0].role === "user" && !t.parts[0].aside).lastIndexOf(true);
+  // The turns that are streaming: the plan's reply is the last turn that isn't
+  // a side question; a side question's, the last one that is (while one runs).
+  const lastPlainTurn = turns.map((t) => !t.parts[0].aside).lastIndexOf(true);
+  const lastAsideTurn = turns.map((t) => !!t.parts[0].aside).lastIndexOf(true);
   // One turn drawn as a bubble; `i` is its place among all turns.
   const bubble = (t: (typeof turns)[number], i: number) => (
     <MessageBubble
       key={t.start}
       parts={t.parts}
-      streaming={!!runnerView?.streaming && i === turns.length - 1}
-      since={taskSince}
+      streaming={t.parts[0].aside ? asideRunning && i === lastAsideTurn : !!runnerView?.streaming && i === lastPlainTurn}
+      since={t.parts[0].aside ? null : taskSince}
       rate={streamRate}
       toolResults={toolResults}
       forgotten={t.start < contextStart}
@@ -1953,9 +1996,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               sessionId={sessionId}
               placeholder={
                 planRunning
-                  ? narrow
-                    ? "Message the plan"
-                    : "Message the running plan: the next step will see it (Enter to send)"
+                  ? tellPlan
+                    ? narrow
+                      ? "Message the plan"
+                      : "Message the running plan: the next step will see it (Enter to send)"
+                    : narrow
+                      ? "Ask a side question"
+                      : "Ask a side question: the plan goes on and won't see it (Enter to send)"
                   : turnRunning && !narrow
                     ? "Replying… press Esc to stop"
                     : narrow
@@ -1972,6 +2019,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               }
               disabled={!model && !planRunning}
               planRunning={planRunning}
+              tellPlan={tellPlan}
+              onTellPlan={setTellPlan}
+              // Stops only the side question being answered; the plan goes on.
+              onStopAside={asideRunning ? () => showFailure(stopAside(sessionId)) : undefined}
               below={
                 showIndicator && (
                   <ContextIndicator
@@ -2007,6 +2058,9 @@ function Composer({
   tall = false,
   sendButton = true,
   planRunning,
+  tellPlan,
+  onTellPlan,
+  onStopAside,
 }: {
   // The box is as tall as the Send column beside it (Send with the meter under it).
   tall?: boolean;
@@ -2025,6 +2079,13 @@ function Composer({
   disabled: boolean;
   // Whether a plan is running (attach button disabled with explanation).
   planRunning: boolean;
+  // While a plan runs: whether a message goes to the plan (Tell the plan) or is
+  // a side question (Ask, the default), and the switch between them.
+  tellPlan: boolean;
+  onTellPlan: (tell: boolean) => void;
+  // While a side question is being answered: ends it, and only it. The box
+  // stays usable meanwhile.
+  onStopAside?: () => void;
   // Under Send: the context indicator.
   below: ReactNode;
 }) {
@@ -2223,6 +2284,24 @@ function Composer({
           e.target.value = "";
         }}
       />
+      {/* While a plan runs: where the message goes. */}
+      {planRunning && (
+        <ToggleButtonGroup
+          size="small"
+          exclusive
+          value={tellPlan ? "tell" : "ask"}
+          onChange={(_, v: "ask" | "tell" | null) => v && onTellPlan(v === "tell")}
+          aria-label="Where the message goes"
+          sx={{ alignSelf: "flex-start", mb: 0.5, "& .MuiToggleButton-root": { py: 0, px: 1, textTransform: "none", fontSize: "0.75rem" } }}
+        >
+          <ToggleButton value="ask" title="A side question: answered now, beside the plan, which never sees it. It can only read.">
+            Ask
+          </ToggleButton>
+          <ToggleButton value="tell" title="A message to the plan: the next step sees it.">
+            Tell the plan
+          </ToggleButton>
+        </ToggleButtonGroup>
+      )}
       {/* Main row: TextField + icons column. */}
       <Stack
         direction="row"
@@ -2290,6 +2369,17 @@ function Composer({
                   {sending ? <CircularProgress size="1.5rem" color="inherit" /> : <SendIcon />}
                 </IconButton>
               </span>
+            </Tooltip>
+          )}
+          {onStopAside && (
+            <Tooltip title="Stop the side question (the plan goes on)">
+              <IconButton
+                aria-label="Stop the side question"
+                onClick={onStopAside}
+                sx={{ border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
+              >
+                <StopIcon />
+              </IconButton>
             </Tooltip>
           )}
           {onStop && (
@@ -2405,11 +2495,19 @@ function MessageBubble({
       </Stack>
     </Stack>
   );
+  // A side question or its answer (asked while a plan ran; the plan never saw
+  // it): labelled, and quieter than the chat's own messages.
+  const isAside = !!parts[0].aside;
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", gap: 1, opacity: forgotten ? 0.5 : 1 }}>
+    <Box sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", gap: 1, opacity: forgotten ? 0.5 : isAside ? 0.85 : 1 }}>
+      {isAside && (
+        <Typography variant="caption" color="text.secondary" sx={{ mb: -0.5 }}>
+          Side question
+        </Typography>
+      )}
       <Paper
-        variant={isUser ? "elevation" : "outlined"}
-        elevation={isUser ? 0 : undefined}
+        variant={isUser && !isAside ? "elevation" : "outlined"}
+        elevation={isUser && !isAside ? 0 : undefined}
         sx={{
           px: 2,
           py: 1.5,
@@ -2417,9 +2515,17 @@ function MessageBubble({
           width: "100%",
           maxWidth: "100%",
           // What you typed is quieter than the reply: a faint tint of the theme's
-          // colour behind normal text, not a solid colour fill.
-          bgcolor: isUser ? (t) => alpha(t.palette.primary.main, 0.14) : "background.paper",
+          // colour behind normal text, not a solid colour fill. A side question
+          // is quieter still: a dashed outline and a fainter tint.
+          bgcolor: isAside
+            ? isUser
+              ? (t) => alpha(t.palette.primary.main, 0.06)
+              : "action.hover"
+            : isUser
+              ? (t) => alpha(t.palette.primary.main, 0.14)
+              : "background.paper",
           color: "text.primary",
+          ...(isAside && { borderStyle: "dashed" }),
           // Only when failed: replies are outlined, and border: 0 would drop it.
           ...(hasError && { border: 1, borderColor: "error.main" }),
         }}

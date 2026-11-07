@@ -133,6 +133,36 @@ describe("makeReply", () => {
     expect(h.setAbort.mock.calls.map((c) => c[0] !== null)).toEqual([true, false]);
   });
 
+  it("leaves a side question out of a step's history, and keeps it in the session", async () => {
+    const h = makeHandle();
+    okTurn();
+    const side = { ...user("what is it doing?"), aside: true };
+    const sideAnswer = { ...assistant("Editing a file."), aside: true };
+    const before = [user("request"), side, sideAnswer, assistant("working")];
+
+    const result = await makeReply(h.handle)("Go", before, { planStep: "s1" });
+
+    const config = mockRunTurn.mock.calls[0][0] as RunTurnConfig;
+    expect(config.history.map((m) => m.content)).toEqual(["request", "working"]);
+    // The step's result is the plan's own list; the session has the question back in place.
+    expect(result.messages.map((m) => m.content)).toEqual(["request", "working", "Go", "Done."]);
+    expect(h.session().messages.map((m) => m.content)).toEqual([
+      "request", "what is it doing?", "Editing a file.", "working", "Go", "Done.",
+    ]);
+  });
+
+  it("gives a chat turn after the plan the side questions as context", async () => {
+    const h = makeHandle();
+    okTurn();
+    const side = { ...user("what is it doing?"), aside: true };
+    const sideAnswer = { ...assistant("Editing a file."), aside: true };
+
+    await makeReply(h.handle)("Thanks", [user("request"), side, sideAnswer, assistant("done")]);
+
+    const config = mockRunTurn.mock.calls[0][0] as RunTurnConfig;
+    expect(config.history.map((m) => m.content)).toEqual(["request", "what is it doing?", "Editing a file.", "done"]);
+  });
+
   it("sends the step's history and the session's settings to runTurn", async () => {
     const h = makeHandle({ contextStart: 1 });
     okTurn();

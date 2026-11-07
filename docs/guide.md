@@ -692,7 +692,12 @@ nothing starts again by itself: see
   while the page is closed; open the session and it is there, and the
   sessions panel's dot ("Needs you") shows while another session is open.
 - Two plans, or a plan and a chat turn in another session, can run at the
-  same time. The model server queues the requests.
+  same time: nothing in chat holds a lock or a limit across sessions, only a
+  second run of the same session is refused. Whether the requests then run
+  side by side is up to the model server. A local one often handles one
+  request at a time, so a second session's reply, or a side question, can wait
+  in its queue until the request before it is done; it starts as soon as the
+  server is free.
 - **Pause** on the plan card shows only while the plan runs, in place of
   **Run** or **Continue**. It ends the run at once: it aborts the request, the
   step goes back to pending with the note "Paused", and the plan stays. The run
@@ -739,6 +744,34 @@ joins the chat and is put in that step's prompt, and in every step after it.
 - A message to a thread is the same: open the thread and type there. Only the
   thread's run sees it; the chat that started the thread gets just the outcome
   and the report when the run ends.
+
+### Side questions while a plan runs
+
+A running plan doesn't block the chat. While a plan runs, the message box has
+a small switch, **Ask** (the default) and **Tell the plan**.
+
+- **Ask** sends a *side question* (an `ask` command): one reply, in the same
+  session, answered while the plan keeps going. It sees the conversation so
+  far, the plan and where it is, and is told that a plan is running. The
+  question and the answer show in the chat under a "Side question" label, in a
+  muted style.
+- **Tell the plan** is the message to the run described above: it joins the
+  chat at the next step boundary and the steps see it.
+- The plan never sees a side question or its answer: they are left out of
+  every step's prompt and history, so asking something can't change what the
+  plan does. Once the plan has ended, later chat turns do see them, as part
+  of the conversation.
+- A side question can only read: it may list and read files, search, use the
+  web and read threads, but it can't change files, run commands or edit the
+  plan. If you want something done, say so in a message to the plan, or wait
+  and ask in an ordinary message.
+- One at a time per session. While one is being answered, a second is refused
+  with a plain reason and your text stays in the box. The box stays usable
+  while the answer streams; **Esc** or **Stop** ends only the side question and
+  keeps what it had said. The plan carries on.
+- With no plan running, **Ask** doesn't apply: the box sends an ordinary
+  message. A local model server that handles one request at a time may make
+  the answer wait behind the run's request (see above).
 
 ### When a reply is stopped for being stuck
 

@@ -291,6 +291,73 @@ describe("message", () => {
   });
 });
 
+describe("ask: a side question beside a running plan", () => {
+  it("hands the starter the text and exactly what the page chose, and answers once it has begun", async () => {
+    saved("a", 3);
+    await command("a", "run", options);
+    await settle();
+    const aside = vi.fn(async () => {});
+    const r = await command("a", "ask", { ...options, text: "  What is it doing?  ", extra: "ignored" }, "POST", { ...deps, aside });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ ok: true, revision: fileOf("a").revision });
+    expect(aside).toHaveBeenCalledWith("a", "  What is it doing?  ", { connectorId: "c", model: "m", toolsOn: true, thinkOn: false });
+    // The plan is not told: no note is kept for a step.
+    expect(hub.liveRun("a")!.notes).toBeUndefined();
+  });
+
+  it("is refused with a plain reason when no plan runs, so the page sends a normal message", async () => {
+    saved("a");
+    const aside = vi.fn(async () => {});
+    const r = await command("a", "ask", { ...options, text: "hello" }, "POST", { ...deps, aside });
+    expect(r).toMatchObject({ status: 409, body: { reason: "not running" } });
+    expect(r.body.error).toMatch(/normal message/);
+    expect(aside).not.toHaveBeenCalled();
+  });
+
+  it("passes the starter's refusal on when a side question is being answered already", async () => {
+    saved("a", 3);
+    await command("a", "run", options);
+    await settle();
+    const aside = async () => {
+      throw new HttpError(409, "A side question is still being answered.", { reason: "aside running" });
+    };
+    expect(await command("a", "ask", { ...options, text: "again" }, "POST", { ...deps, aside })).toMatchObject({
+      status: 409,
+      body: { reason: "aside running", error: "A side question is still being answered." },
+    });
+  });
+
+  it("stop with aside ends only the side question; the plan goes on", async () => {
+    saved("a", 3);
+    await command("a", "run", options);
+    await settle();
+    // None is being answered: a plain refusal, and nothing is stopped.
+    expect(await command("a", "stop", { aside: true })).toMatchObject({ status: 409, body: { reason: "not running" } });
+    expect(hub.liveRun("a")).toMatchObject({ status: "running" });
+    // One is: the run says so, and the command aborts it alone.
+    const slot = runners.openAside("a");
+    await vi.waitFor(() => expect(hub.liveRun("a")?.aside).toBe(true));
+    expect((await command("a", "stop", { aside: true })).status).toBe(200);
+    expect(slot.controller.signal.aborted).toBe(true);
+    slot.release();
+    await vi.waitFor(() => expect(hub.liveRun("a")?.aside).toBeUndefined());
+    expect(hub.liveRun("a")).toMatchObject({ status: "running" });
+  });
+
+  it("says plainly what is wrong with the request", async () => {
+    saved("a", 3);
+    await command("a", "run", options);
+    await settle();
+    const aside = vi.fn(async () => {});
+    const sent = (body: unknown) => command("a", "ask", body, "POST", { ...deps, aside });
+    expect((await sent({ ...options })).body.error).toMatch(/text must be given/);
+    expect((await sent({ ...options, text: "   " })).status).toBe(400);
+    expect((await sent({ ...options, text: 5 })).status).toBe(400);
+    expect((await sent({ text: "hi" })).body.error).toMatch(/connectorId must be given/);
+    expect(aside).not.toHaveBeenCalled();
+  });
+});
+
 describe("message with no run: one chat reply, run here", () => {
   const chatOptions = { ...options, planning: false };
 

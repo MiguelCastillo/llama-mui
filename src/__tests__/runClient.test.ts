@@ -3,6 +3,7 @@ import { ApiError, forgetRevisions, type Session } from "../api";
 import {
   START_WAIT_MS,
   allViews,
+  askAside,
   dismiss,
   getView,
   needsYou,
@@ -11,6 +12,7 @@ import {
   sendMessage,
   startRun,
   stop,
+  stopAside,
   subscribe,
   subscribeAll,
   uploadImage,
@@ -481,6 +483,42 @@ describe("messages to the run", () => {
     expect(getView("a")).toBeUndefined();
   });
 
+  it("askAside sends the question as an ask command with the page's choices, and starts no run of its own", async () => {
+    serve(() => ({ body: { ok: true, revision: 9 } }));
+    const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false };
+    await expect(askAside("a", "What is it doing?", options)).resolves.toBeUndefined();
+    expect(commands()).toEqual([{ method: "POST", path: "/api/sessions/a/commands/ask", body: { text: "What is it doing?", ...options } }]);
+  });
+
+  it("askAside throws the server's plain refusal, so the text stays in the box", async () => {
+    const options = { connectorId: "c1", model: "m", toolsOn: false, thinkOn: false };
+    serve(() => ({ status: 409, body: { error: "A side question is still being answered.", reason: "aside running" } }));
+    const busy = await askAside("a", "More", options).catch((e) => e);
+    expect(busy).toBeInstanceOf(ApiError);
+    expect(busy.data.reason).toBe("aside running");
+    serve(() => ({ status: 409, body: { error: "No plan is running in this session.", reason: "not running" } }));
+    const none = await askAside("a", "More", options).catch((e) => e);
+    expect(none).toBeInstanceOf(ApiError);
+    expect(none.data.reason).toBe("not running");
+  });
+
+  it("stopAside sends stop with aside, so only the side question ends, and is quiet if none is left", async () => {
+    serve(() => ({ body: { ok: true, revision: 9 } }));
+    await expect(stopAside("a")).resolves.toBeUndefined();
+    expect(commands()).toEqual([{ method: "POST", path: "/api/sessions/a/commands/stop", body: { aside: true } }]);
+    serve(() => ({ status: 409, body: { error: "No side question is being answered.", reason: "not running" } }));
+    await expect(stopAside("a")).resolves.toBeUndefined();
+  });
+
+  it("the view says when a side question is being answered", () => {
+    global().emit("snapshot", { runs: [{ id: "a", run: run() }] });
+    expect(getView("a")!.aside).toBe(false);
+    global().emit("status", { id: "a", run: run({ aside: true }) });
+    expect(getView("a")!.aside).toBe(true);
+    global().emit("status", { id: "a", run: run() });
+    expect(getView("a")!.aside).toBe(false);
+  });
+
   it("a plan's view says plan, and a reply's says turn", async () => {
     global().emit("snapshot", { runs: [{ id: "a", run: run() }] });
     expect(getView("a")!.kind).toBe("plan");
@@ -508,6 +546,7 @@ describe("needsYou", () => {
     ask: null,
     error: null,
     streaming: false,
+    aside: false,
     startedAt: 1,
     notes: [],
     ...extra,

@@ -26,6 +26,9 @@ export interface RunnerView {
   error: string | null;
   // A request is in flight (a step's reply or its check).
   streaming: boolean;
+  // A side question is being answered beside the plan (Stop in the message box
+  // ends only it, see stopAside in runClient.ts).
+  aside: boolean;
   startedAt: number;
   // Messages the user sent to the run that no step has seen yet, and the step
   // (counting from 1) that will see each. Once a step starts they are in the

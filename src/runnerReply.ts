@@ -7,6 +7,7 @@ import { type Attachment, type Session, listModels } from "./api.ts";
 import { type RunPlanCallbacks, type RunTurnCallbacks, runTurn } from "./agent/agent.ts";
 import { INTERRUPTED } from "./agent/helpers.ts";
 import { askForSessionName } from "./agent/sessionNaming.ts";
+import { splitAsides, weaveAsides } from "./asides.ts";
 import { threadsUpdate } from "./planThread.ts";
 import type { RunnerHandle } from "./runnerTypes.ts";
 
@@ -44,8 +45,14 @@ export async function modelLoaded(h: RunnerHandle): Promise<boolean> {
 // and whether the model finished (not stopped, failed or cut off by a limit).
 // `planStep`: the turn runs that plan step; its messages carry the step's id.
 export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
-  return async (text, before, { planning = false, planStep, from, images } = {}) => {
+  return async (text, given, { planning = false, planStep, from, images } = {}) => {
     const { connector, model, toolsOn, thinkOn, toolContext } = h.env;
+    // A plan step never sees a side question (see src/asides.ts): `before` is
+    // the plan's own messages, and what the turn writes has them put back where
+    // they were. A chat turn after the plan sees everything, side questions
+    // included. As for the plan, `from` and the session's contextStart count the
+    // messages without them.
+    const { plain: before, groups: asides } = planStep ? splitAsides(given) : { plain: given, groups: [] };
     const first = h.getSession();
     // Where the model's history starts: the session's (after a clear), or for
     // a plan step, the step's own first message (see runPlan).
@@ -93,7 +100,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
       });
 
     const callbacks: RunTurnCallbacks = {
-      setMessages: (messages) => h.edit((s) => ({ ...s, messages })),
+      setMessages: (messages) => h.edit((s) => ({ ...s, messages: asides.length ? weaveAsides(messages, asides) : messages })),
       setError: h.setError,
       setFailed: (f) => {
         failed = f;

@@ -30,6 +30,12 @@ export const PLANNING_TOOLS = new Set([
   "read_thread",
   "summarize_thread",
 ]);
+// What a side question may use while a plan runs (server/aside.ts): the
+// planning turn's read-only tools, without the ones that change the plan or
+// the todo list.
+export const ASIDE_TOOLS: ReadonlySet<string> = new Set(
+  [...PLANNING_TOOLS].filter((n) => !["update_plan", "add_todo", "list_todos", "complete_todo"].includes(n)),
+);
 // A note: an instruction for one turn, sent after the message's text (see
 // docs/guide.md, "What the model is told"). A question comes first: led by "only
 // plan", the model opened its answers to questions with "This is a question,

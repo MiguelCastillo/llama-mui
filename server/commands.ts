@@ -12,7 +12,9 @@
 //            and the page opens it.
 //   stop     end the run now; answers once it is over. The plan stays, the
 //            step in flight goes back to pending, and `run` picks it up. A plan
-//            card calls it Pause, a chat reply Stop.
+//            card calls it Pause, a chat reply Stop. With { aside: true } it
+//            stops only the side question being answered (the plan goes on),
+//            or is refused ("not running") if none is.
 //   approve  { askId, allow, always? }   yes or no to an access or approval question;
 //            always (changes, git or commands) also approves that kind for the
 //            rest of the session (see autoApprove.ts)
@@ -36,18 +38,26 @@
 //            revision } once the reply has begun; it streams as events. While
 //            a reply streams, another message is refused ("reply running").
 //
+//   ask      { text, connectorId, model, toolsOn, thinkOn }   a side question
+//            while a plan runs: answered beside the plan, written into the
+//            session as messages marked `aside`, and never shown to a step (see
+//            aside.ts). It can only read. The answer is { ok, revision } once
+//            the question has begun; the reply streams as events. With no plan
+//            running it is refused ("not running": the page sends a normal
+//            message); while another side question is answered, "aside running".
+//
 // An answer is { ok: true, revision }: the session's revision once the command
 // is done (for `run`, also { sessionId }, and the revision is that session's). A command that can't be done is a 409 with a plain `error` and a
 // `reason`: "already running" (a second window starting the same plan),
 // "not running", "stale ask" (that question was answered already: the first
 // answer wins), "nothing to run", "wrong answer", "no step left", "stale revision",
-// "reply running", "not a plan" (Pause for a single reply),
+// "reply running", "aside running", "not a plan" (Pause for a single reply),
 // "no connector" (the server the page chose isn't in the list any more). A run
 // that can't reach the model server or its tools is a 502, reason "unreachable".
 
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
-import { startFromOptions, startTurnFromOptions } from "./runStart.ts";
+import { startAsideFromOptions, startFromOptions, startTurnFromOptions } from "./runStart.ts";
 import * as runners from "./runners.ts";
 import { AUTO_KINDS, type AutoKind, withAuto } from "../src/autoApprove.ts";
 import { sessionFolder } from "./sessionFile.ts";
@@ -70,6 +80,9 @@ export interface CommandDeps {
   // Starts one chat reply for the saved session (a message to a session with
   // no run). Tests pass a fake.
   chat?: (id: string, text: string, options: RunOptions & { planning: boolean }) => Promise<void>;
+  // Starts a side question in a session whose plan runs (see aside.ts); answers
+  // once it has begun. Tests pass a fake.
+  aside?: (id: string, text: string, options: RunOptions) => Promise<void>;
 }
 
 // The real starters build the run from the page's choices (see runStart.ts);
@@ -77,6 +90,7 @@ export interface CommandDeps {
 const defaultDeps: Required<CommandDeps> = {
   start: (id, options) => startFromOptions(id, options),
   chat: (id, text, options) => startTurnFromOptions(id, text, options),
+  aside: (id, text, options) => startAsideFromOptions(id, text, options),
 };
 
 function parseRunOptions(body: any): RunOptions {
@@ -130,6 +144,13 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
       break;
     }
     case "stop":
+      if (body.aside === true) {
+        // Only the side question; the plan goes on.
+        if (!runners.abortAside(id)) {
+          throw new HttpError(409, "No side question is being answered.", { reason: "not running" });
+        }
+        break;
+      }
       await runners.stopRun(id);
       break;
     case "message": {
@@ -151,6 +172,21 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
         const validated = images ? await validateRefs(id, images) : undefined;
         await deps.chat(id, text, { ...parseRunOptions(body), planning: body.planning === true, images: validated });
       }
+      break;
+    }
+    case "ask": {
+      // A side question: answered beside the running plan, which never sees it.
+      const text = body.text;
+      if (typeof text !== "string" || !text.trim()) throw new HttpError(400, "text must be given");
+      const options = parseRunOptions(body);
+      // Only a plan has something to ask beside; with none, the page sends the
+      // question as an ordinary message.
+      if (!runners.isRunning(id) || hub.liveRun(id)?.kind === "turn") {
+        throw new HttpError(409, "No plan is running in this session, so there is nothing to ask beside. Send it as a normal message.", {
+          reason: "not running",
+        });
+      }
+      await deps.aside(id, text, options);
       break;
     }
     case "approve":

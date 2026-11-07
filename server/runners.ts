@@ -27,6 +27,10 @@
 // A message from the user to the run (sendNote) is folded in before the next
 // step, never queued silently: it is acknowledged with the step that will see
 // it, or refused.
+// A side question (server/aside.ts, through openAside) is answered beside the
+// plan, on its own request, and its messages are kept apart from the plan's own
+// list (src/asides.ts) so a step's reply, which writes back the list it has,
+// can't drop them. The plan never sees them.
 // When the run is over (for any reason) its entry is gone and the hub's run
 // record with it: the session is the page's again, and the page learns how it
 // ended from the `status` event (run null, and `error` if it went wrong).
@@ -39,6 +43,7 @@
 import { randomUUID } from "node:crypto";
 import { type RunPlanCallbacks, runPlan } from "../src/agent/agent.ts";
 import type { ChatMessage, PlanStep, Session } from "../src/api.ts";
+import { type AsideGroup, plainCount, splitAsides, weaveAsides, withoutAsides } from "../src/asides.ts";
 import { planRequestFor } from "../src/planThread.ts";
 import { attachedPaths, makeReply, modelLoaded } from "../src/runnerReply.ts";
 import type { Answer, Ask, RunnerEnv, RunnerHandle } from "../src/runnerTypes.ts";
@@ -87,6 +92,14 @@ interface Entry {
   // Messages from the user that no step has seen yet (see sendNote). They are
   // part of the run record, so a page that connects later shows them.
   notes: hub.RunNote[];
+  // The side questions asked during a plan run, apart from the plan's own
+  // messages (see src/asides.ts, and change below). Those already in the
+  // session when the run began are here too.
+  asides: AsideGroup[];
+  // The side question being answered, if any (see openAside); one at a time.
+  aside: { controller: AbortController; done: Promise<void> } | null;
+  // The run is over and being wrapped up: no side question starts now.
+  closing: boolean;
   controller: AbortController | null;
   stopRequested: boolean;
   ended: boolean;
@@ -148,6 +161,7 @@ function sync(e: Entry): Promise<void> {
       status: statusOf(e),
       ask: e.ask ? askToPlain(e.ask.id, e.ask.ask) : null,
       streaming: e.controller !== null,
+      aside: e.aside !== null,
       error: e.error,
       notes: e.notes,
     };
@@ -209,9 +223,15 @@ function scheduleSave(e: Entry) {
 
 // ── changing the session ─────────────────────────────────────────────────────
 
+// Whoever calls it (the plan's replies write back the whole message list they
+// have) can't lose a side question: when the messages changed, the side
+// questions are woven back in.
 function change(e: Entry, fn: (s: Session) => Session) {
-  const next = fn(e.session);
+  let next = fn(e.session);
   if (next === e.session) return;
+  if (e.asides.length && next.messages !== e.session.messages) {
+    next = { ...next, messages: weaveAsides(withoutAsides(next.messages), e.asides) };
+  }
   e.session = next;
   scheduleSave(e);
   hub.announce(e.id);
@@ -345,6 +365,69 @@ function dropNotes(e: Entry) {
   for (const n of left) ack(e, n, { step: null, reason });
 }
 
+// ── side questions ───────────────────────────────────────────────────────────
+
+// What aside.ts gets of a running plan to answer a side question on its own
+// request, without touching the plan: the session as it is now, a way to write
+// the question and answer into it, and the signal that Stop (and the end of the
+// run) raise.
+export interface AsideSlot {
+  session: () => Session;
+  // Replaces all the messages of this side question (each marked `aside`).
+  // They go into the run's own session, through its change(), so the run's
+  // saves carry them and its page events show them.
+  setMessages: (messages: ChatMessage[]) => void;
+  // Aborted by Stop, by abortAside, and when the run ends.
+  controller: AbortController;
+  // Tells the run when the answer is over (or has failed). The run does not end
+  // before it: it aborts the question and waits for this.
+  track: (done: Promise<void>) => void;
+  release: () => void;
+}
+
+// Takes the one place for a side question in a session whose plan is running.
+// Refused (409) if no plan runs here (a reply is not a plan), if the plan is
+// stopping, or if a side question is being answered already.
+export function openAside(id: string): AsideSlot {
+  const e = liveEntry(id);
+  if (e.kind !== "plan" || e.stopRequested || e.closing) throw notRunning();
+  if (e.aside) {
+    throw new HttpError(409, "A side question is still being answered. Wait for it, or stop it, then ask again. Your text is still in the box.", {
+      reason: "aside running",
+    });
+  }
+  const controller = new AbortController();
+  const mine = { controller, done: Promise.resolve() };
+  e.aside = mine;
+  // Placed after the messages the plan has now; the plan's later ones follow it.
+  const group: AsideGroup = { at: withoutAsides(e.session.messages).length, messages: [] };
+  e.asides = [...e.asides, group];
+  // Pages learn that one is being answered (the Stop that ends only it).
+  void sync(e);
+  return {
+    session: () => e.session,
+    setMessages: (messages) => {
+      group.messages = messages;
+      change(e, (s) => ({ ...s, messages: [...s.messages] }));
+    },
+    controller,
+    track: (done) => void (mine.done = done),
+    release: () => {
+      if (e.aside !== mine) return;
+      e.aside = null;
+      void sync(e);
+    },
+  };
+}
+
+// Stops the side question being answered, and nothing else. False if none is.
+export function abortAside(id: string): boolean {
+  const e = store.get(id);
+  if (!e || e.ended || !e.aside) return false;
+  e.aside.controller.abort();
+  return true;
+}
+
 // ── the run ──────────────────────────────────────────────────────────────────
 
 // Starts the plan of a saved session (its open steps, in order) and answers
@@ -395,6 +478,12 @@ async function launch(
     throw new HttpError(409, "There's no step left to run in this plan.", { reason: "nothing to run" });
   }
 
+  // A plan works with its own messages only: side questions already in the
+  // session (from an earlier run) are kept apart, and woven back in as it writes.
+  const split = turn || !Array.isArray(session.messages) ? null : splitAsides(session.messages);
+  const groups = split?.groups ?? [];
+  const plain = groups.length ? split!.plain : session.messages;
+
   const planRunning = { current: false };
   const resolved: Required<RunnerDeps> & { readImage: typeof import("../server/images.ts").read } = {
     run: deps.run ?? runPlan,
@@ -414,6 +503,9 @@ async function launch(
     ask: null,
     error: null,
     notes: [],
+    asides: groups,
+    aside: null,
+    closing: false,
     controller: null,
     stopRequested: false,
     ended: false,
@@ -425,7 +517,7 @@ async function launch(
     saveAgain: false,
     debounce: null,
     maxWait: null,
-    pushed: JSON.stringify({ status: "running", ask: null, streaming: false, error: null, notes: [] }),
+    pushed: JSON.stringify({ status: "running", ask: null, streaming: false, aside: false, error: null, notes: [] }),
     chain: Promise.resolve(),
   } as unknown as Entry;
 
@@ -445,7 +537,11 @@ async function launch(
   e.handle = {
     sessionId: id,
     env,
-    getSession: () => e.session,
+    // The plan counts messages without the side questions, so does its start.
+    getSession: () =>
+      e.asides.length
+        ? { ...e.session, contextStart: plainCount(e.session.messages, e.session.contextStart ?? 0) }
+        : e.session,
     edit: (fn) => change(e, fn),
     setError: (err) => {
       if (e.error === err) return;
@@ -488,7 +584,7 @@ async function launch(
     planRunningRef: planRunning,
     // The status is derived from the run, so there is nothing to set.
     setPlanRunning: () => {},
-    messages: session.messages,
+    messages: plain,
     planRef,
     setStep: (stepId, patch) => {
       if (patch.status === "running") e.runningStep = stepId;
@@ -498,7 +594,7 @@ async function launch(
     // After Stop nothing more is sent.
     reply: async (text, before, opts) =>
       e.stopRequested ? { ok: false, messages: before } : reply(text, before, opts),
-    request: planRequestFor(session.messages, session.planAnchor),
+    request: planRequestFor(plain, session.planAnchor),
     context: session.planContext,
     freshSteps: env.freshSteps,
     setError: e.handle.setError,
@@ -539,12 +635,19 @@ async function launch(
 // to pending, and the hub takes the final session, saves it and lets go.
 async function end(e: Entry) {
   if (e.ended) return;
+  e.closing = true;
   const stopped = e.stepAtStop && e.session.plan?.find((st) => st.id === e.stepAtStop);
   if (stopped && (stopped.status === "pending" || stopped.status === "running")) {
     const keep = stopped.answer ? { answer: stopped.answer, asked: stopped.asked } : {};
     patchStep(e, stopped.id, { status: "pending", note: "Paused", ...keep });
   }
   dropNotes(e);
+  // A side question still being answered is cut off here, keeping what it had
+  // written: it goes into the session through this run, which is over next.
+  if (e.aside) {
+    e.aside.controller.abort();
+    await e.aside.done.catch(() => {});
+  }
   await e.chain; // the run record is current before it goes
   e.ended = true;
   e.runningStep = null;
@@ -572,6 +675,7 @@ export async function stopRun(id: string) {
     e.stopRequested = true;
     e.stepAtStop = e.runningStep;
     e.controller?.abort();
+    e.aside?.controller.abort();
     e.ask?.decide(false);
     sync(e);
   }
@@ -622,6 +726,7 @@ export async function resetRunners() {
     e.discarded = true;
     clearSaveTimers(e);
     e.controller?.abort();
+    e.aside?.controller.abort();
     e.ask?.decide(false);
     await hub.endRun(e.id).catch(() => {});
   }

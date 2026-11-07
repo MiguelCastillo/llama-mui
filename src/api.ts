@@ -115,6 +115,10 @@ export interface ChatMessage {
   // under the message; never sent to the model.
   seenByStep?: number;
   notSeen?: boolean;
+  // On the messages of a side question: one asked while a plan ran, answered
+  // apart from it (server/aside.ts). They are in the chat, but no plan step
+  // sees them; a chat turn after the plan does.
+  aside?: boolean;
   // On a user message: references to images uploaded to this session. The
   // base64 data is read per request and passed to the model; never saved
   // into the session. Only meaningful on user messages.

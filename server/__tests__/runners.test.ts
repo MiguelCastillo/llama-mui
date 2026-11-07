@@ -215,6 +215,29 @@ describe("start and status", () => {
 });
 
 describe("two sessions", () => {
+  it("start while another session's run is still going: no global lock or limit", async () => {
+    await start("a");
+    await flush();
+    expect(statusOf("a")).toBe("running");
+    expect(run("a")!.streaming).toBe(true);
+
+    // "a" is mid-step and has not been finished; "b" starts anyway.
+    const second = await start("b", 2);
+    await flush();
+    expect(second.revision).toBeGreaterThan(0);
+    expect(runners.isRunning("a")).toBe(true);
+    expect(runners.isRunning("b")).toBe(true);
+    expect(started).toEqual(["s1", "s1"]);
+    expect(stepStatuses("a")).toEqual(["running", "pending", "pending"]);
+    expect(stepStatuses("b")).toEqual(["running", "pending"]);
+
+    // A third and a fourth too.
+    await start("c", 1);
+    await start("d", 1);
+    await flush();
+    expect(["a", "b", "c", "d"].every((id) => runners.isRunning(id))).toBe(true);
+  });
+
   it("run independently", async () => {
     await start("a");
     await start("b", 2);

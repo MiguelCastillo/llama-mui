@@ -260,6 +260,24 @@ describe("runPlan", () => {
     expect(setPlanRunning).toHaveBeenCalledWith(true);
   });
 
+  it("gives no step a side question: not in the history it is sent, nor in what it returns", async () => {
+    const steps: PlanStep[] = [{ id: "s1", text: "Step 1", status: "pending" }];
+    const side: ChatMessage = { role: "user", content: "side?", aside: true };
+    const sideAnswer: ChatMessage = { role: "assistant", content: "side!", aside: true };
+    const seen: ChatMessage[][] = [];
+    const cb = mockCallbacks({
+      planRef: { current: steps },
+      messages: [{ role: "user", content: "request" }, side, sideAnswer],
+      reply: vi.fn(async (_text: string, before: ChatMessage[]) => {
+        seen.push(before);
+        return { ok: false, messages: before };
+      }),
+    });
+    await runPlan(cb);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].map((m) => m.content)).toEqual(["request"]);
+  });
+
   it("resets planRunningRef after completion", async () => {
     const ref = { current: false };
     const setPlanRunning = vi.fn();

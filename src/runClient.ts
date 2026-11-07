@@ -60,6 +60,8 @@ interface WireRun {
   kind?: "turn";
   ask?: { id: string; kind: "access" | "location" | "approval"; details: any };
   streaming?: boolean;
+  // A side question is being answered.
+  aside?: boolean;
   error?: string;
   notes?: { id: string; text: string; step: number; stepId: string }[];
 }
@@ -140,6 +142,7 @@ function viewOf(l: Live): RunnerView {
     ask: askOf(l),
     error: l.commandError ?? l.run.error ?? null,
     streaming: !!l.run.streaming,
+    aside: !!l.run.aside,
     startedAt: l.run.startedAt,
     notes: (l.run.notes ?? []).map(({ id, text, step }) => ({ id, text, step })),
   };
@@ -222,6 +225,7 @@ function endRun(id: string, error?: string | null): Promise<void> {
       ask: null,
       error: error ?? null,
       streaming: false,
+      aside: false,
       startedAt: l.run.startedAt,
       notes: [],
     };
@@ -409,6 +413,20 @@ export async function sendChat(id: string, text: string, options: RunOptions & {
   await sendCommand(id, "message", { text, ...options });
   await waitUntil(() => (generation.get(id) ?? 0) !== before, START_WAIT_MS);
 }
+
+// A side question while a plan runs: the server answers it beside the plan
+// (which never sees it) and writes both into the session, so they show in the
+// run's view as the session patches arrive. Answers once the question has
+// begun. Throws an ApiError, a plain refusal: reason "not running" (no plan
+// runs any more: send it as a normal message), "aside running" (one is being
+// answered), "no connector". The caller keeps the text where the user typed it.
+export async function askAside(id: string, text: string, options: RunOptions): Promise<void> {
+  await sendCommand(id, "ask", { text, ...options });
+}
+
+// Stops only the side question being answered; the plan goes on. Quiet if there
+// is none (it may have just ended).
+export const stopAside = (id: string): Promise<void> => quiet(sendCommand(id, "stop", { aside: true }));
 
 // Yes or no to an access or approval question (a no also turns down a
 // question that asks for a path).
