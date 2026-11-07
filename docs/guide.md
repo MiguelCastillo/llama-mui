@@ -383,7 +383,7 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
 
 | Layer | What it holds | When it's sent | How long it holds |
 |---|---|---|---|
-| **System prompt** | What holds for the whole session: how to use each tool group, the plan rules, your home folder, the working directory | First in every request, and never changed in a session, except when you clear the context | The whole session |
+| **System prompt** | What holds for the whole session: your standing instructions first, then how to use each tool group, the plan rules, your home folder, the working directory | First in every request, and never changed in a session, except when you clear the context | The whole session |
 | **Chat update** | Facts about the session that changed since: other attachments, a new working directory, tools turned off | After your next message, only when the facts changed | Until the next chat update replaces it |
 | **Note** | An instruction for one turn: the planning note (see [How plans work](#how-plans-work)) | After the message it's for | That turn only |
 
@@ -398,14 +398,22 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   if you pick another one later, a chat update says so. Clearing the context
   makes the model reprocess its history anyway, so that is when the prompt is
   brought up to date: it names the working directory as it is then.
-- **Your instructions** are a plain file, `~/.llama-mui/instructions.md`,
-  edited in Settings → Agent. Its text goes in the system prompt after the tool
-  instructions and before the home folder. Without the file the default
-  applies: after a commit the agent runs `git --no-pager show --stat --oneline
-  HEAD` and tells you which files went in. An empty file means no extra
-  instructions, and "Reset to default" deletes the file. Unlike the working
-  directory it isn't fixed per session, so a change applies from the next
-  message and makes the model reprocess the start of that chat once.
+- **Your instructions** are the governing rules for the model; tools are only
+  helpers under them. They are a plain file, `~/.llama-mui/instructions.md`,
+  edited in Settings → Agent. They open the system prompt, under a heading that
+  says they are your standing rules, where the file is, and that they apply in
+  every chat, with or without tools. In a chat with tools off they are all the
+  system prompt holds. Clearing the context doesn't remove them: they aren't
+  part of the history, and the file is read again on every message. Without
+  the file the default applies: after a commit the agent runs `git --no-pager
+  show --stat --oneline HEAD` and tells you which files went in. An empty
+  file means no extra instructions, and "Reset to default" deletes the file.
+  Unlike the working directory they aren't fixed per session, so a change
+  applies from the next message and makes the model reprocess the start of
+  that chat once. The model can add a rule with `add_instruction` (the
+  Instructions group in Settings → Tools): you see the exact line as a diff and
+  approve it, "approve all changes" never covers it, and the file can't be
+  overwritten by it.
 - A path the model made up, where neither it nor its folder exists, is answered with an error
   that tells it to use `locate_path` or ask you, for its first two such guesses
   in a session; only a model that keeps guessing is brought to you with the

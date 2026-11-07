@@ -4,7 +4,7 @@
 import os from "node:os";
 import { DISK_TOOLS, checkAttachments, checkWorkingDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
-import { readInstructions } from "./instructions.ts";
+import { INSTRUCTION_TOOLS, governingRules, instructionTools, readInstructions } from "./instructions.ts";
 import { readRecentFolders, withFolder, writeRecentFolders } from "./recentFolders.ts";
 import { load, save } from "./store.ts";
 import {
@@ -38,6 +38,14 @@ interface Group {
 }
 
 const GROUPS: Group[] = [
+  {
+    id: "instructions",
+    label: "Instructions",
+    description:
+      "The model can add a rule to your standing instructions (instructions.md) when you ask it to remember " +
+      "something. You see the exact line and approve it; it is never approved for you.",
+    instructions: instructionTools,
+  },
   {
     id: "plan",
     label: "Plan",
@@ -132,6 +140,7 @@ const GROUPS: Group[] = [
 ];
 
 const TOOLS: ToolSpec[] = [
+  ...INSTRUCTION_TOOLS,
   ...PLAN_TOOLS,
   ...TODO_TOOLS,
   ...THREAD_TOOLS,
@@ -159,14 +168,20 @@ const isOffered = (ctx: ToolContext, t: ToolSpec) => ctx.store.toolsEnabled && !
 // them would mean saving their text in the session. An edit therefore makes the
 // next message reprocess the start once, and the same for every session. Only
 // the working directory differs, so it must stay last: anything per-session
-// earlier would make each new session reprocess the rest. The home folder is
+// earlier would make each new session reprocess the rest. The rules come
+// first because they govern everything after them; an edit to them reprocesses
+// the tools' help too, which is a few hundred tokens. The home folder is
 // the same in every session; without it a model with nothing attached guessed
 // Linux paths like /home/user.
-function toolsSystemPrompt(promptDir: string | null, instructions: string): string {
+function toolsSystemPrompt(promptDir: string | null, instructions: string, withTools: boolean): string | null {
+  // The user's rules govern the model and come first; the tools' help, the home
+  // folder and the working directory follow, and only when there are tools.
+  const rules = governingRules(instructions);
+  if (!withTools) return rules;
   return [
+    ...(rules ? [rules] : []),
     "You have tools. Use one when it helps answer the question; otherwise answer directly.",
     ...GROUPS.map((g) => g.instructions),
-    ...(instructions.trim() ? [instructions.trim()] : []),
     `The user's home folder is ${os.homedir()}.`,
     promptDir ? `Working directory: ${promptDir}` : "There's no working directory: use absolute paths.",
   ].join("\n\n");
@@ -293,10 +308,12 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
     // The working directory the session's system prompt names: fixed at its
     // first message (see promptDir in Chat.tsx), so it can differ from now's.
     const promptDir = typeof body.promptDir === "string" ? body.promptDir : null;
+    const offered = TOOLS.filter((t) => isOffered(ctx, t)).map((t) => t.name);
     sendJson(res, 200, {
       definitions: TOOLS.map((t) => t.definition),
-      systemPrompt: toolsSystemPrompt(promptDir, (await readInstructions()).text),
-      offered: TOOLS.filter((t) => isOffered(ctx, t)).map((t) => t.name),
+      // The user's rules go out with or without tools; the rest only with them.
+      systemPrompt: toolsSystemPrompt(promptDir, (await readInstructions()).text, offered.length > 0),
+      offered,
       update: await chatUpdate(ctx, promptDir),
       // The working directory's only: attachments have none (see SessionSettings).
       checkCommands: ctx.workingDir && ctx.store.checkCommands[ctx.workingDir]

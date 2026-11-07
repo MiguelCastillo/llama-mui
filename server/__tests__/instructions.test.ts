@@ -17,6 +17,9 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { DEFAULT_INSTRUCTIONS, MAX_INSTRUCTIONS, instructionRoutes } = await import("../instructions.ts");
 const { toolRoutes } = await import("../tools.ts");
+const { INSTRUCTION_TOOLS } = await import("../instructions.ts");
+const { ApprovalNeeded } = await import("../toolkit.ts");
+const { autoApproves } = await import("../../src/autoApprove.ts");
 
 const file = () => path.join(home.dir, ".llama-mui", "instructions.md");
 
@@ -77,29 +80,110 @@ describe("the agent's instructions file", () => {
 });
 
 describe("the system prompt", () => {
-  it("has the instructions after the tool groups and before the home folder, with the working directory last", async () => {
+  it("opens with the labelled rules, then the tools' help, the home folder, and the working directory last", async () => {
     await invoke("DELETE");
     let parts = (await prompt()).split("\n\n");
-    expect(parts.at(-3)).toBe(DEFAULT_INSTRUCTIONS);
+    expect(parts[0]).toMatch(/^Standing rules from the user\..*~\/\.llama-mui\/instructions\.md.*with or without tools/s);
+    expect(parts[1]).toBe(DEFAULT_INSTRUCTIONS);
+    expect(parts[2]).toMatch(/^You have tools/);
     expect(parts.at(-2)).toBe(`The user's home folder is ${home.dir}.`);
     expect(parts.at(-1)).toBe("Working directory: /work");
-    expect(parts.at(-4)).toMatch(/search the web/);
+    expect(parts[3]).toMatch(/add_instruction/);
 
     await invoke("PUT", { text: "Be brief." });
     parts = (await prompt()).split("\n\n");
-    expect(parts.at(-3)).toBe("Be brief.");
+    expect(parts[1]).toBe("Be brief.");
     expect(parts).not.toContain(DEFAULT_INSTRUCTIONS);
   });
 
-  it("adds nothing for an empty file", async () => {
+  it("has no rules block for an empty file", async () => {
     await invoke("PUT", { text: "  \n" });
     const parts = (await prompt()).split("\n\n");
-    expect(parts.at(-2)).toBe(`The user's home folder is ${home.dir}.`);
-    expect(parts.at(-3)).toMatch(/search the web/);
+    expect(parts[0]).toMatch(/^You have tools/);
+    expect(parts.some((p) => p.startsWith("Standing rules"))).toBe(false);
   });
 
   it("is the same for every session except the last line", async () => {
     await invoke("DELETE");
     expect(await prompt()).toBe(await prompt());
+  });
+
+  it("still carries the rules, and nothing about tools, when tools are off", async () => {
+    await invoke("PUT", { text: "Be brief." });
+    const { save } = await import("../store.ts").then((m) => ({ save: (m as any).save }));
+    const store = await (await import("../store.ts")).load();
+    await save({ ...store, toolsEnabled: false });
+    try {
+      const text = await prompt();
+      expect(text).toMatch(/^Standing rules from the user\./);
+      expect(text).toContain("Be brief.");
+      expect(text).not.toContain("You have tools");
+      expect(text).not.toContain("Working directory");
+    } finally {
+      await save(store);
+    }
+  });
+});
+
+describe("add_instruction", () => {
+  const ctx = (approved: string | null = null) => ({ approved }) as any;
+  const run = (args: unknown, approved: string | null = null) => INSTRUCTION_TOOLS[0].run(ctx(approved), args);
+  const asked = async (args: unknown) => {
+    try {
+      await run(args);
+    } catch (e) {
+      if (e instanceof ApprovalNeeded) return e.approval;
+      throw e;
+    }
+    throw new Error("expected an approval");
+  };
+
+  it("asks first with the exact line as a diff, and writes nothing until approved", async () => {
+    await invoke("PUT", { text: "Be brief." });
+    const approval = await asked({ text: "Check git before saying who wrote a commit.", reason: "You asked me to keep that" });
+    expect(approval).toMatchObject({ type: "change", path: file(), action: "edit", reason: "You asked me to keep that" });
+    expect((approval as any).diff).toContain("+- Check git before saying who wrote a commit.");
+    expect(await readFile(file(), "utf8")).toBe("Be brief.");
+  });
+
+  it("appends the line once the user approved exactly that", async () => {
+    await invoke("PUT", { text: "Be brief.\n" });
+    const args = { text: "- Check git first." };
+    const approval = await asked(args);
+    const out = await run(args, JSON.stringify(approval));
+    expect(out).toMatch(/Added to your standing instructions: - Check git first\./);
+    expect(await readFile(file(), "utf8")).toBe("Be brief.\n- Check git first.\n");
+  });
+
+  it("asks again if the file changed after the user saw the diff", async () => {
+    await invoke("PUT", { text: "Be brief." });
+    const args = { text: "Check git first." };
+    const approval = await asked(args);
+    await invoke("PUT", { text: "Be brief.\nSomething else." });
+    await expect(run(args, JSON.stringify(approval))).rejects.toBeInstanceOf(ApprovalNeeded);
+  });
+
+  it("creates the file from the default when there is none", async () => {
+    await invoke("DELETE");
+    const approval = await asked({ text: "Check git first." });
+    expect((approval as any).action).toBe("create");
+    await run({ text: "Check git first." }, JSON.stringify(approval));
+    expect(await readFile(file(), "utf8")).toBe(`${DEFAULT_INSTRUCTIONS}\n- Check git first.\n`);
+  });
+
+  it("refuses an empty rule, a repeat, a long one, and one that would pass the size limit", async () => {
+    await invoke("PUT", { text: "- Be brief." });
+    await expect(run({ text: "  " })).rejects.toThrow(/text is required/);
+    await expect(run({ text: "Be brief." })).rejects.toThrow(/already in the instructions/);
+    await expect(run({ text: "a".repeat(601) })).rejects.toThrow(/one sentence/);
+    await invoke("PUT", { text: "a".repeat(MAX_INSTRUCTIONS - 5) });
+    await expect(run({ text: "Check git first." })).rejects.toThrow(/over 20000/);
+  });
+
+  it("is never approved by 'approve all changes'", async () => {
+    await invoke("PUT", { text: "Be brief." });
+    const approval = (await asked({ text: "Check git first." })) as any;
+    expect(autoApproves({ changes: true }, approval)).toBe(false);
+    expect(autoApproves({ changes: true }, { ...approval, path: "/x/README.md" })).toBe(true);
   });
 });

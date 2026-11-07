@@ -90,6 +90,23 @@ describe("a reply that is stuck", () => {
     expect(last.messages[0]).toEqual({ role: "system", content: "sys" });
   });
 
+  it("sends the user's rules even with tools off, and after a clear (history starts later), with no tools", async () => {
+    const requests: any[] = [];
+    mockStream.mockImplementation(async (req: any) => {
+      requests.push(req);
+      return { toolCalls: [], usage: undefined };
+    });
+    const t = setup();
+    t.config.toolsOn = false;
+    t.config.systemPrompt = "Standing rules from the user. ...";
+    t.config.toolDefinitions = [{ type: "function", function: { name: "run_command" } }];
+    // What's left after a clear: only the messages from the new start.
+    t.config.history = [{ role: "user", content: "after the clear" }] as any;
+    await runTurn(t.config, t.cb);
+    expect(requests[0].tools).toBeUndefined();
+    expect(requests[0].messages[0]).toEqual({ role: "system", content: "Standing rules from the user. ..." });
+  });
+
   it("stops on the same command giving the same output", async () => {
     let i = 0;
     mockStream.mockImplementation(async (req: any) => (req.tools ? { toolCalls: [runCall(++i, "npx vitest run")], usage: undefined } : { toolCalls: [], usage: undefined }));

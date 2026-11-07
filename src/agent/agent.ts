@@ -260,7 +260,7 @@ export async function runTurn(
           // tools are left off, so the model says what it has instead of
           // calling another.
           messages:
-            toolsOn && systemPrompt
+            systemPrompt
               ? [{ role: "system", content: systemPrompt }, ...history]
               : history,
           think: thinkOn && !planning && round === 0,

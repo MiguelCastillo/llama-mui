@@ -112,6 +112,7 @@ import {
 } from "./api";
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { pickModel } from "./modelChoice";
+import { autoApproves } from "./autoApprove";
 import { copyText } from "./clipboard";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import { loadDraft, saveDraft } from "./drafts";
@@ -3153,7 +3154,7 @@ function ApprovalPrompt({ approval, onDecide, onAlways, canMakePlan: offerPlan }
       </Stack>
       {/* Approves this and the same kind of thing for the rest of this session;
           Session settings, Approvals, turns it off. */}
-      {onAlways && approval.type === "change" && (
+      {onAlways && approval.type === "change" && autoApproves({ changes: true }, approval) && (
         <Button size="small" onClick={() => onAlways("changes")} sx={{ mt: 0.5, ml: -1 }}>
           Approve all changes in this session
         </Button>
