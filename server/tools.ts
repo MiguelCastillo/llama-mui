@@ -4,7 +4,7 @@
 import os from "node:os";
 import { DISK_TOOLS, checkAttachments, checkWorkingDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
-import { INSTRUCTION_TOOLS, governingRules, instructionTools, readInstructions } from "./instructions.ts";
+import { RULE_TOOLS, governingRules, readRules, ruleTools } from "./rules.ts";
 import { readRecentFolders, withFolder, writeRecentFolders } from "./recentFolders.ts";
 import { load, save } from "./store.ts";
 import {
@@ -39,12 +39,12 @@ interface Group {
 
 const GROUPS: Group[] = [
   {
-    id: "instructions",
-    label: "Instructions",
+    id: "rules",
+    label: "Rules",
     description:
-      "The model can add a rule to your standing instructions (instructions.md) when you ask it to remember " +
+      "The model can add a rule to your standing rules (rules.md) when you ask it to remember " +
       "something. You see the exact line and approve it; it is never approved for you.",
-    instructions: instructionTools,
+    instructions: ruleTools,
   },
   {
     id: "plan",
@@ -140,7 +140,7 @@ const GROUPS: Group[] = [
 ];
 
 const TOOLS: ToolSpec[] = [
-  ...INSTRUCTION_TOOLS,
+  ...RULE_TOOLS,
   ...PLAN_TOOLS,
   ...TODO_TOOLS,
   ...THREAD_TOOLS,
@@ -163,7 +163,7 @@ const isOffered = (ctx: ToolContext, t: ToolSpec) => ctx.store.toolsEnabled && !
 //
 // Everything but the last line is the same in every session, so a new one
 // reuses another's cached start (the tool list comes first, then this). The
-// user's instructions (~/.llama-mui/instructions.md) are read each time the
+// user's rules (~/.llama-mui/rules.md) are read each time the
 // prompt is built, not frozen per session like the working directory: freezing
 // them would mean saving their text in the session. An edit therefore makes the
 // next message reprocess the start once, and the same for every session. Only
@@ -173,10 +173,10 @@ const isOffered = (ctx: ToolContext, t: ToolSpec) => ctx.store.toolsEnabled && !
 // the tools' help too, which is a few hundred tokens. The home folder is
 // the same in every session; without it a model with nothing attached guessed
 // Linux paths like /home/user.
-function toolsSystemPrompt(promptDir: string | null, instructions: string, withTools: boolean): string | null {
+function toolsSystemPrompt(promptDir: string | null, rulesText: string, withTools: boolean): string | null {
   // The user's rules govern the model and come first; the tools' help, the home
   // folder and the working directory follow, and only when there are tools.
-  const rules = governingRules(instructions);
+  const rules = governingRules(rulesText);
   if (!withTools) return rules;
   return [
     ...(rules ? [rules] : []),
@@ -312,7 +312,7 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
     sendJson(res, 200, {
       definitions: TOOLS.map((t) => t.definition),
       // The user's rules go out with or without tools; the rest only with them.
-      systemPrompt: toolsSystemPrompt(promptDir, (await readInstructions()).text, offered.length > 0),
+      systemPrompt: toolsSystemPrompt(promptDir, (await readRules()).text, offered.length > 0),
       offered,
       update: await chatUpdate(ctx, promptDir),
       // The working directory's only: attachments have none (see SessionSettings).

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -15,13 +15,13 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => home.dir, default: { ...actual, homedir: () => home.dir } };
 });
 
-const { DEFAULT_INSTRUCTIONS, MAX_INSTRUCTIONS, instructionRoutes } = await import("../instructions.ts");
+const { DEFAULT_RULES, MAX_RULES, ruleRoutes } = await import("../rules.ts");
 const { toolRoutes } = await import("../tools.ts");
-const { INSTRUCTION_TOOLS } = await import("../instructions.ts");
+const { RULE_TOOLS } = await import("../rules.ts");
 const { ApprovalNeeded } = await import("../toolkit.ts");
 const { autoApproves } = await import("../../src/autoApprove.ts");
 
-const file = () => path.join(home.dir, ".llama-mui", "instructions.md");
+const file = () => path.join(home.dir, ".llama-mui", "rules.md");
 
 const invoke = async (method: string, body?: unknown) => {
   const req = Object.assign(Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]), {
@@ -30,7 +30,7 @@ const invoke = async (method: string, body?: unknown) => {
   }) as unknown as IncomingMessage;
   let text = "";
   const res = { statusCode: 200, setHeader() {}, end: (t: string) => void (text = t) } as unknown as ServerResponse;
-  await instructionRoutes({ req, res, parts: ["instructions"], method, search: "" });
+  await ruleRoutes({ req, res, parts: ["rules"], method, search: "" });
   return { status: res.statusCode, body: JSON.parse(text) };
 };
 
@@ -42,9 +42,27 @@ const prompt = async () => {
   return JSON.parse(text).systemPrompt as string;
 };
 
-describe("the agent's instructions file", () => {
+describe("the agent's rules file", () => {
+  it("copies the old instructions.md to rules.md once when there is no rules.md, and leaves the old file", async () => {
+    await invoke("DELETE");
+    const legacy = path.join(home.dir, ".llama-mui", "instructions.md");
+    await mkdir(path.dirname(legacy), { recursive: true });
+    await writeFile(legacy, "Old rule.");
+    expect((await invoke("GET")).body).toEqual({ text: "Old rule.", isDefault: false });
+    expect(await readFile(file(), "utf8")).toBe("Old rule.");
+    expect(await readFile(legacy, "utf8")).toBe("Old rule.");
+    // Once rules.md exists it wins, whatever the old file says.
+    await writeFile(legacy, "Changed in the old file.");
+    expect((await invoke("GET")).body.text).toBe("Old rule.");
+    // Reset removes both names, so the old text doesn't come back.
+    const reset = await invoke("DELETE");
+    expect(reset.body.isDefault).toBe(true);
+    await expect(readFile(legacy)).rejects.toThrow(/ENOENT/);
+    expect((await invoke("GET")).body.isDefault).toBe(true);
+  });
+
   it("is the default when the file is missing", async () => {
-    expect((await invoke("GET")).body).toEqual({ text: DEFAULT_INSTRUCTIONS, isDefault: true });
+    expect((await invoke("GET")).body).toEqual({ text: DEFAULT_RULES, isDefault: true });
   });
 
   it("is written by save and read back", async () => {
@@ -54,14 +72,14 @@ describe("the agent's instructions file", () => {
     expect((await invoke("GET")).body).toEqual({ text: "Answer in French.", isDefault: false });
   });
 
-  it("can be saved empty, which means no extra instructions rather than the default", async () => {
+  it("can be saved empty, which means no extra rules rather than the default", async () => {
     await invoke("PUT", { text: "" });
     expect((await invoke("GET")).body).toEqual({ text: "", isDefault: false });
   });
 
   it("is removed by reset, so the default applies again", async () => {
     await invoke("PUT", { text: "x" });
-    expect((await invoke("DELETE")).body).toEqual({ text: DEFAULT_INSTRUCTIONS, isDefault: true });
+    expect((await invoke("DELETE")).body).toEqual({ text: DEFAULT_RULES, isDefault: true });
     await expect(readFile(file())).rejects.toThrow(/ENOENT/);
     // Resetting with nothing to remove is fine.
     expect((await invoke("DELETE")).body.isDefault).toBe(true);
@@ -69,9 +87,9 @@ describe("the agent's instructions file", () => {
 
   it("refuses text over the limit with the sizes in the message, and keeps the old file", async () => {
     await invoke("PUT", { text: "keep me" });
-    await expect(invoke("PUT", { text: "a".repeat(MAX_INSTRUCTIONS + 1) })).rejects.toThrow(/limit is 20000/);
+    await expect(invoke("PUT", { text: "a".repeat(MAX_RULES + 1) })).rejects.toThrow(/limit is 20000/);
     expect(await readFile(file(), "utf8")).toBe("keep me");
-    expect((await invoke("PUT", { text: "a".repeat(MAX_INSTRUCTIONS) })).status).toBe(200);
+    expect((await invoke("PUT", { text: "a".repeat(MAX_RULES) })).status).toBe(200);
   });
 
   it("must be a string", async () => {
@@ -83,17 +101,17 @@ describe("the system prompt", () => {
   it("opens with the labelled rules, then the tools' help, the home folder, and the working directory last", async () => {
     await invoke("DELETE");
     let parts = (await prompt()).split("\n\n");
-    expect(parts[0]).toMatch(/^Standing rules from the user\..*~\/\.llama-mui\/instructions\.md.*with or without tools/s);
-    expect(parts[1]).toBe(DEFAULT_INSTRUCTIONS);
+    expect(parts[0]).toMatch(/^Standing rules from the user\..*~\/\.llama-mui\/rules\.md.*with or without tools/s);
+    expect(parts[1]).toBe(DEFAULT_RULES);
     expect(parts[2]).toMatch(/^You have tools/);
     expect(parts.at(-2)).toBe(`The user's home folder is ${home.dir}.`);
     expect(parts.at(-1)).toBe("Working directory: /work");
-    expect(parts[3]).toMatch(/add_instruction/);
+    expect(parts[3]).toMatch(/add_rule/);
 
     await invoke("PUT", { text: "Be brief." });
     parts = (await prompt()).split("\n\n");
     expect(parts[1]).toBe("Be brief.");
-    expect(parts).not.toContain(DEFAULT_INSTRUCTIONS);
+    expect(parts).not.toContain(DEFAULT_RULES);
   });
 
   it("has no rules block for an empty file", async () => {
@@ -125,9 +143,9 @@ describe("the system prompt", () => {
   });
 });
 
-describe("add_instruction", () => {
+describe("add_rule", () => {
   const ctx = (approved: string | null = null) => ({ approved }) as any;
-  const run = (args: unknown, approved: string | null = null) => INSTRUCTION_TOOLS[0].run(ctx(approved), args);
+  const run = (args: unknown, approved: string | null = null) => RULE_TOOLS[0].run(ctx(approved), args);
   const asked = async (args: unknown) => {
     try {
       await run(args);
@@ -151,7 +169,7 @@ describe("add_instruction", () => {
     const args = { text: "- Check git first." };
     const approval = await asked(args);
     const out = await run(args, JSON.stringify(approval));
-    expect(out).toMatch(/Added to your standing instructions: - Check git first\./);
+    expect(out).toMatch(/Added to your standing rules: - Check git first\./);
     expect(await readFile(file(), "utf8")).toBe("Be brief.\n- Check git first.\n");
   });
 
@@ -168,15 +186,15 @@ describe("add_instruction", () => {
     const approval = await asked({ text: "Check git first." });
     expect((approval as any).action).toBe("create");
     await run({ text: "Check git first." }, JSON.stringify(approval));
-    expect(await readFile(file(), "utf8")).toBe(`${DEFAULT_INSTRUCTIONS}\n- Check git first.\n`);
+    expect(await readFile(file(), "utf8")).toBe(`${DEFAULT_RULES}\n- Check git first.\n`);
   });
 
   it("refuses an empty rule, a repeat, a long one, and one that would pass the size limit", async () => {
     await invoke("PUT", { text: "- Be brief." });
     await expect(run({ text: "  " })).rejects.toThrow(/text is required/);
-    await expect(run({ text: "Be brief." })).rejects.toThrow(/already in the instructions/);
+    await expect(run({ text: "Be brief." })).rejects.toThrow(/already in the rules/);
     await expect(run({ text: "a".repeat(601) })).rejects.toThrow(/one sentence/);
-    await invoke("PUT", { text: "a".repeat(MAX_INSTRUCTIONS - 5) });
+    await invoke("PUT", { text: "a".repeat(MAX_RULES - 5) });
     await expect(run({ text: "Check git first." })).rejects.toThrow(/over 20000/);
   });
 

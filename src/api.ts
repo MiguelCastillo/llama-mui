@@ -502,15 +502,15 @@ export const runCheckCommand = (workingDir: string | null, attachments: string[]
 // session's system prompt names.
 export const getToolContext = (workingDir: string | null, attachments: string[], promptDir: string | null) =>
   call<ToolContext>("POST", "/api/tools/context", { workingDir, attachments, promptDir });
-// The agent's own instructions (~/.llama-mui/instructions.md); Settings → Agent.
-export interface Instructions {
+// The agent's own rules (~/.llama-mui/rules.md); Settings → Agent.
+export interface Rules {
   text: string;
   // No file yet: this is the built-in default.
   isDefault: boolean;
 }
-export const getInstructions = () => call<Instructions>("GET", "/api/instructions");
-export const saveInstructions = (text: string) => call<Instructions>("PUT", "/api/instructions", { text });
-export const resetInstructions = () => call<Instructions>("DELETE", "/api/instructions");
+export const getRules = () => call<Rules>("GET", "/api/rules");
+export const saveRules = (text: string) => call<Rules>("PUT", "/api/rules", { text });
+export const resetRules = () => call<Rules>("DELETE", "/api/rules");
 
 // Using llama-mui from a phone (see server/phones.ts). Managing is for the
 // computer running it; a phone only ever calls pairDevice.

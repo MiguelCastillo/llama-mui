@@ -11,7 +11,7 @@ import { attachmentRoutes } from "./disk.ts";
 import { eventRoutes } from "./events.ts";
 import { HttpError, type Route, sendJson } from "./http.ts";
 import { imageRoutes } from "./images.ts";
-import { instructionRoutes } from "./instructions.ts";
+import { ruleRoutes } from "./rules.ts";
 import { modelSettingRoutes } from "./models.ts";
 import { isAllowed, isPairing, phoneRoutes, setListenAddress } from "./phones.ts";
 import { preferenceRoutes } from "./preferences.ts";
@@ -33,7 +33,7 @@ async function route(r: Route) {
   if (await modelSettingRoutes(r)) return;
   if (await commandRoutes(r)) return;
   if (await sessionRoutes(r)) return;
-  if (await instructionRoutes(r)) return;
+  if (await ruleRoutes(r)) return;
   if (await imageRoutes(r)) return;
   throw new HttpError(404, "Not found");
 }

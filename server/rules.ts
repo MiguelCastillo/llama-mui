@@ -1,4 +1,4 @@
-// The agent's own instructions: a plain markdown file the user edits in
+// The agent's own rules: a plain markdown file the user edits in
 // Settings → Agent, added to the system prompt (see toolsSystemPrompt). Not in
 // settings.json, which holds API keys; this file holds no secrets.
 
@@ -9,15 +9,18 @@ import { createTwoFilesPatch } from "diff";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { type ToolSpec, ToolError, fn, reasonOf, requireApproval } from "./toolkit.ts";
 
-// Missing file means this; an empty file means no extra instructions.
-export const DEFAULT_INSTRUCTIONS =
+// Missing file means this; an empty file means no extra rules.
+export const DEFAULT_RULES =
   "After you commit, run `git --no-pager show --stat --oneline HEAD` and tell the user which files went in.";
 
 // Every request carries it, so it can't be allowed to fill the context.
-export const MAX_INSTRUCTIONS = 20_000;
+export const MAX_RULES = 20_000;
 
 // Read at call time, not at load, so a test can point the home folder elsewhere.
-const instructionsFile = () => path.join(os.homedir(), ".llama-mui", "instructions.md");
+const rulesFile = () => path.join(os.homedir(), ".llama-mui", "rules.md");
+// What the file was called before: copied to rules.md once, and left where it is
+// so a server still running the old code keeps working until it's restarted.
+const legacyFile = () => path.join(os.homedir(), ".llama-mui", "instructions.md");
 
 // The user's rules as the model first meets them: the governing rule set, which
 // comes before anything about tools and is sent whether or not tools are on. It
@@ -27,44 +30,54 @@ export function governingRules(text: string): string | null {
   const rules = text.trim();
   if (!rules) return null;
   return [
-    "Standing rules from the user. They come from the file ~/.llama-mui/instructions.md, which the user edits in " +
+    "Standing rules from the user. They come from the file ~/.llama-mui/rules.md, which the user edits in " +
       "Settings → Agent, and they apply in every chat, with or without tools. Follow them over your own habits.",
     rules,
   ].join("\n\n");
 }
 
-// What the model is told about add_instruction (part of the tools' help).
-export const instructionTools =
-  "The user's standing rules (above, from ~/.llama-mui/instructions.md) are the place to keep a lesson for " +
+// What the model is told about add_rule (part of the tools' help).
+export const ruleTools =
+  "The user's standing rules (above, from ~/.llama-mui/rules.md) are the place to keep a lesson for " +
   "future chats. When the user asks you to remember how to work with them, or corrects you and wants it kept, " +
-  "call add_instruction with one plain sentence; they see the exact line and approve it. Never write that " +
+  "call add_rule with one plain sentence; they see the exact line and approve it. Never write that " +
   "file, or any other app's instructions file, with another tool.";
 
-export async function readInstructions(): Promise<{ text: string; isDefault: boolean }> {
+export async function readRules(): Promise<{ text: string; isDefault: boolean }> {
   try {
-    return { text: await readFile(instructionsFile(), "utf8"), isDefault: false };
+    return { text: await readFile(rulesFile(), "utf8"), isDefault: false };
   } catch (e: any) {
     if (e.code !== "ENOENT") throw e;
-    return { text: DEFAULT_INSTRUCTIONS, isDefault: true };
+  }
+  // No rules.md: the user's old instructions.md, if there is one, becomes it.
+  try {
+    const text = await readFile(legacyFile(), "utf8");
+    await mkdir(path.dirname(rulesFile()), { recursive: true, mode: 0o700 });
+    await writeFile(`${rulesFile()}.tmp`, text);
+    await rename(`${rulesFile()}.tmp`, rulesFile());
+    return { text, isDefault: false };
+  } catch (e: any) {
+    if (e.code !== "ENOENT") throw e;
+    return { text: DEFAULT_RULES, isDefault: true };
   }
 }
 
-// Handles /api/instructions; returns false for anything else.
-export async function instructionRoutes({ req, res, parts, method }: Route): Promise<boolean> {
-  if (parts[0] !== "instructions" || parts.length !== 1) return false;
+// Handles /api/rules; returns false for anything else.
+export async function ruleRoutes({ req, res, parts, method }: Route): Promise<boolean> {
+  if (parts[0] !== "rules" || parts.length !== 1) return false;
 
   if (method === "GET") {
-    sendJson(res, 200, await readInstructions());
+    sendJson(res, 200, await readRules());
     return true;
   }
 
   if (method === "PUT") {
     const { text } = await readJson(req);
     if (typeof text !== "string") throw new HttpError(400, "text must be a string");
-    if (text.length > MAX_INSTRUCTIONS) {
-      throw new HttpError(400, `Instructions are ${text.length} characters; the limit is ${MAX_INSTRUCTIONS}. Shorten them and save again.`);
+    if (text.length > MAX_RULES) {
+      throw new HttpError(400, `Rules are ${text.length} characters; the limit is ${MAX_RULES}. Shorten them and save again.`);
     }
-    const file = instructionsFile();
+    const file = rulesFile();
     await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     // Write-then-rename so a crash mid-write can't leave a truncated file.
     await writeFile(`${file}.tmp`, text);
@@ -73,10 +86,12 @@ export async function instructionRoutes({ req, res, parts, method }: Route): Pro
     return true;
   }
 
-  // Reset: no file, so the default applies again.
+  // Reset: no file, so the default applies again. The old name goes too, or the
+  // next read would copy it back.
   if (method === "DELETE") {
-    await rm(instructionsFile(), { force: true });
-    sendJson(res, 200, await readInstructions());
+    await rm(rulesFile(), { force: true });
+    await rm(legacyFile(), { force: true });
+    sendJson(res, 200, await readRules());
     return true;
   }
 
@@ -89,14 +104,14 @@ const hunks = (file: string, before: string, after: string) => {
   return patch.slice(patch.indexOf("@@"));
 };
 
-const addInstruction: ToolSpec = {
-  name: "add_instruction",
-  group: "instructions",
-  label: "Add an instruction",
+const addRule: ToolSpec = {
+  name: "add_rule",
+  group: "rules",
+  label: "Add a rule",
   summary: "Add one line to the standing rules in instructions.md, once the user approves it.",
   definition: fn(
-    "add_instruction",
-    "Add one rule to the user's standing instructions (~/.llama-mui/instructions.md), which apply in every chat. " +
+    "add_rule",
+    "Add one rule to the user's standing rules (~/.llama-mui/rules.md), which apply in every chat. " +
       "Use it when the user asks you to remember how to work with them, or corrects you and wants it kept. " +
       "Write one plain sentence addressed to the model that makes sense with no context (not 'as we discussed'). " +
       "The user sees the exact line and approves it before it's saved. It applies from their next message.",
@@ -116,15 +131,15 @@ const addInstruction: ToolSpec = {
     const rule = (typeof args.text === "string" ? args.text : "").replace(/\s+/g, " ").trim().replace(/^-\s+/, "");
     if (!rule) throw new ToolError("text is required: one plain sentence for the rule");
     if (rule.length > MAX_RULE) throw new ToolError(`The rule is ${rule.length} characters; keep it to one sentence under ${MAX_RULE}.`);
-    const { text: current, isDefault } = await readInstructions();
+    const { text: current, isDefault } = await readRules();
     const base = current.replace(/\s+$/, "");
     const line = `- ${rule}`;
-    if (base.split("\n").some((l) => l.trim() === line)) throw new ToolError("That rule is already in the instructions.");
+    if (base.split("\n").some((l) => l.trim() === line)) throw new ToolError("That rule is already in the rules.");
     const after = `${base ? `${base}\n` : ""}${line}\n`;
-    if (after.length > MAX_INSTRUCTIONS) {
-      throw new ToolError(`The instructions would be over ${MAX_INSTRUCTIONS} characters. Tell the user; they can shorten them in Settings → Agent.`);
+    if (after.length > MAX_RULES) {
+      throw new ToolError(`The rules would be over ${MAX_RULES} characters. Tell the user; they can shorten them in Settings → Agent.`);
     }
-    const file = instructionsFile();
+    const file = rulesFile();
     const reason = reasonOf(args);
     // Never skipped for a worktree, and never covered by "approve all changes" (see autoApproves).
     requireApproval(ctx, {
@@ -138,8 +153,8 @@ const addInstruction: ToolSpec = {
     // Write-then-rename so a crash mid-write can't leave a truncated file.
     await writeFile(`${file}.tmp`, after);
     await rename(`${file}.tmp`, file);
-    return `Added to your standing instructions: ${line}. It applies from the user's next message.`;
+    return `Added to your standing rules: ${line}. It applies from the user's next message.`;
   },
 };
 
-export const INSTRUCTION_TOOLS: ToolSpec[] = [addInstruction];
+export const RULE_TOOLS: ToolSpec[] = [addRule];

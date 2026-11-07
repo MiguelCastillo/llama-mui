@@ -9,7 +9,7 @@
 //  - commands: every command is approved, git or not. It runs as the user.
 //
 // Removing a worktree is never approved this way, and neither is a change to
-// the user's standing instructions (~/.llama-mui/instructions.md). What the tools check before
+// the user's standing rules (~/.llama-mui/rules.md). What the tools check before
 // they ask (the paths a chat may reach, settings.json and the keys being off
 // limits) is unchanged: this only skips the question.
 
@@ -22,8 +22,8 @@ export const AUTO_KINDS = ["changes", "commands"] as const;
 // Whether this session's flags approve `approval` without asking.
 export function autoApproves(flags: AutoApprove | undefined, approval: Approval): boolean {
   if (!flags) return false;
-  // The user's standing instructions are never approved for them: they govern every later reply.
-  if (approval.type === "change") return flags.changes === true && !/[\\/]\.llama-mui[\\/]instructions\.md$/.test(approval.path);
+  // The user's standing rules are never approved for them: they govern every later reply.
+  if (approval.type === "change") return flags.changes === true && !/[\\/]\.llama-mui[\\/]rules\.md$/.test(approval.path);
   if (approval.type === "command") return flags.commands === true;
   return false;
 }
