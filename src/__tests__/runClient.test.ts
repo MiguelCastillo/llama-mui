@@ -327,6 +327,13 @@ describe("asks", () => {
     expect(commands()).toEqual([{ method: "POST", path: "/api/sessions/a/commands/approve", body: { askId: "q1", allow: true } }]);
   });
 
+  it("decide('plan') sends a no that asks for a plan", async () => {
+    global().emit("snapshot", { runs: [{ id: "a", run: run({ status: "waiting", ask: ask("q1", "approval", {}) }) }] });
+    getView("a")!.ask!.decide("plan");
+    await flush();
+    expect(commands()).toEqual([{ method: "POST", path: "/api/sessions/a/commands/approve", body: { askId: "q1", allow: false, plan: true } }]);
+  });
+
   it("decide sends the picked paths as answer", async () => {
     global().emit("snapshot", { runs: [{ id: "a", run: run({ status: "waiting", ask: ask("q1", "location", { description: "x", kind: "file" }) }) }] });
     getView("a")!.ask!.decide([{ path: "/p/x.md", kind: "file" }]);

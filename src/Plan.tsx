@@ -7,7 +7,6 @@
 // React UI components (PlanView, ProposalView).
 
 export {
-  PLANNING_TOOLS,
   PLANNING_NOTE,
   planFromCall,
   stepPrompt,

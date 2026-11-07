@@ -545,7 +545,8 @@ export type Approval =
       // Why the model needs this, in its own words (may be missing).
       reason?: string;
     }
-  | { type: "command"; command: string; cwd: string; reason?: string }
+  // readOnly: the model's own claim that the command only looks (absent when it said nothing).
+  | { type: "command"; command: string; cwd: string; reason?: string; readOnly?: boolean }
   | { type: "worktree"; action: "remove"; repo: string; branch: string; path: string; reason?: string }
   // inspect_page on a host other than this computer.
   | { type: "page"; url: string; host: string; reason?: string };

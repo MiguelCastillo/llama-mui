@@ -197,7 +197,10 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
         const kind = autoKindOf(body.always);
         await hub.edit(id, (s) => void (s.autoApprove = withAuto(s.autoApprove, kind, true)));
       }
-      await runners.answerAsk(id, askIdOf(body), body.allow);
+      if (body.plan !== undefined && typeof body.plan !== "boolean") throw new HttpError(400, "plan must be true or false");
+      // "Make plan" is a no that asks for a plan; it can't come with a yes.
+      if (body.plan === true && body.allow) throw new HttpError(400, "plan can't go with allow: true");
+      await runners.answerAsk(id, askIdOf(body), body.plan === true ? "plan" : body.allow);
       break;
     case "autoapprove": {
       // Turns an approval-for-the-session on or off, from the chip in the chat.

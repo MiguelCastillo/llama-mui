@@ -113,7 +113,7 @@ import {
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { pickModel } from "./modelChoice";
 import { copyText } from "./clipboard";
-import { approvalWhy } from "./approvalWhy";
+import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import { loadDraft, saveDraft } from "./drafts";
 import { submitDraft } from "./submitDraft";
 import { optimisticSend } from "./optimisticSend";
@@ -218,7 +218,7 @@ type Ask =
   | { needsAccess: AccessRequest }
   | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }
   | { needsApproval: Approval };
-type Answer = boolean | Picked[];
+type Answer = boolean | "plan" | Picked[];
 
 // A model stuck in a loop repeats itself: the third identical call (same tool,
 // same arguments) in one reply isn't run, and the model answers with what it
@@ -1943,7 +1943,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               </Box>
             ))}
             {shownPending && !promptInPlan && (
-              <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} onAlways={(k) => { shownPending.always(k); setAutoApproveState((a) => ({ ...a, [k]: true })); }} />
+              <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} runKind={runnerView?.kind} onAlways={(k) => { shownPending.always(k); setAutoApproveState((a) => ({ ...a, [k]: true })); }} />
             )}
             {notLoaded && (
               <Alert severity="info">
@@ -2770,8 +2770,10 @@ function ToolCallView({
 }
 
 // The prompt for whatever a reply is waiting on.
-function PendingPrompt({ ask, onDecide, onAlways }: { ask: Ask; onDecide: (answer: Answer) => void; onAlways?: (kind: AutoKind) => void }) {
-  if ("needsApproval" in ask) return <ApprovalPrompt approval={ask.needsApproval} onDecide={onDecide} onAlways={onAlways} />;
+function PendingPrompt({ ask, onDecide, onAlways, runKind }: { ask: Ask; onDecide: (answer: Answer) => void; onAlways?: (kind: AutoKind) => void; runKind?: string | null }) {
+  if ("needsApproval" in ask) {
+    return <ApprovalPrompt approval={ask.needsApproval} onDecide={onDecide} onAlways={onAlways} canMakePlan={canMakePlan(ask.needsApproval.type, runKind)} />;
+  }
   if ("needsLocation" in ask) {
     const { description, kind, canSetWorkingDir } = ask.needsLocation;
     return (
@@ -2978,7 +2980,7 @@ const CHANGE_VERB: Record<ChangeApproval["action"], string> = {
 // Shown while a reply waits on the user: a file change as a diff, or a
 // command and where it runs, with Approve (Run) / Deny. Nothing happens until
 // the user approves.
-function ApprovalPrompt({ approval, onDecide, onAlways }: { approval: Approval; onDecide: (allow: boolean) => void; onAlways?: (kind: AutoKind) => void }) {
+function ApprovalPrompt({ approval, onDecide, onAlways, canMakePlan: offerPlan }: { approval: Approval; onDecide: (answer: Answer) => void; onAlways?: (kind: AutoKind) => void; canMakePlan?: boolean }) {
   const isCommand = approval.type === "command";
   const why = approvalWhy(approval.reason);
   return (
@@ -3002,6 +3004,14 @@ function ApprovalPrompt({ approval, onDecide, onAlways }: { approval: Approval; 
       </Typography>
       {approval.type === "command" ? (
         <>
+          {(() => {
+            const label = readOnlyLabel(approval.readOnly);
+            return (
+              <Typography variant="caption" color={label.missing || approval.readOnly ? "text.secondary" : "warning.main"} component="div" sx={{ mb: 0.5 }}>
+                {label.text}
+              </Typography>
+            );
+          })()}
           <Typography variant="body2">The model wants to run this command:</Typography>
           <Box sx={{ position: "relative", my: 1 }}>
             <Box
@@ -3063,6 +3073,13 @@ function ApprovalPrompt({ approval, onDecide, onAlways }: { approval: Approval; 
         <Button size="small" variant="outlined" color="inherit" onClick={() => onDecide(false)}>
           Deny
         </Button>
+        {offerPlan && (
+          <Tooltip title={isCommand ? "Don't run it now; the model turns it into a plan to review and run" : "Don't make this change now; the model turns it into a plan to review and run"}>
+            <Button size="small" variant="outlined" onClick={() => onDecide("plan")}>
+              Make plan
+            </Button>
+          </Tooltip>
+        )}
       </Stack>
       {/* Approves this and the same kind of thing for the rest of this session;
           Session settings, Approvals, turns it off. */}

@@ -5,12 +5,11 @@ import {
   shouldBlockRepeat,
   recordCall,
   resetOnDiskChange,
-  isBlockedByPlanning,
   runPlan,
   checkStep,
   type RunPlanCallbacks,
 } from "../agent";
-import { filesChanged } from "../plan";
+import { filesChanged, ASIDE_TOOLS } from "../plan";
 
 // ── shouldBlockRepeat (repeat guard) ────────────────────────────────────────
 
@@ -149,41 +148,28 @@ describe("resetOnDiskChange", () => {
   });
 });
 
-// ── isBlockedByPlanning (planning guard) ────────────────────────────────────
+// ── ASIDE_TOOLS (side questions) ────────────────────────────────────────────
 
-describe("isBlockedByPlanning", () => {
-  function toolCall(name: string, args: object): ToolCall {
-    return { name, arguments: JSON.stringify(args), id: "x" };
-  }
-
-  it("blocks non-planning tools during planning", () => {
-    const call = toolCall("write_file", { path: "a.txt" });
-    expect(isBlockedByPlanning(call, true)).toBe(true);
+describe("ASIDE_TOOLS", () => {
+  it("is the explicit read-only list", () => {
+    expect([...ASIDE_TOOLS].sort()).toEqual(
+      [
+        "fetch_url", "find_files", "grep", "list_directory", "locate_path",
+        "read_file", "read_thread", "summarize_thread", "web_search",
+      ].sort(),
+    );
   });
 
-  it("allows planning tools during planning", () => {
-    const call = toolCall("read_file", { path: "a.txt" });
-    expect(isBlockedByPlanning(call, true)).toBe(false);
+  it("has no run_command and no write tools", () => {
+    for (const n of ["run_command", "write_file", "edit_file", "create_worktree", "remove_worktree"]) {
+      expect(ASIDE_TOOLS.has(n)).toBe(false);
+    }
   });
 
-  it("allows all tools when not in planning mode", () => {
-    const call = toolCall("write_file", { path: "a.txt" });
-    expect(isBlockedByPlanning(call, false)).toBe(false);
-  });
-
-  it("allows update_plan during planning", () => {
-    const call = toolCall("update_plan", { steps: ["A"] });
-    expect(isBlockedByPlanning(call, true)).toBe(false);
-  });
-
-  it("allows read_thread and summarize_thread during planning", () => {
-    expect(isBlockedByPlanning(toolCall("read_thread", { thread: "x" }), true)).toBe(false);
-    expect(isBlockedByPlanning(toolCall("summarize_thread", { thread: "x" }), true)).toBe(false);
-  });
-
-  it("still blocks run_command during planning", () => {
-    const call = toolCall("run_command", { command: "ls" });
-    expect(isBlockedByPlanning(call, true)).toBe(true);
+  it("has nothing that changes the plan or the todo list", () => {
+    for (const n of ["update_plan", "add_todo", "list_todos", "complete_todo"]) {
+      expect(ASIDE_TOOLS.has(n)).toBe(false);
+    }
   });
 });
 

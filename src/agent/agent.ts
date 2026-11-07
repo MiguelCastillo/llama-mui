@@ -5,7 +5,7 @@ import { closeOpenToolCalls } from "../closeOpenToolCalls.ts";
 import { callKey, shareTokens } from "./helpers.ts";
 import { ProgressWatch } from "./progress.ts";
 import { applyTodoCall, openTodos } from "./todos.ts";
-import { PLANNING_NOTE, PLANNING_TOOLS, planFromCall, extractContext, extractPlanSummary } from "./plan.ts";
+import { PLANNING_NOTE, planFromCall, extractContext, extractPlanSummary } from "./plan.ts";
 
 // Maximum number of identical tool calls (same name + arguments) before the
 // repeat guard fires and stops the model from looping.
@@ -19,6 +19,14 @@ export const MAX_TOOL_ROUNDS = 200;
 // Tool names that mutate disk; a successful run of one resets the repeat
 // counter, because the same read/search may now find different content.
 export const CHANGES_DISK = new Set(["write_file", "edit_file", "run_command", "create_worktree", "remove_worktree"]);
+
+// What the model is told when the user answers a command's or a file change's
+// approval with "Make plan": nothing ran or was written, and the work goes into
+// a plan instead.
+export const PLAN_INSTEAD_RESULT =
+  "The user doesn't want this run now; they want it as a plan. Call update_plan with the steps, this command included, then stop.";
+export const PLAN_INSTEAD_CHANGE_RESULT =
+  "The user doesn't want this done now; they want it as a plan. Call update_plan with the steps, this change included, then stop.";
 
 // ── repeat guard ────────────────────────────────────────────────────────────
 
@@ -45,14 +53,6 @@ export function resetOnDiskChange(ran: Map<string, number>, call: ToolCall, resu
   if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) {
     ran.clear();
   }
-}
-
-// ── planning guard ──────────────────────────────────────────────────────────
-
-// Returns true when a tool call should be blocked during a planning turn.
-// Planning turns only allow read-only tools.
-export function isBlockedByPlanning(call: ToolCall, planning: boolean): boolean {
-  return planning && !PLANNING_TOOLS.has(call.name);
 }
 
 // ── turn result ─────────────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ export interface RunTurnCallbacks {
   setUsage: (u: Usage | undefined) => void;
   setAbort: (c: AbortController | null) => void;
   refreshModels: (id: string) => void;
-  askUser: (ask: { needsAccess: AccessRequest } | { needsApproval: Approval } | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }, signal: AbortSignal) => Promise<boolean | Picked[]>;
+  askUser: (ask: { needsAccess: AccessRequest } | { needsApproval: Approval } | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }, signal: AbortSignal) => Promise<boolean | "plan" | Picked[]>;
   attach: (a: Attachment) => void;
   // The user chose this folder as the chat's working directory (see Picked).
   setWorkingDir: (path: string) => void;
@@ -126,7 +126,7 @@ export interface RunTurnConfig {
   // planning note.
   note?: string;
   // When set, only these tools may run; a call to another gets an error
-  // result, like a planning turn's (see PLANNING_TOOLS).
+  // result (a side question uses ASIDE_TOOLS, see plan.ts).
   allowedTools?: ReadonlySet<string>;
   systemPrompt: string | null;
   toolDefinitions: any[];
@@ -157,8 +157,11 @@ export interface RunTurnResult {
   error?: string;
 }
 
-// Runs one reply: the full turn loop (stream, tool calls, repeat/planning
-// guards, plan handling) until the model stops asking for tools. Returns
+// Runs one reply: the full turn loop (stream, tool calls, the repeat guard,
+// plan handling) until the model stops asking for tools. A main-chat reply
+// (`planning` on) may call any tool: the model decides by size (see
+// workPolicy.ts), and writes and commands reach the normal approval prompt.
+// Only `allowedTools` (a side question) restricts the tools. Returns
 // whether the reply succeeded, the final history, any error, and the
 // updated attached paths.
 export async function runTurn(
@@ -288,11 +291,7 @@ export async function runTurn(
         const openList = () => openTodos(todosRef.current).map(({ id, summary }) => ({ id, summary }));
 
         try {
-          if (planning && !PLANNING_TOOLS.has(call.name)) {
-            throw new Error(
-              `${call.name} isn't available while planning; read what you need, then call update_plan with the steps`,
-            );
-          }
+          // Only a side question has an allow-list; a main-chat reply has none.
           if (allowedTools && !allowedTools.has(call.name)) {
             throw new Error(
               `${call.name} isn't available here: this reply can only read, and can't change files or the plan. Say what you found, and what the user could tell the plan to do.`,
@@ -348,7 +347,7 @@ export async function runTurn(
                 outcome = { result: `Error: nothing exists at ${target.path}, and the user didn't point to where it is` };
                 break;
               }
-              if (!answer) {
+              if (!answer || answer === "plan") {
                 outcome = { result: `Error: the user didn't allow access to ${target.path}` };
                 break;
               }
@@ -357,7 +356,12 @@ export async function runTurn(
               outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model });
             } else {
               const approval = (outcome as any).needsApproval;
-              if (!answer) {
+              // "plan" is truthy, so it is checked before the no.
+              if (answer === "plan" && (approval.type === "command" || approval.type === "change")) {
+                outcome = { result: approval.type === "change" ? PLAN_INSTEAD_CHANGE_RESULT : PLAN_INSTEAD_RESULT };
+                break;
+              }
+              if (!answer || answer === "plan") {
                 outcome = {
                   result:
                     approval.type === "change"
@@ -411,6 +415,8 @@ export async function runTurn(
             if (ctx !== null || !planRunningRef.current) setPlanContext(ctx);
             if (planSum !== null || !planRunningRef.current) setPlanSummary(planSum);
           }
+          // In a main-chat reply a saved plan ends the turn: told to go on,
+          // a small model kept rewording the plan instead of stopping.
           if (steps && planning) planned = true;
         }
 

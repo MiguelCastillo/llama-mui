@@ -4,46 +4,41 @@
 
 import { type Api, type Kind, type ChatMessage, type PlanStep, type ToolCall, streamChat } from "../api.ts";
 import { newId } from "../uuid.ts";
+import { workPolicy } from "./workPolicy.ts";
 
-// With Plan on, a new message first gets a planning turn: the model can only
-// read and call update_plan, so it writes the plan instead of starting on the
-// work. Small models skip the plan when it's only suggested. It still gets
-// every tool, and chat refuses the rest when they're called: a different tool
-// list, like a different system prompt, made llama.cpp reprocess the whole
-// chat. PLANNING_NOTE goes with the message, as its `note`, for the same reason.
-export const PLANNING_TOOLS = new Set([
-  "update_plan",
-  // A todo is no change to files, and "add it to my list" is no plan.
-  "add_todo",
-  "list_todos",
-  "complete_todo",
+// With Plan on, a new message gets PLANNING_NOTE (no thinking, the note, the
+// plan's anchor). The model has every tool and decides by size: simple work is
+// done in the chat, where writes and commands reach the normal approval prompt,
+// and involved work becomes a plan. Nothing is refused for being a write.
+// The note goes with the message, as its `note`: a different tool list or
+// system prompt made llama.cpp reprocess the whole chat.
+
+// What a side question may use while a plan runs (server/aside.ts). A side
+// question can't ask the user for approval, so this is an explicit read-only
+// list: no writes, no run_command, and nothing that changes the plan or todos.
+export const ASIDE_TOOLS: ReadonlySet<string> = new Set([
   "list_directory",
   "read_file",
   "find_files",
   "grep",
   "locate_path",
-  // A question gets a planning turn too, and may need the web to answer.
   "web_search",
   "fetch_url",
-  // These only read what this chat's threads did and change no files, and a
-  // planning turn is when the user asks how a thread went.
   "read_thread",
   "summarize_thread",
 ]);
-// What a side question may use while a plan runs (server/aside.ts): the
-// planning turn's read-only tools, without the ones that change the plan or
-// the todo list.
-export const ASIDE_TOOLS: ReadonlySet<string> = new Set(
-  [...PLANNING_TOOLS].filter((n) => !["update_plan", "add_todo", "list_todos", "complete_todo"].includes(n)),
-);
 // A note: an instruction for one turn, sent after the message's text (see
 // docs/guide.md, "What the model is told"). A question comes first: led by "only
 // plan", the model opened its answers to questions with "This is a question,
 // not a file change request", replying to a note the user never sees.
-export const PLANNING_NOTE =
-  "If this message is a question or otherwise doesn't change files, just answer it, and don't mention plans. " +
-  "If it asks for changes to files, only plan for now: read what you need, then call update_plan with the " +
-  "steps, explain in plain words what it will change for the user, and stop. Don't change any files yet: the user reviews the plan and runs it.";
+// It ends with the rule about deciding by size (see workPolicy.ts).
+export function planningNote(customPolicy?: string): string {
+  return (
+    "If this message is a question or otherwise doesn't change files, just answer it, and don't mention plans. " +
+    workPolicy(customPolicy)
+  );
+}
+export const PLANNING_NOTE = planningNote();
 
 // The plan from an update_plan call's arguments, merged with the plan so far.
 // Only chat's check ticks a step off, so a step keeps its id, status and note

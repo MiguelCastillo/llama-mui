@@ -186,8 +186,8 @@ disputed, something unconfirmed, nothing committed), it reads the thread on its
 own, then states the outcome and what to do next (a plan, if files must
 change). It calls `read_thread` with `step` only to see why one step went
 wrong, and `summarize_thread` only when it needs a digest. It never says it
-doesn't know what a thread did without reading it. Both tools work in a
-planning turn too.
+doesn't know what a thread did without reading it. Both tools are read-only,
+so side questions can use them too.
 
 `summarize_thread`: the thread's own model is given the whole record of the thread (what was said,
 every tool call and its result) in one request with no tools, and asked to
@@ -437,30 +437,47 @@ vitest (`npm test`).
 
 - Planning is on whenever the **Plan tasks** tool is on in **Settings →
   Tools** (it is by default); there is no switch for it in chat.
-- With it on, **every message you send** gets a planning turn first. Chat
-  decides that, not the model: the model doesn't get to choose whether to
-  have one.
-- Your message gets a note, sent to the model after it but not shown: "If
-  this message is a question or otherwise doesn't change files, just answer
-  it, and don't mention plans. If it asks for changes to files, only plan for
-  now: read what you need, then call update_plan with the steps, explain in
-  plain words what it will change for the user, and stop. Don't change any
-  files yet…" The question case comes first: led by "only
-  plan", the model began its answers with "This is a question, not a file
-  change request", replying to a note you never see. In that turn the model
-  can only use `update_plan`, the read tools (`list_directory`,
-  `read_file`, `find_files`, `grep`, `locate_path`), the web tools
-  (`web_search`, `fetch_url`) and the thread tools (`read_thread`,
-  `summarize_thread`), so a question can still be answered from the web, and
-  you can ask how a thread went in the same turn: the thread tools only read
-  what the chat's threads did and change no files. It's offered every tool,
-  but the others are refused when called ("X isn't available while
-  planning"). `run_command` and the tools that write files are still refused,
-  so it can't change anything.
+- With it on, nothing forces a planning turn and no reply is limited to
+  reading. **The model decides by size**: simple work that can be done in one
+  go (one small change, or a command or two) is done right in the chat, and
+  you approve each change or command; work that needs several steps, touches
+  several files or needs checking along the way becomes a plan. If the model
+  starts and finds the work bigger than it looked, it stops and makes a plan.
+  Questions need no plan. A main-chat reply still skips thinking, as before.
+- Your message gets a note, sent to the model after it but not shown. It
+  starts: "If this message is a question or otherwise doesn't change files,
+  just answer it, and don't mention plans." Then comes the rule text from
+  `workPolicy` (`src/agent/workPolicy.ts`): decide by size, do simple work in
+  the chat, make a plan for work that needs several steps. The question case
+  comes first: led by "only plan", the model began its answers with "This is
+  a question, not a file change request", replying to a note you never see.
+  The rule's wording lives in that one file, so it can later be made
+  configurable; nothing reads a custom value yet.
+- The model is offered every tool in the main chat, and none is refused for
+  being a write. Commands and file changes reach the normal approval prompt,
+  so nothing runs or changes without you. A **side question** asked while a plan runs
+  is different: it can't ask for approval, so it only gets the read-only
+  tools (`ASIDE_TOOLS` in `src/agent/plan.ts`: the read tools, the web tools
+  and the thread tools) and never `run_command`.
+- **Command prompts in the main chat** are labelled. `run_command` has an
+  optional `read_only` argument the model sets to true only when the command
+  just looks and changes nothing (`git log`, `git status`, `git diff`, `ls`,
+  `grep`, `cat`). The prompt shows it next to the "Why" line as **Looks
+  only**, **Changes things**, or **Not stated by the model**. The label is the
+  model's claim, not a check: the prompt still appears either way, and
+  nothing is blocked by it.
+- Command and file-change prompts offer **Allow**, **Deny** and **Make
+  plan**. Make plan runs and writes nothing: the model's tool result says the
+  user wants this as a plan, so it calls `update_plan` with the steps, this
+  command or change included, and stops. It is how you turn simple work into
+  a plan when the model chose to do it in the chat. The button shows only for
+  a command or file-change approval while the open run is a chat turn
+  (`canMakePlan` in `src/approvalWhy.ts`). Approvals of a plan's own run, and
+  the ones in a thread's notes, have only Allow and Deny.
 - Why it's done that way: llama.cpp reuses its cache for the part of a
   prompt that matches the last one from the start. Putting the note in the
   system prompt, or offering fewer tools, changed that start, and the server
-  reprocessed the whole chat on every planning turn (measured: about a minute
+  reprocessed the whole chat on every message (measured: about a minute
   for a 40k-token chat, at ~700 tokens/s). The note is saved with your
   message, so later requests send the same text and keep matching.
 - What happens next is the model's choice:
@@ -485,17 +502,20 @@ vitest (`npm test`).
     the plan; but because the turn ends as soon as the plan lands (above), the
     model gets no round to write it, so the explanation before the call is the
     one you can count on.
+  - **It does the work in the chat**: it calls the tool, you get the
+    approval prompt, and nothing happens until you allow it.
   - **It answers instead**, which is what it should do for a question: you
     get the answer and no plan. A small model may still plan something
-    simple, or answer something it should have planned.
-- Messages that don't get a planning turn: **Resend** of a failed message,
-  and the "Do step" messages chat sends while running a plan. With **Plan**
-  off, the system prompt still suggests a plan, but nothing makes the model
-  write one, and small models usually don't.
+    simple, or do in the chat something it should have planned; **Make plan**
+    and **Deny** are there for that.
+- Messages that don't get the note: **Resend** of a failed message, and the
+  "Do step" messages chat sends while running a plan. With **Plan** off, the
+  system prompt still suggests a plan, but the note isn't sent, and small
+  models usually don't write one.
 
 ### How many steps
 
-- **The model decides**, in the planning turn. Its only guidance is the
+- **The model decides**, when it writes the plan. Its only guidance is the
   tool's instructions: each step is "one change you can make in one turn,
   written so someone could check it from the diff alone".
 - **Limits**: at most 12 steps, each at most 600 characters, and none empty.
@@ -1150,8 +1170,8 @@ step that was running when the page closed comes back as pending.
   **Settings → Models** says so.
   With it on, chat decides per request: a reply's first request thinks (where
   the model decides what to do), later rounds after tool results don't, and
-  planning turns don't. A plan step's check still thinks. Qwen3.6 spent
-  minutes per planning turn thinking, nearly all of it between file reads,
+  main-chat replies with Plan on don't. A plan step's check still thinks.
+  Qwen3.6 spent minutes per such reply thinking, nearly all of it between file reads,
   and switching thinking per request doesn't cost anything in the server's
   prompt cache.
 

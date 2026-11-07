@@ -113,6 +113,12 @@ const runCommand: ToolSpec = {
           description:
             "One plain sentence on why this is needed, in terms of what the user asked for. Don't repeat the command.",
         },
+        read_only: {
+          type: "boolean",
+          description:
+            "True only if the command just looks and changes nothing (git log, git status, ls, grep, cat). " +
+            "False if it changes files, branches, packages or the network.",
+        },
       },
       required: ["command"],
     },
@@ -122,7 +128,16 @@ const runCommand: ToolSpec = {
     if (!command) throw new ToolError("command is required");
     const cwd = await workingDir(ctx, args.cwd);
     const reason = reasonOf(args);
-    requireApproval(ctx, { type: "command", command, cwd, ...(reason ? { reason } : {}) });
+    // Only a real boolean counts; anything else leaves the key out, so the same
+    // arguments always give the same Approval.
+    const readOnly = typeof args.read_only === "boolean" ? args.read_only : undefined;
+    requireApproval(ctx, {
+      type: "command",
+      command,
+      cwd,
+      ...(reason ? { reason } : {}),
+      ...(readOnly === undefined ? {} : { readOnly }),
+    });
     return exec(command, cwd);
   },
 };

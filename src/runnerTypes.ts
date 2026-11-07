@@ -5,12 +5,13 @@
 import type { AccessRequest, Approval, AttachmentTarget, Picked, Connector, Model, PlanStep, Session, ToolContext } from "./api.ts";
 
 // What a tool call can wait on the user for, and their answer: allow or deny,
-// or, for a path, the files or folders they picked in its place.
+// or, for a path, the files or folders they picked in its place. "plan" is for a
+// command approval only: nothing runs, and the model is told to make it a plan.
 export type Ask =
   | { needsAccess: AccessRequest }
   | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }
   | { needsApproval: Approval };
-export type Answer = boolean | Picked[];
+export type Answer = boolean | "plan" | Picked[];
 
 // What a run needs besides the session. Kept by the runner, never saved. The
 // connector is the server's list entry (`hasKey`, never the key itself).

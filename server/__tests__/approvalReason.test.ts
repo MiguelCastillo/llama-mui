@@ -65,6 +65,37 @@ describe("the reason in an approval", () => {
       }
     });
 
+    it("has an optional boolean read_only in the schema", () => {
+      const params = run.definition.function.parameters as { properties: Record<string, any>; required: string[] };
+      expect(params.properties.read_only?.type).toBe("boolean");
+      expect(params.required).not.toContain("read_only");
+    });
+
+    it("carries read_only as readOnly, for true and false", async () => {
+      expect(await asked(run, { command: "ls", read_only: true })).toEqual({ type: "command", command: "ls", cwd: dir, readOnly: true });
+      expect(await asked(run, { command: "rm a", read_only: false, reason: "Cleaning up" })).toEqual({
+        type: "command",
+        command: "rm a",
+        cwd: dir,
+        reason: "Cleaning up",
+        readOnly: false,
+      });
+    });
+
+    it("leaves readOnly out when not given or not a boolean", async () => {
+      for (const args of [{ command: "ls" }, { command: "ls", read_only: "true" }, { command: "ls", read_only: null }]) {
+        const approval = await asked(run, args);
+        expect("readOnly" in approval).toBe(false);
+      }
+    });
+
+    it("asks again if read_only differs from what was approved", async () => {
+      const args = { command: "true", read_only: true };
+      const approval = await asked(run, args);
+      await expect(run.run(ctx(JSON.stringify(approval)), args)).resolves.toContain("exit code 0");
+      await expect(run.run(ctx(JSON.stringify(approval)), { command: "true", read_only: false })).rejects.toBeInstanceOf(ApprovalNeeded);
+    });
+
     it("runs when the same call comes back with the approval it showed, and asks again if the reason differs", async () => {
       const args = { command: "true", reason: "Testing" };
       const approval = await asked(run, args);

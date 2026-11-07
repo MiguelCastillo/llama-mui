@@ -430,8 +430,10 @@ export const stopAside = (id: string): Promise<void> => quiet(sendCommand(id, "s
 
 // Yes or no to an access or approval question (a no also turns down a
 // question that asks for a path).
-export const approve = (id: string, askId: string, allow: boolean, always?: AutoKind) =>
-  sendCommand(id, "approve", { askId, allow, ...(always ? { always } : {}) });
+// `plan`: not now, make it a plan (a command approval in a chat turn); it
+// is sent as a no that also asks for a plan.
+export const approve = (id: string, askId: string, allow: boolean, always?: AutoKind, plan?: boolean) =>
+  sendCommand(id, "approve", { askId, allow, ...(always ? { always } : {}), ...(plan ? { plan: true } : {}) });
 
 // Turns an approval for the rest of the session on or off (the chip in the chat).
 export const setAutoApprove = (id: string, kind: AutoKind, on: boolean) => sendCommand(id, "autoapprove", { kind, on });
@@ -444,7 +446,8 @@ export const answer = (id: string, askId: string, paths: Picked[]) => sendComman
 // first answer wins; the events show what happened).
 async function decide(id: string, askId: string, answerGiven: Answer, always?: AutoKind) {
   try {
-    if (typeof answerGiven === "boolean") await approve(id, askId, answerGiven, always);
+    if (answerGiven === "plan") await approve(id, askId, false, undefined, true);
+    else if (typeof answerGiven === "boolean") await approve(id, askId, answerGiven, always);
     else await answer(id, askId, answerGiven);
   } catch (e) {
     if (e instanceof ApiError && e.data.reason === "stale ask") return;
