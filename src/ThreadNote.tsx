@@ -7,6 +7,9 @@ import { reportParts, threadLabel, type NoteView } from "./planThread";
 import WorktreeLines from "./WorktreeLines";
 import MarkdownRenderer from "./MarkdownRenderer";
 
+// The status icons are as tall as the title text, not MUI's fixed small size.
+const statusIconSx = { fontSize: "1.25em", flexShrink: 0 } as const;
+
 // Puts the "Follow-up:" / "Next:" label at the start of a line in bold, so the
 // follow-up stands out at the regular message size.
 function boldLabels(text: string): string {
@@ -50,14 +53,14 @@ export default function ThreadNote({
   // The same size and colour as a regular message: the text goes through
   // MarkdownRenderer. No pre-wrap here, the renderer keeps line breaks itself.
   const reportStyle = {
-    px: 1,
+    px: 2,
     pb: 0.5,
     textAlign: "left",
     userSelect: "text",
   } as const;
 
   return (
-    <Paper variant="outlined" sx={{ my: 1, px: 1, py: 0.5 }}>
+    <Paper variant="outlined" sx={{ my: 1, p: 0 }}>
       <Button
         size="small"
         onClick={onOpen}
@@ -69,23 +72,23 @@ export default function ThreadNote({
           width: "100%",
           fontSize: "1rem",
           lineHeight: "inherit",
+          px: 2,
+          py: 1,
         }}
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
-          {view.running && <CircularProgress size="0.875rem" sx={{ flexShrink: 0 }} aria-label="Running" />}
-          {isDone && <CheckCircleOutlineIcon fontSize="small" color="success" aria-label="Done" sx={{ flexShrink: 0 }} />}
-          {ended && status === "failed" && (
-            <ErrorOutlineIcon fontSize="small" color="error" aria-label="Failed" sx={{ flexShrink: 0 }} />
-          )}
+          {view.running && <CircularProgress size="1.25em" sx={{ flexShrink: 0 }} aria-label="Running" />}
+          {isDone && <CheckCircleOutlineIcon color="success" aria-label="Done" sx={{ ...statusIconSx }} />}
+          {ended && status === "failed" && <ErrorOutlineIcon color="error" aria-label="Failed" sx={{ ...statusIconSx }} />}
           {ended && status === "unfinished" && (
-            <WarningAmberIcon fontSize="small" color="warning" aria-label="Not finished" sx={{ flexShrink: 0 }} />
+            <WarningAmberIcon color="warning" aria-label="Not finished" sx={{ ...statusIconSx }} />
           )}
           <span>{threadLabel(status, summary)}</span>
         </Box>
       </Button>
-      {prompt && <Box sx={{ px: 1, pb: 0.5 }}>{prompt}</Box>}
+      {prompt && <Box sx={{ px: 2, pb: 0.5 }}>{prompt}</Box>}
       {needsYou && !prompt && (
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 1, pb: 0.5 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 2, pb: 0.5 }}>
           <Typography variant="body2" color="warning.main">
             Needs you
           </Typography>
@@ -109,7 +112,7 @@ export default function ThreadNote({
                 size="small"
                 onClick={() => setShowDetails((v) => !v)}
                 aria-expanded={showDetails}
-                sx={{ textTransform: "none", ml: 0.5, py: 0, minWidth: 0 }}
+                sx={{ textTransform: "none", ml: 0.875, py: 0, minWidth: 0 }}
               >
                 {showDetails ? "Hide details" : "Details"}
               </Button>
@@ -129,7 +132,7 @@ export default function ThreadNote({
         )
       )}
       {isTrouble && !prompt && !needsYou && (
-        <Box sx={{ px: 1, pb: 0.5 }}>
+        <Box sx={{ px: 2, pb: 0.5 }}>
           <Button size="small" variant="outlined" onClick={onOpen}>
             Open thread
           </Button>

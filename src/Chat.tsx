@@ -2510,8 +2510,11 @@ function MessageBubble({
         variant={isUser && !isAside ? "elevation" : "outlined"}
         elevation={isUser && !isAside ? 0 : undefined}
         sx={{
-          px: 2,
-          py: 1.5,
+          // A reply's card has no padding of its own: its step rows (tool calls,
+          // thoughts) run edge to edge, and each text block pads itself (see
+          // the Stack below). What you typed is one block, so its card pads.
+          px: isUser ? 2 : 0,
+          py: isUser ? 1.5 : 0,
           // Messages and replies both span the chat.
           width: "100%",
           maxWidth: "100%",
@@ -2531,11 +2534,28 @@ function MessageBubble({
           ...(hasError && { border: 1, borderColor: "error.main" }),
         }}
       >
-        <Stack spacing={1}>
+        <Stack
+          spacing={isUser ? 1 : 0}
+          sx={
+            isUser
+              ? undefined
+              : {
+                  // Everything that isn't a step row is text (the reply, the dots,
+                  // the buttons under it): it pads itself on all four sides.
+                  "& > :not(.MuiAccordion-root)": { px: 2, py: 1 },
+                  // Text right under a step row gets more room above it.
+                  // A line above it closes the list, so a reply with no text ends
+                  // with its last row and nothing under it.
+                  "& > .MuiAccordion-root + :not(.MuiAccordion-root)": { pt: 2, borderTop: 1, borderColor: "divider" },
+                  "& > :not(.MuiAccordion-root):first-child": { pt: 1.5 },
+                  "& > :not(.MuiAccordion-root):last-child": { pb: 1.5 },
+                }
+          }
+        >
           {parts.map((m, i) => (
             <Fragment key={i}>
               {showSteps && m.reasoning && (
-                <Accordion disableGutters elevation={0} sx={{ bgcolor: "action.hover", "&:before": { display: "none" } }}>
+                <Accordion disableGutters elevation={0} sx={flatAccordionSx}>
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                     {/* While it's thinking, the same dots as waiting for a reply. */}
                     {streaming && m === last && !m.content && !m.toolCalls ? (
@@ -2686,6 +2706,27 @@ function MessageBubble({
   );
 }
 
+// Flat, compact look shared by the tool-call and reasoning accordions: no
+// fill, a hairline between rows, a short summary row.
+const flatAccordionSx = {
+  bgcolor: "transparent",
+  borderTop: 1,
+  borderColor: "divider",
+  // The reply's Stack puts a top margin on each sibling; the doubled selector
+  // wins over it so the rows sit flush, divided only by the hairline.
+  "&&": { mt: 0 },
+  "&:before": { display: "none" },
+  // The first row sits against the card's top, and needs no hairline above it:
+  // the card's own border is there.
+  "&:first-of-type": { borderTop: 0 },
+  "& .MuiAccordionSummary-root": { minHeight: "1.75rem", px: 1, py: 0 },
+  "& .MuiAccordionSummary-root.Mui-expanded": { minHeight: "1.75rem" },
+  "& .MuiAccordionSummary-content": { my: 0.25 },
+  "& .MuiAccordionSummary-content.Mui-expanded": { my: 0.25 },
+  "& .MuiAccordionSummary-expandIconWrapper .MuiSvgIcon-root": { fontSize: "1.25rem" },
+  "& .MuiAccordionDetails-root": { px: 1, pt: 0.5, pb: 1 },
+} as const;
+
 // One tool call: what was asked for, and the result once it's back.
 // `stopped`: the reply isn't running any more, so a call with no result
 // won't get one (it was stopped, or the page reloaded mid-call).
@@ -2724,7 +2765,7 @@ function ToolCallView({
       expanded={open}
       onChange={(_, o) => setOpen(o)}
       elevation={0}
-      sx={{ mt: 1, bgcolor: "action.hover", "&:before": { display: "none" } }}
+      sx={flatAccordionSx}
     >
       {/* minWidth 0 down the flex chain lets a long title shrink instead of
           widening the reply. */}

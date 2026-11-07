@@ -165,7 +165,7 @@ export function PlanView({
   };
 
   return (
-    <Paper variant="outlined" sx={{ p: 1.5 }}>
+    <Paper variant="outlined" sx={{ px: 1, py: 0.75 }}>
       {summary && (
         <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
           {summary}
