@@ -2401,6 +2401,8 @@ function MessageBubble({
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   // The finished reply's time and speed, kept on its last message.
   const took = [...parts].reverse().find((m) => m.took)?.took;
+  // The model that wrote the reply (its last turn, if it changed midway).
+  const modelName = [...parts].reverse().find((m) => m.role === "assistant" && m.model)?.model;
   const isUser = parts[0].role === "user";
   // What was sent after this message without being shown: its chat update
   // and note (see docs/guide.md, "What the model is told"). Opened on request.
@@ -2607,11 +2609,13 @@ function MessageBubble({
                   </IconButton>
                 </Tooltip>
               )}
-              {took && (
+              {(took || modelName) && (
                 <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
-                  {formatSeconds(took.ms)}
-                  {took.clientTps ? ` · ${Math.round(took.clientTps)} tps (client)` : ""}
-                  {took.serverTps ? ` · ${Math.round(took.serverTps)} tps (server)` : ""}
+                  {modelName}
+                  {modelName && took ? " · " : ""}
+                  {took ? formatSeconds(took.ms) : ""}
+                  {took?.clientTps ? ` · ${Math.round(took.clientTps)} tps (client)` : ""}
+                  {took?.serverTps ? ` · ${Math.round(took.serverTps)} tps (server)` : ""}
                 </Typography>
               )}
               <Tooltip title={showMarkdown ? "Show raw text" : "Show formatted"}>

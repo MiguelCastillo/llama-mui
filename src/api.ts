@@ -75,6 +75,9 @@ export interface ToolCall {
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  // On an assistant message: the id of the model that wrote it, for display.
+  // Never sent to the model. Replies saved before this was recorded have none.
+  model?: string;
   // Thinking tokens that Qwen-style models stream separately from the answer.
   reasoning?: string;
   // On a reply with signed thinking (Claude's): its content exactly as the

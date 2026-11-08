@@ -241,7 +241,7 @@ export async function runTurn(
 
     for (let round = 0; ; round++) {
       const lastTurn: boolean = stopReason !== null;
-      const reply: ChatMessage = { role: "assistant", content: "", reasoning: "", ...tag };
+      const reply: ChatMessage = { role: "assistant", content: "", reasoning: "", model, ...tag };
       let thinkStart = 0;
       let thinkEnd = 0;
       let thinkPieces = 0;
