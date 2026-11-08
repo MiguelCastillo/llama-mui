@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "../api";
 import { INTERRUPTED } from "../agent/helpers";
-import { emptySessionState, fromSession, toSession } from "../sessionState";
+import { emptySessionState, fromSession, stateKey, toSession, type SessionState } from "../sessionState";
 
 const bare = { id: "x", title: "t", model: "m" } as Session;
 
@@ -109,6 +109,64 @@ describe("sessionState", () => {
     const saved = toSession(state, { id: "x", model: "m" });
     const savedKeys = Object.keys(saved).filter((k) => !["id", "title", "model"].includes(k));
     expect(savedKeys.sort()).toEqual(Object.keys(state).sort());
+  });
+
+  describe("stateKey", () => {
+    const saved = (state: SessionState, model = "m") => toSession(state, { id: "x", model });
+    // A value different from the empty one, for every field. Typed as a record of
+    // every field, so a field added to the state fails to compile here until it is placed.
+    const changed: Record<keyof SessionState, unknown> = {
+      messages: [{ role: "user", content: "hi" }],
+      contextStart: 1,
+      attachments: [{ path: "/a", kind: "file" }],
+      workingDir: "/w",
+      promptDir: "/p",
+      usage: { total: 1 },
+      failed: "boom",
+      modelName: "Named",
+      plan: planOf("pending"),
+      planProposal: planOf("pending"),
+      planContext: "ctx",
+      planSummary: "sum",
+      planId: "p1",
+      planAnchor: "at:1",
+      pastPlans: [{ steps: planOf("done"), anchor: "at:0" }],
+      todos: [{ id: "t", summary: "Do it", description: "", context: "", status: "open", createdAt: 1 }],
+      parentId: "parent",
+      threads: [{ id: "th" }],
+      titleHint: "hint",
+      planMovedIn: true,
+      autoApprove: { commands: true },
+    };
+
+    it("differs when any field of the state differs", () => {
+      const base = stateKey(saved(emptySessionState()));
+      for (const key of Object.keys(emptySessionState()) as (keyof SessionState)[]) {
+        const next = { ...emptySessionState(), [key]: changed[key] } as SessionState;
+        expect(stateKey(saved(next)), key).not.toBe(base);
+      }
+    });
+
+    it("differs when the model differs", () => {
+      expect(stateKey(saved(emptySessionState(), "a"))).not.toBe(stateKey(saved(emptySessionState(), "b")));
+    });
+
+    it("ignores the id and the title", () => {
+      const a = { ...saved(emptySessionState()), id: "one", title: "First" };
+      const b = { ...saved(emptySessionState()), id: "two", title: "Second" };
+      expect(stateKey(a)).toBe(stateKey(b));
+    });
+
+    it("counts a missing field as an empty one", () => {
+      expect(stateKey(bare)).toBe(stateKey(saved(emptySessionState())));
+      expect(stateKey({ ...bare, autoApprove: {} })).toBe(stateKey(bare));
+    });
+
+    it("is the same for a state saved and opened again", () => {
+      const state = { ...emptySessionState(), ...changed } as SessionState;
+      const session = saved(state);
+      expect(stateKey({ ...session, ...fromSession(session) })).toBe(stateKey(session));
+    });
   });
 
   it("keeps every saved session key in the state, except the ones the server owns", () => {

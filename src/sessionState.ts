@@ -86,6 +86,20 @@ export function emptySessionState(): SessionState {
   };
 }
 
+// What a session is compared by, to tell whether the server already holds it
+// (see savedKey in Chat). It is built from the state's own fields, so a field
+// added to the state is compared without being listed anywhere else, and
+// the model. Not the id or the title: the title comes from the names and the
+// first message, and a saved one holds the user's name, which saves never send.
+// A field a session lacks counts as its empty value, so a session that left a
+// field out and one that holds it empty are the same.
+export function stateKey(session: Session): string {
+  const empty = emptySessionState();
+  const held = session as unknown as Record<string, unknown>;
+  const keys = Object.keys(empty) as (keyof SessionState)[];
+  return JSON.stringify([session.model, ...keys.map((k) => held[k] ?? empty[k])]);
+}
+
 // The session as it is saved, built from the state.
 export function toSession(state: SessionState, { id, model }: { id: string; model: string }): Session {
   const { autoApprove, ...rest } = state;

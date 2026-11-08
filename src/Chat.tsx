@@ -162,7 +162,7 @@ import {
 } from "./runClient";
 import ThreadNote from "./ThreadNote";
 import { withSessionDefaults } from "./sessionDefaults";
-import { emptySessionState, fromSession, toSession, type SessionState } from "./sessionState";
+import { emptySessionState, fromSession, stateKey, toSession, type SessionState } from "./sessionState";
 import { SESSION_KEY } from "./sessionRoute";
 import { descendantIds, nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 
@@ -489,9 +489,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What was last saved or loaded, so opening a chat doesn't save it again
   // (which would move it to the top of the list).
   const savedKey = useRef("");
-  // Not the title: it comes from the names and the first message, and a saved
-  // one holds the user's name, which saves never send.
-  const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.workingDir ?? null, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planId ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos, s.parentId ?? null, s.threads ?? [], s.autoApprove ?? null, s.titleHint ?? null, s.planMovedIn ?? false]);
 
   // `live`: the session is a run's, as it is now (see mirrorView). A step that
   // is running there really is, so it isn't reset to pending, and the model
@@ -505,7 +502,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // opening the chat doesn't save it (see savedKey).
     const state = fromSession(s, { live, running });
     s = withSessionDefaults(s);
-    savedKey.current = keyOf({ ...s, planAnchor: state.planAnchor, pastPlans: state.pastPlans });
+    savedKey.current = stateKey({ ...s, planAnchor: state.planAnchor, pastPlans: state.pastPlans });
     updateSession(state);
     if (s.model && !live) setModel(s.model);
   };
@@ -652,7 +649,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // while Run is being sent (see startRun).
     if (!loaded || messages.length === 0 || runnerActive(sessionId) || starting.current === sessionId) return;
     const session = snapshot();
-    const key = keyOf(session);
+    const key = stateKey(session);
     if (key === savedKey.current) return;
     savedKey.current = key;
     const savedId = sessionId;
@@ -1058,7 +1055,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (!options) return false;
     const id = sessionId;
     const toSend = { ...snapshot(), messages: before };
-    const key = keyOf(toSend);
+    const key = stateKey(toSend);
     // A first message saves the session just so the server has it to read; if
     // the message doesn't go, that empty session is removed again.
     const listed = sessions.some((x) => x.id === id);
@@ -1137,7 +1134,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (!options) return;
     const id = sessionId;
     const toRun = { ...snapshot(), plan: planRef.current };
-    const key = keyOf(toRun);
+    const key = stateKey(toRun);
     // Not sent again if the server already holds exactly this (see chatTurn).
     const inSync = sessions.some((x) => x.id === id) && savedKey.current === key;
     starting.current = id;
