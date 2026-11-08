@@ -165,6 +165,7 @@ import {
 } from "./runClient";
 import ThreadNote from "./ThreadNote";
 import { withSessionDefaults } from "./sessionDefaults";
+import { SESSION_KEY } from "./sessionRoute";
 import { descendantIds, nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
@@ -173,8 +174,6 @@ import { descendantIds, nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 const TOOLBAR_KEY = "llama-mui:toolbarOpen";
 // Whether the chats panel is open (wide screens; on phones and small windows it's a drawer).
 const SESSIONS_OPEN_KEY = "llama-mui:sessionsOpen";
-// Which saved chat is open, so a reload reopens it.
-const SESSION_KEY = "llama-mui:sessionId";
 function loadSessionId(): string {
   try {
     const id = localStorage.getItem(SESSION_KEY);

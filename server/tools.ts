@@ -21,6 +21,8 @@ import {
 import { FETCH_TOOLS } from "./fetch.ts";
 import { INSPECT_TOOLS } from "./inspect.ts";
 import { PLAN_TOOLS, planInstructions } from "./plan.ts";
+import { sessionFolder } from "./sessionFile.ts";
+import { sessionHash } from "../src/sessionRoute.ts";
 import { THREAD_TOOLS, threadInstructions } from "./threads.ts";
 import { TODO_TOOLS, todoInstructions } from "./todos.ts";
 import { TERMINAL_TOOLS, exec } from "./terminal.ts";
@@ -172,8 +174,11 @@ const isOffered = (ctx: ToolContext, t: ToolSpec) => ctx.store.toolsEnabled && !
 // first because they govern everything after them; an edit to them reprocesses
 // the tools' help too, which is a few hundred tokens. The home folder is
 // the same in every session; without it a model with nothing attached guessed
-// Linux paths like /home/user.
-function toolsSystemPrompt(promptDir: string | null, rulesText: string, withTools: boolean): string | null {
+// Linux paths like /home/user. The session's own address (sessionNote) is the
+// one line no other session shares, so it is last: the working directory is
+// shared by every session in a project, and a session reuses another's cache
+// up to the first line that differs.
+function toolsSystemPrompt(promptDir: string | null, rulesText: string, withTools: boolean, sessionLine: string | null = null): string | null {
   // The user's rules govern the model and come first; the tools' help, the home
   // folder and the working directory follow, and only when there are tools.
   const rules = governingRules(rulesText);
@@ -184,7 +189,34 @@ function toolsSystemPrompt(promptDir: string | null, rulesText: string, withTool
     ...GROUPS.map((g) => g.instructions),
     `The user's home folder is ${os.homedir()}.`,
     promptDir ? `Working directory: ${promptDir}` : "There's no working directory: use absolute paths.",
+    ...(sessionLine ? [sessionLine] : []),
   ].join("\n\n");
+}
+
+// Where this session shows in a browser, for a model that can open pages. Each
+// inspect_page starts a fresh browser that remembers nothing, so a plain
+// address shows an empty chat; this one opens this session (see sessionRoute.ts
+// in the page). The port is the one the request came to, with localhost for
+// the host, which inspect_page opens without asking. Null when there is no
+// session id, it isn't a plain one, or the request names no usable host.
+export function sessionNote(chatId: string, host: unknown): string | null {
+  try {
+    sessionFolder(chatId);
+  } catch {
+    return null;
+  }
+  if (typeof host !== "string") return null;
+  let port: string;
+  try {
+    port = new URL(`http://${host}`).port;
+  } catch {
+    return null;
+  }
+  const address = `http://localhost${port ? `:${port}` : ""}/${sessionHash(chatId)}`;
+  return (
+    `This session's id is ${chatId}. To see this chat in a browser, open ${address} with inspect_page. ` +
+    "The plain address shows an empty chat, not this one."
+  );
 }
 
 // A chat update: what changed in the session since its system prompt, which
@@ -312,7 +344,12 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
     sendJson(res, 200, {
       definitions: TOOLS.map((t) => t.definition),
       // The user's rules go out with or without tools; the rest only with them.
-      systemPrompt: toolsSystemPrompt(promptDir, (await readRules()).text, offered.length > 0),
+      systemPrompt: toolsSystemPrompt(
+        promptDir,
+        (await readRules()).text,
+        offered.length > 0,
+        offered.includes("inspect_page") ? sessionNote(ctx.chatId, req.headers?.host) : null,
+      ),
       offered,
       update: await chatUpdate(ctx, promptDir),
       // The working directory's only: attachments have none (see SessionSettings).

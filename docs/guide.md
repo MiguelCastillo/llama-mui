@@ -388,9 +388,19 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
 | **Note** | An instruction for one turn: the planning note (see [How plans work](#how-plans-work)) | After the message it's for | That turn only |
 
 - **The system prompt** (`toolsSystemPrompt` in `server/tools.ts`) is the
-  same in every session except its last line, the working directory, so a new
-  session reuses another's cached start; that line has to stay last. The tool
-  list, which comes before it, lists every tool, even ones that are off, and a
+  same in every session except its last lines, the working directory and, when
+  the `inspect_page` tool is on, the session's own address, so a new session
+  reuses another's cached start; those lines have to stay last, the address
+  after the working directory since no other session shares it. The address
+  exists because `inspect_page` opens a fresh browser every time, and the page
+  remembers which chat is open in the browser (`localStorage`), so a plain
+  address always shows an empty chat. `#/session/<id>` (`src/sessionRoute.ts`)
+  opens that chat: it sets the remembered chat, then the address goes back to
+  plain, so a reload or a click on another chat isn't pulled back. It works on
+  load and when the address changes while the page is open. The line says
+  `http://localhost:<port>/#/session/<id>`, with the port the request came to
+  and localhost as the host, which `inspect_page` opens without asking. The tool
+  list, which comes before them, lists every tool, even ones that are off, and a
   call to one that's off fails with "turned off in Settings". The line before
   the working directory names your home folder, which is the same in every
   session; without it a model with nothing attached guessed paths like

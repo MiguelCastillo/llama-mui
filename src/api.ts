@@ -499,9 +499,11 @@ export const runCheckCommand = (workingDir: string | null, attachments: string[]
 
 // `workingDir`: the folder relative paths start in; `attachments`: the extra
 // files and folders (not including it). `promptDir`: the working directory the
-// session's system prompt names.
-export const getToolContext = (workingDir: string | null, attachments: string[], promptDir: string | null) =>
-  call<ToolContext>("POST", "/api/tools/context", { workingDir, attachments, promptDir });
+// session's system prompt names. `chatId`: the session the prompt is for; with
+// it, the prompt says where that session shows in a browser (see sessionNote
+// in server/tools.ts).
+export const getToolContext = (workingDir: string | null, attachments: string[], promptDir: string | null, chatId?: string) =>
+  call<ToolContext>("POST", "/api/tools/context", { workingDir, attachments, promptDir, ...(chatId ? { chatId } : {}) });
 // The agent's own rules (~/.llama-mui/rules.md); Settings → Agent.
 export interface Rules {
   text: string;

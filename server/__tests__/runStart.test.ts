@@ -132,7 +132,7 @@ describe("the run command's starter", () => {
     expect(env.toolContext).toEqual(toolContext);
     // The tools were asked for with the session's working directory and its own attachments, and the working directory as the prompt's.
     const context = calls.find((c) => c.url === "/api/tools/context")!;
-    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: "/work/app" });
+    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: "/work/app", chatId: "a" });
     expect(hub.liveRun("a")).toMatchObject({ status: "running" });
   });
 
@@ -140,14 +140,14 @@ describe("the run command's starter", () => {
     saved("a", { promptDir: null, workingDir: "/work/app", attachments: [{ path: "/work/notes.txt", kind: "file", source: "manual" }] });
     await start("a");
     const context = calls.find((c) => c.url === "/api/tools/context")!;
-    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: null });
+    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: null, chatId: "a" });
   });
 
   it("has no working directory, and so no prompt folder, when a folder is only attached", async () => {
     saved("a", { workingDir: null, attachments: [{ path: "/work/app", kind: "folder", source: "manual" }] });
     await start("a");
     const context = calls.find((c) => c.url === "/api/tools/context")!;
-    expect(JSON.parse(context.body)).toEqual({ workingDir: null, attachments: ["/work/app"], promptDir: null });
+    expect(JSON.parse(context.body)).toEqual({ workingDir: null, attachments: ["/work/app"], promptDir: null, chatId: "a" });
   });
 
   it("holds no key anywhere: not in the run, its events, its requests or the saved session", async () => {
@@ -265,7 +265,7 @@ describe("the message command's starter for a chat reply", () => {
     // The connector is the list's entry: that a key is set, not the key.
     expect(envs[0].connector).toEqual({ id: "c1", name: "Studio", url: "http://127.0.0.1:1", hasKey: true, kind: "llama", api: "openai" });
     const context = calls.find((c) => c.url === "/api/tools/context")!;
-    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: "/work/app" });
+    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: "/work/app", chatId: "a" });
     expect(hub.liveRun("a")).toMatchObject({ kind: "turn", status: "running" });
     finishReply(true);
     await vi.waitFor(() => expect(hub.liveRun("a")).toBeNull());
@@ -376,7 +376,7 @@ describe("a plan that hasn't started", () => {
     await startThread("p");
     const context = calls.find((c) => c.url === "/api/tools/context")!;
     // A thread fixes its prompt folder at its own first reply, not the session's.
-    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: "/work/app" });
+    expect(JSON.parse(context.body)).toEqual({ workingDir: "/work/app", attachments: ["/work/notes.txt"], promptDir: "/work/app", chatId: "child-1" });
     expect(envs[0]!.connector!.hasKey).toBe(true);
   });
 

@@ -57,7 +57,7 @@ export async function buildEnv(session: any, options: RunOptions): Promise<Runne
   const models: Model[] = await ask(`couldn't ask ${connector.name} for its models`, listModels(connector.id));
   const toolContext: ToolContext = await ask(
     "couldn't read the tools",
-    getToolContext(workingDir, attachedPaths(attachments), promptDir),
+    getToolContext(workingDir, attachedPaths(attachments), promptDir, typeof session.id === "string" ? session.id : undefined),
   );
   return {
     connector,
