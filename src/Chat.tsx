@@ -76,10 +76,7 @@ import {
   type Picked,
   type Approval,
   type ToolContext,
-  type PastPlan,
   type PlanStep,
-  type PlanThread,
-  type AutoApprove,
   type AutoKind,
   type Todo,
   type ImageRef,
@@ -127,7 +124,7 @@ import { settleStart, startAction, type Start, type StartAction } from "./todos"
 import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
 import RecentFolders from "./RecentFolders";
-import { commandSummary, INTERRUPTED, failureLine, shownFailure } from "./agent/helpers";
+import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
 import {
   PlanView,
   checkRoom,
@@ -165,6 +162,7 @@ import {
 } from "./runClient";
 import ThreadNote from "./ThreadNote";
 import { withSessionDefaults } from "./sessionDefaults";
+import { emptySessionState, fromSession, toSession, type SessionState } from "./sessionState";
 import { SESSION_KEY } from "./sessionRoute";
 import { descendantIds, nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 
@@ -238,28 +236,67 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [connector, setConnector] = useState<Connector | null | undefined>(undefined);
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  // The model's name for this session, carried by saves in case it came before
-  // the first one. The user's name is only ever written by a rename (PATCH),
-  // so renaming doesn't save the session and move it to the top.
-  const [modelName, setModelName] = useState<string | null>(null);
+  // Everything about the open chat that is saved with it, in one object (see
+  // sessionState.ts for what each field is). `sessionRef` is always the latest
+  // one, so a change made right after another, before a render, starts from the
+  // first, and the plan runner and tool calls can read the plan and the todos
+  // between awaits through planRef and todosRef.
+  const [session, setSession] = useState<SessionState>(emptySessionState);
+  const sessionRef = useRef(session);
+  const planRef = useRef<PlanStep[] | null>(null);
+  const todosRef = useRef<Todo[]>([]);
+  // The one way to change it: a partial change, or a function from the current
+  // state to one. A change that alters nothing is dropped, so setting a field
+  // to what it already is renders nothing and doesn't restart the save timer.
+  const updateSession = (change: Partial<SessionState> | ((current: SessionState) => Partial<SessionState>)) => {
+    const current = sessionRef.current;
+    const part = typeof change === "function" ? change(current) : change;
+    const keys = Object.keys(part) as (keyof SessionState)[];
+    if (keys.every((k) => Object.is(current[k], part[k]))) return;
+    const next = { ...current, ...part };
+    sessionRef.current = next;
+    planRef.current = next.plan;
+    todosRef.current = next.todos;
+    setSession(next);
+  };
+  // The fields by name, so reads stay as they were.
+  const {
+    messages,
+    contextStart,
+    attachments,
+    workingDir,
+    promptDir: fixedPromptDir,
+    usage,
+    failed,
+    modelName,
+    plan,
+    planProposal,
+    planContext,
+    planSummary,
+    planId,
+    planAnchor,
+    pastPlans,
+    todos,
+    parentId,
+    threads,
+    autoApprove,
+    titleHint,
+    planMovedIn,
+  } = session;
   // Per-model options from Settings → Models, plus the server's defaults for
   // models nobody changed.
   const [modelSettings, setModelSettings] = useState<{
     defaults: ModelSettings;
     models: Record<string, ModelSettings>;
   } | null>(null);
-  // Extra files and folders this chat's disk tools may read, besides the
-  // working directory; New chat clears them.
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  // The working directory: where relative paths and commands start. Chosen in
-  // Session settings, not one of the attachments; New chat clears it.
-  const [workingDir, setWorkingDir] = useState<string | null>(null);
+  // Attachments are extra files and folders this chat's disk tools may read,
+  // besides the working directory; New chat clears them. The working directory
+  // is where relative paths and commands start; it is chosen in Session
+  // settings, not one of the attachments, and New chat clears it.
   const attachedPaths = (as: Attachment[]) => as.map((a) => a.path);
   // The working directory the system prompt names. Fixed by the session's
   // first message: after that a change goes in a chat update, so the system
   // prompt stays the same. Until then (undefined) it follows workingDir.
-  const [fixedPromptDir, setFixedPromptDir] = useState<string | null | undefined>(undefined);
   const promptDir = fixedPromptDir === undefined ? workingDir : fixedPromptDir;
   // What to offer the model given those attachments and Settings → Tools.
   const [toolContext, setToolContext] = useState<ToolContext>({
@@ -270,61 +307,37 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     checkCommands: {},
   });
   const [error, setError] = useState<string | null>(null);
-  // Failure of the last reply only; see retry().
-  const [failed, setFailed] = useState<string | null>(null);
-  // The task's steps (see Plan.tsx). The ref is the latest plan for the plan
-  // runner, which reads it between awaits; change it only with changePlan.
-  const [plan, setPlan] = useState<PlanStep[] | null>(null);
-  const planRef = useRef<PlanStep[] | null>(null);
-  const changePlan = (next: PlanStep[] | null) => {
-    planRef.current = next;
-    setPlan(next);
-  };
-  // Context the model wrote alongside the plan (requirements, notes); saved
-  // with the session, cleared when the plan is cancelled, moved into pastPlans
-  // when a plan is archived, and kept when a plan is cloned.
-  const [planContext, setPlanContext] = useState<string | null>(null);
-  // The plan's one-sentence summary (update_plan's top-level summary); it
-  // goes where planContext goes: saved, archived with the plan, cloned.
-  const [planSummary, setPlanSummary] = useState<string | null>(null);
-  // The plan's id, set when it moved into this thread (see Session.planId).
-  // Chat only keeps it, so a save doesn't lose it; the agent archives it with
-  // the plan.
-  const [planId, setPlanId] = useState<string | null>(null);
-  // Things to come back to (add_todo; see src/agent/todos.ts), saved with the
-  // session. The ref is the latest, for tool calls within one reply.
-  const [todos, setTodos] = useState<Todo[]>([]);
-  const todosRef = useRef<Todo[]>([]);
-  const changeTodos = (next: Todo[]) => {
-    todosRef.current = next;
-    setTodos(next);
-  };
-  // Where each plan shows: after the turn whose update_plan call wrote it, so
-  // it stays in place in the history (see Session). A finished plan stays
-  // there when a new one is written; the new one shows after its own turn.
-  const [planAnchor, setPlanAnchor] = useState<string | null>(null);
-  const [pastPlans, setPastPlans] = useState<PastPlan[]>([]);
+  // The plan's context (requirements, notes the model wrote alongside it) is
+  // cleared when the plan is cancelled, moved into pastPlans when a plan is
+  // archived, and kept when a plan is cloned; the plan's one-sentence summary
+  // (update_plan's top-level summary) goes where it goes. The plan's id is set
+  // when it moved into this thread (see Session.planId); Chat only keeps it, so
+  // a save doesn't lose it, and the agent archives it with the plan. A plan
+  // shows after the turn whose update_plan call wrote it (planAnchor), so it
+  // stays in place in the history; a finished plan stays there when a new one
+  // is written, and the new one shows after its own turn.
   // A finished plan never runs again; Clone starts a new one with its steps,
   // all pending, at the end of the chat. Not while another plan is unfinished,
   // which the clone would replace (see canClone).
   const clonePlan = (steps: PlanStep[], context?: string | null, summary?: string | null) => {
-    if (plan) setPastPlans((p) => [...p, { steps: plan, anchor: planAnchor, context: planContext, summary: planSummary, ...(planId ? { planId } : {}) }]);
-    setPlanId(null);
-    setPlanAnchor(`at:${messages.length}`);
-    changePlan(
-      steps.map((st) => ({
+    updateSession((s) => ({
+      pastPlans: s.plan
+        ? [...s.pastPlans, { steps: s.plan, anchor: s.planAnchor, context: s.planContext, summary: s.planSummary, ...(s.planId ? { planId: s.planId } : {}) }]
+        : s.pastPlans,
+      planId: null,
+      planAnchor: `at:${s.messages.length}`,
+      plan: steps.map((st) => ({
         id: newId(),
         text: st.text,
         ...(st.summary ? { summary: st.summary } : {}),
         status: "pending" as const,
       })),
-    );
-    setPlanContext(context ?? null);
-    setPlanSummary(summary ?? null);
+      planContext: context ?? null,
+      planSummary: summary ?? null,
+    }));
     toBottom();
   };
   // A change the model suggested to a plan that's under way; see makeReply in src/runnerReply.ts.
-  const [planProposal, setPlanProposal] = useState<PlanStep[] | null>(null);
   const answerProposal = (accept: boolean) => {
     // Matched again by text: the user may have changed the plan since. A step
     // kept from an older plan, with no summary, takes the proposal's. The plan's
@@ -334,8 +347,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       const o = old.find((x) => x.text === p.text);
       return o ? (o.summary || !p.summary ? o : { ...o, summary: p.summary }) : p;
     };
-    if (accept && planProposal) changePlan(planProposal.map(keep));
-    setPlanProposal(null);
+    updateSession({ planProposal: null, ...(accept && planProposal ? { plan: planProposal.map(keep) } : {}) });
   };
   // Plans and chat replies run on the server, not here (see src/runClient.ts):
   // every session has one owner. `runnerView` is what this open session's run
@@ -371,11 +383,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // the live tokens per second beside the counter. llama.cpp streams about
   // one token per piece. A ref, since it changes on every piece.
   const streamRate = useRef<StreamRate>({ pieces: 0, first: 0 });
-  // Token count after the latest reply; it covers the whole conversation.
-  const [usage, setUsage] = useState<Usage | null>(null);
-  // Index of the first message the model still sees. Clear context moves it
-  // to the end: earlier messages stay on screen but aren't sent any more.
-  const [contextStart, setContextStart] = useState(0);
+  // Clear context moves contextStart to the end: earlier messages stay on
+  // screen but aren't sent any more.
   const [prefs, setPrefs] = useState<Preferences | null>(null);
   // Expanded on a wide screen the first time; on a phone it starts folded, so
   // the chat is what you see (the model was most likely chosen already). What
@@ -484,60 +493,20 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // one holds the user's name, which saves never send.
   const keyOf = (s: Session) => JSON.stringify([s.model, s.messages, s.contextStart, s.attachments, s.workingDir ?? null, s.usage, s.failed, s.plan, s.planProposal, s.planContext, s.planSummary ?? null, s.planId ?? null, s.planAnchor, s.pastPlans, s.promptDir, s.modelName, s.todos, s.parentId ?? null, s.threads ?? [], s.autoApprove ?? null, s.titleHint ?? null, s.planMovedIn ?? false]);
 
-  // The session this one is nested under (its direct parent), if any.
-  const [parentId, setParentId] = useState<string | null>(null);
-  // Plans that moved out to their own sessions (see src/planThread.ts), the
-  // name this session has until the model names it, and whether the plan was
-  // moved in here from the parent and has not run yet.
-  const [threads, setThreads] = useState<PlanThread[]>([]);
-  // What is approved for the rest of this session without asking (see autoApprove.ts).
-  const [autoApprove, setAutoApproveState] = useState<AutoApprove>({});
-  const [titleHint, setTitleHint] = useState<string | null>(null);
-  const [planMovedIn, setPlanMovedIn] = useState(false);
-
   // `live`: the session is a run's, as it is now (see mirrorView). A step that
   // is running there really is, so it isn't reset to pending, and the model
   // picker is left alone. `running`: that run has not ended, so the
   // "interrupted" mark it keeps while a request is in flight is not shown as
   // a failure (see shownFailure).
   const applySession = (s: Session, live = false, running = live) => {
-    // Saved before plans had a place: pinned after the chat's last message as
-    // it opens, where they showed, so later messages go below them. Counted
-    // as saved, so opening the chat doesn't save it (see savedKey).
-    // Shared or older sessions may lack fields; each gets a default.
+    // fromSession fills the gaps of shared or older sessions, and pins a plan
+    // saved before plans had a place after the chat's last message, where it
+    // showed, so later messages go below it. That is counted as saved, so
+    // opening the chat doesn't save it (see savedKey).
+    const state = fromSession(s, { live, running });
     s = withSessionDefaults(s);
-    const end = `at:${s.messages.length}`;
-    const planAnchor = s.plan ? (s.planAnchor ?? end) : null;
-    const pastPlans = (s.pastPlans ?? []).map((p) => ({ ...p, anchor: p.anchor ?? end }));
-    savedKey.current = keyOf({ ...s, planAnchor, pastPlans });
-    setMessages(s.messages);
-    setContextStart(s.contextStart);
-    setAttachments(s.attachments);
-    setWorkingDir(s.workingDir ?? null);
-    setFixedPromptDir(s.promptDir);
-    setUsage(s.usage);
-    setFailed(shownFailure(s.failed, running));
-    setModelName(s.modelName ?? null);
-    // A step that was running when the page went away didn't finish.
-    changePlan(
-      s.plan?.map((st) => ({
-        ...st,
-        id: st.id ?? newId(),
-        status: st.status === "running" && !live ? "pending" : st.status,
-      })) ?? null,
-    );
-    setPlanProposal(s.planProposal ?? null);
-    setPlanContext(s.planContext ?? null);
-    setPlanSummary(s.planSummary ?? null);
-    setPlanId(s.planId ?? null);
-    setPlanAnchor(planAnchor);
-    setPastPlans(pastPlans);
-    changeTodos(s.todos ?? []);
-    setParentId(s.parentId ?? null);
-    setThreads(s.threads ?? []);
-    setAutoApproveState(s.autoApprove ?? {});
-    setTitleHint(s.titleHint ?? null);
-    setPlanMovedIn(s.planMovedIn ?? false);
+    savedKey.current = keyOf({ ...s, planAnchor: state.planAnchor, pastPlans: state.pastPlans });
+    updateSession(state);
     if (s.model && !live) setModel(s.model);
   };
 
@@ -616,7 +585,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         thread: (e) => {
           if (e.id !== openId.current) return;
           noteRevision(e.id, e.revision);
-          setThreads((ts) => applyThreadEvent(ts, e));
+          updateSession((s) => ({ threads: applyThreadEvent(s.threads, e) }));
         },
         reconnected: () => void listSessions().then(setSessions).catch(() => {}),
       }),
@@ -654,34 +623,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // The session as it is now, built from the current state.
   const snapshot = (): Session => {
-    const firstUser = messages.find((m) => m.role === "user")?.content ?? "New session";
-    // The server puts the user's name, when there is one, ahead of this.
-    return {
-      id: sessionId,
-      title: modelName ?? titleHint ?? firstUser.slice(0, 80),
-      model,
-      messages,
-      contextStart,
-      attachments,
-      workingDir,
-      usage,
-      failed,
-      plan,
-      planProposal,
-      planContext,
-      planSummary,
-      planId,
-      planAnchor,
-      pastPlans,
-      promptDir: fixedPromptDir,
-      modelName,
-      todos,
-      parentId,
-      threads,
-      ...(Object.keys(autoApprove).length ? { autoApprove } : {}),
-      titleHint,
-      planMovedIn,
-    };
+    return toSession(session, { id: sessionId, model });
   };
 
   // The server refused a save because the session is no longer what this page
@@ -730,7 +672,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return () => clearTimeout(timer);
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
-  }, [loaded, messages, contextStart, attachments, workingDir, usage, model, failed, plan, planProposal, planContext, planSummary, planId, planAnchor, pastPlans, fixedPromptDir, modelName, todos, parentId, threads, autoApprove, titleHint, planMovedIn]);
+  }, [loaded, session, model]);
 
   // Set by openSession: once that session has loaded, the chat box scrolls to
   // its plan card instead of the end.
@@ -766,27 +708,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     savedKey.current = "";
     setRunnerView(null);
     mirroredError.current = null;
-    setMessages([]);
-    setUsage(null);
-    setContextStart(0);
-    setAttachments([]);
-    setWorkingDir(null);
-    setFixedPromptDir(undefined);
-    setFailed(null);
-    setModelName(null);
-    changePlan(null);
-    setPlanProposal(null);
-    setPlanContext(null);
-    setPlanSummary(null);
-    setPlanId(null);
-    setPlanAnchor(null);
-    setPastPlans([]);
-    changeTodos([]);
-    setParentId(null);
-    setThreads([]);
-    setAutoApproveState({});
-    setTitleHint(null);
-    setPlanMovedIn(false);
+    updateSession(emptySessionState());
     setDrawerOpen(false);
     loadSession(id);
   };
@@ -821,12 +743,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // removes the plan; that is saved like any other change.
   const [confirmCancelPlan, setConfirmCancelPlan] = useState(false);
   const clearPlan = () => {
-    changePlan(null);
-    setPlanProposal(null);
-    setPlanContext(null);
-    setPlanSummary(null);
-    setPlanId(null);
-    setPlanAnchor(null);
+    updateSession({ plan: null, planProposal: null, planContext: null, planSummary: null, planId: null, planAnchor: null });
   };
   const cancelPlanConfirmed = async () => {
     setConfirmCancelPlan(false);
@@ -1031,14 +948,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const attachmentsLocked = runActive;
   const changeAttachments = (fn: (as: Attachment[]) => Attachment[]) => {
     if (runnerActive(sessionId)) setError(ATTACHMENTS_LOCKED_NOTE);
-    else setAttachments(fn);
+    else updateSession((s) => ({ attachments: fn(s.attachments) }));
   };
   // Replaces the working directory (null clears it). The old one is not kept
   // as an attachment.
   const changeWorkingDir = (dir: string | null) => {
     if (runnerActive(sessionId)) setError(ATTACHMENTS_LOCKED_NOTE);
     else {
-      setWorkingDir(dir);
+      updateSession({ workingDir: dir });
       // Remembered for the picker; if that fails the folder is still set.
       if (dir) rememberFolder(dir).catch(() => {});
     }
@@ -1130,7 +1047,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       before,
       message: { role: "user", content: text },
       prior: messages,
-      setMessages,
+      setMessages: (shown) => updateSession({ messages: shown }),
       canShow: () => openId.current === id,
       canRestore: () => openId.current === id && !getView(id)?.session,
       work: () => runTurn(text, before, planning, pendingImages, existingRefs),
@@ -1184,8 +1101,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       // Until the server's copy of the session arrives (mirrorView), show the
       // message as sent, and a failure of the reply that came before it as gone.
       if (openId.current === id && !getView(id)?.session) {
-        setMessages([...before, { role: "user", content: text, images: refs.length ? refs : undefined }]);
-        setFailed(null);
+        updateSession({
+          messages: [...before, { role: "user", content: text, images: refs.length ? refs : undefined }],
+          failed: null,
+        });
       }
       return true;
     } catch (e) {
@@ -1244,9 +1163,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Approvals). The page's copy changes at once; the server's, by a command, so
   // a run that is going sees it too.
   const changeAutoApprove = (kind: AutoKind, on: boolean) => {
-    setAutoApproveState((a) => {
-      const { [kind]: _old, ...rest } = a;
-      return on ? { ...rest, [kind]: true } : rest;
+    updateSession((s) => {
+      const { [kind]: _old, ...rest } = s.autoApprove;
+      return { autoApprove: on ? { ...rest, [kind]: true } : rest };
     });
     showFailure(sendAutoApprove(sessionId, kind, on));
   };
@@ -1531,7 +1450,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   onPause={planRunning ? () => showFailure(stopRunner(sessionId)) : undefined}
                   counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
                   onRun={runFromCard}
-                  onChange={changePlan}
+                  onChange={(steps) => updateSession({ plan: steps })}
                   proposal={planProposal}
                   onProposal={answerProposal}
                   details={stepTurns}
@@ -1540,7 +1459,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   onClone={canClone ? () => clonePlan(plan, planContext, planSummary) : undefined}
                   prompt={
                     promptInPlan && shownPending ? (
-                      <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} onAlways={(k) => { shownPending.always(k); setAutoApproveState((a) => ({ ...a, [k]: true })); }} />
+                      <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} onAlways={(k) => { shownPending.always(k); updateSession((s) => ({ autoApprove: { ...s.autoApprove, [k]: true } })); }} />
                     ) : undefined
                   }
                 />
@@ -1556,12 +1475,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const showIndicator = hasContext && !!prefs?.showContextMeter;
 
   const clearContext = () => {
-    setContextStart(messages.length);
-    setUsage(null);
+    updateSession((s) => ({ contextStart: s.messages.length, usage: null }));
     // The model reprocesses its history from here anyway, so this is the cheap
     // moment to bring the system prompt up to date: it names the working
     // directory as it is now, and the next reply's update lists the attachments.
-    setFixedPromptDir(undefined);
+    updateSession({ promptDir: undefined });
   };
 
   // A click on the empty chat's suggestions: a starter is sent as the first
@@ -1604,7 +1522,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setConfirmCompact(false);
     if (contextStart > 0) {
       // Remove forgotten messages from the array
-      setMessages(messages.slice(contextStart));
+      updateSession((s) => ({ messages: s.messages.slice(s.contextStart), contextStart: 0, usage: null }));
       // A cloned plan's place counts messages, so it moves with them. A plan
       // whose turn is removed goes to the top ("at:0"), where that turn was.
       const removed = new Set(messages.slice(0, contextStart).flatMap((m) => (m.toolCalls ?? []).map((c) => c.id)));
@@ -1613,11 +1531,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         if (!a.startsWith("at:")) return removed.has(a) ? "at:0" : a;
         return `at:${Math.max(0, Number(a.slice(3)) - contextStart)}`;
       };
-      setPlanAnchor(shift(planAnchor));
-      setPastPlans(pastPlans.map((p) => ({ ...p, anchor: shift(p.anchor) })));
-      setThreads(threads.map((t) => ({ ...t, anchor: shift(t.anchor) })));
-      setContextStart(0);
-      setUsage(null);
+      updateSession((s) => ({
+        planAnchor: shift(s.planAnchor),
+        pastPlans: s.pastPlans.map((p) => ({ ...p, anchor: shift(p.anchor) })),
+        threads: s.threads.map((t) => ({ ...t, anchor: shift(t.anchor) })),
+      }));
       // Also update savedKey so we don't save again
       savedKey.current = "";
     }
@@ -1943,7 +1861,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               </Box>
             ))}
             {shownPending && !promptInPlan && (
-              <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} runKind={runnerView?.kind} onAlways={(k) => { shownPending.always(k); setAutoApproveState((a) => ({ ...a, [k]: true })); }} />
+              <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} runKind={runnerView?.kind} onAlways={(k) => { shownPending.always(k); updateSession((s) => ({ autoApprove: { ...s.autoApprove, [k]: true } })); }} />
             )}
             {notLoaded && (
               <Alert severity="info">
