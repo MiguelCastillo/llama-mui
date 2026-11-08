@@ -905,6 +905,10 @@ in it or it is running a plan.
   chat, then sends the message again. A reply being written takes no second
   message: it is refused with "A reply is still streaming…" and the text stays
   in the box. **Stop** works as before; a chat reply has no **Pause**, only Stop.
+- An error message about one session shows only in that session: open another
+  session and it is gone, and it stays gone when you come back. Problems with
+  the whole server, such as a server that can't be reached or a model that
+  won't load, show in every session.
 - The reply is made by the same code as before (`runTurn`, the naming, the
   usage and the planning turns work as they did); only where it runs changed.
 

@@ -161,6 +161,18 @@ import {
   uploadImage,
 } from "./runClient";
 import ThreadNote from "./ThreadNote";
+import {
+  clearOnShow,
+  clearSendRefusal,
+  dropSession,
+  emptyChatErrors,
+  leaveSession,
+  mirrorRun,
+  setGlobal,
+  setSession as setSessionError,
+  visibleError,
+  type ChatErrors,
+} from "./chatErrors";
 import { withSessionDefaults } from "./sessionDefaults";
 import { emptySessionState, fromSession, stateKey, toSession, type SessionState } from "./sessionState";
 import { SESSION_KEY } from "./sessionRoute";
@@ -306,7 +318,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     update: "",
     checkCommands: {},
   });
-  const [error, setError] = useState<string | null>(null);
+  // Error banners: global ones show in every session, the others only in the
+  // session they belong to (see src/chatErrors.ts). The owner of a message is
+  // kept in the same state as the message, so the banner follows the open session.
+  const [errors, setErrors] = useState<ChatErrors>(emptyChatErrors);
+  const showGlobalError = (message: string | null) => setErrors((s) => setGlobal(s, message));
+  // Always pass the id of the session the action started in, so a failure that
+  // comes late lands in its own session.
+  const showSessionError = (id: string, message: string | null) => setErrors((s) => setSessionError(s, id, message));
   // The plan's context (requirements, notes the model wrote alongside it) is
   // cleared when the plan is cancelled, moved into pastPlans when a plan is
   // archived, and kept when a plan is cloned; the plan's one-sentence summary
@@ -363,8 +382,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // (a note the next step sees). `asideRunning`: one is being answered.
   const [tellPlan, setTellPlan] = useState(false);
   const asideRunning = planRunning && !!runnerView?.aside;
-  // The last runner error put in `error` (see mirrorView).
-  const mirroredError = useRef<string | null>(null);
   // What the run of the open session is waiting on the user for, if
   // anything: a path the model asked for that isn't attached, or a change to
   // approve. It shows here, and the answer is a command to the server.
@@ -473,6 +490,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // saved until the open session has loaded, so an empty screen can't
   // overwrite it.
   const [sessionId, setSessionId] = useState(loadSessionId);
+  // The banner under the chat: the open session's own message, else a global one.
+  const error = visibleError(errors, sessionId);
   // A suggestion clicked on the empty screen, for the message box to take.
   const [fill, setFill] = useState<{ text: string; n: number } | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -519,13 +538,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // open session is Chat's again.
   const mirrorView = (v: RunnerView) => {
     if (v.session) applySession(v.session, true, v.status !== "stopped");
-    // The run's error shows as Chat's own, but only when it changes, so
-    // an error of Chat's (a server that can't be reached) isn't wiped by
-    // every streamed piece.
-    if (v.error !== mirroredError.current) {
-      mirroredError.current = v.error;
-      setError(v.error);
-    }
+    // The run's error shows in its session, and clears only a run error, so
+    // a message of Chat's own (a refusal, a server that can't be reached) isn't
+    // wiped by every streamed piece.
+    setErrors((s) => mirrorRun(s, v.sessionId, v.error));
     if (v.status !== "stopped") {
       setRunnerView(v);
       return;
@@ -615,7 +631,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     loadSession(sessionId);
     listSessions()
       .then(setSessions)
-      .catch((e) => setError(e.message));
+      .catch((e) => showGlobalError(e.message));
   }, []);
 
   // The session as it is now, built from the current state.
@@ -629,7 +645,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // here since the last save is dropped, and the message says so.
   const reloadFromServer = (message: string) => {
     savedKey.current = "";
-    setError(message);
+    showSessionError(sessionId, message);
     loadSession(sessionId);
   };
   // The answer arrives after this render is over, so it calls the latest one.
@@ -658,7 +674,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .catch((e) => {
         // A refusal about a session that has since been closed is not this screen's to show.
         if (e instanceof ApiError && e.status === 409 && openId.current === savedId) reloadRef.current(conflictMessage(e));
-        else setError(e.message);
+        else showSessionError(savedId, e.message);
       });
   };
 
@@ -697,6 +713,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // has one). The cards are marked with data-plan-card where they are drawn.
   const openSession = (id: string, saveFirst = true, toPlan: string | null = null) => {
     if (saveFirst) saveNow();
+    // The session being left keeps only its run error.
+    setErrors((s) => leaveSession(s, sessionId));
     scrollToPlan.current = toPlan === null ? null : { sessionId: id, planId: toPlan };
     setFollowing(toPlan === null);
     setSessionId(id);
@@ -704,7 +722,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     saveSessionId(id);
     savedKey.current = "";
     setRunnerView(null);
-    mirroredError.current = null;
     updateSession(emptySessionState());
     setDrawerOpen(false);
     loadSession(id);
@@ -713,6 +730,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // but none of its messages. It is saved right away (saveNow skips empty
   // sessions) so it shows in the list under its parent, then opened.
   const newNested = async (parentId: string) => {
+    // The session open when this was asked: a failure that arrives later belongs to it.
+    const from = sessionId;
     try {
       const parent =
         parentId === sessionId
@@ -723,7 +742,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       setSessions((ss) => [summary, ...ss.filter((x) => x.id !== summary.id)]);
       openSession(child.id);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      showSessionError(from, e instanceof Error ? e.message : String(e));
     }
   };
   // A new session starts on the connector's default model (see pickModel),
@@ -756,7 +775,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         applySession(final, true);
         setRunnerView(null);
       } catch (e) {
-        if (openId.current === id) setError(e instanceof Error ? e.message : String(e));
+        if (openId.current === id) showSessionError(id, e instanceof Error ? e.message : String(e));
         return;
       }
       clearPlan();
@@ -781,13 +800,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .then((summary) => {
         setSessions((ss) => ss.map((x) => (x.id === id ? { ...x, ...summary, userName: userNameVal } : x)));
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => showGlobalError(e.message));
   };
   // Puts a top-level session in a group (null: none). The server keeps it.
   const groupSessionLocal = (id: string, group: string | null) => {
     renameSession(id, { group })
       .then((summary) => setSessions((ss) => ss.map((x) => (x.id === id ? { ...x, group: summary.group ?? null } : x))))
-      .catch((e) => setError(e.message));
+      .catch((e) => showGlobalError(e.message));
   };
   const deleteConfirmed = () => {
     const id = confirmDelete;
@@ -801,10 +820,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .then((r) => {
         const gone = new Set([id, ...(r.deleted ?? [])]);
         setSessions((ss) => ss.filter((x) => !gone.has(x.id)));
+        setErrors((s) => [...gone].reduce(dropSession, s));
         // The open session is one of them: start a new one.
         if (gone.has(sessionId)) openSession(newId(), false);
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => showGlobalError(e.message));
   };
 
   // A llama server in router mode loads a model on demand when a request names
@@ -852,9 +872,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         }
         await new Promise((r) => setTimeout(r, 1000));
       }
-      setError(`${id} still wasn't ${want} after two minutes; check the Models page.`);
+      showGlobalError(`${id} still wasn't ${want} after two minutes; check the Models page.`);
     } catch (e: any) {
-      setError(`Couldn't ${load ? "load" : "unload"} ${id}: ${e.message}`);
+      showGlobalError(`Couldn't ${load ? "load" : "unload"} ${id}: ${e.message}`);
     } finally {
       setModelBusy(null);
     }
@@ -874,7 +894,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .catch((e) => {
         // Don't offer models from a server we can't reach.
         setModels([]);
-        setError(e.message);
+        showGlobalError(e.message);
       });
 
   refreshModelsAfterTurn.current = () => {
@@ -885,7 +905,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // server, its key or the folders, and a server that was down may be back.
   useEffect(() => {
     if (!visible) return;
-    setError(null);
+    setErrors((s) => clearOnShow(s, openId.current));
     getConnectors()
       .then((l) => {
         const active = l.connectors.find((c) => c.id === l.activeId) ?? null;
@@ -894,13 +914,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         if (active) refreshModels(active.id);
         else setModels([]);
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => showGlobalError(e.message));
     getPreferences()
       .then(setPrefs)
-      .catch((e) => setError(e.message));
+      .catch((e) => showGlobalError(e.message));
     getModelSettings()
       .then(setModelSettings)
-      .catch((e) => setError(e.message));
+      .catch((e) => showGlobalError(e.message));
   }, [visible]);
 
   // Bumped to fetch the tool context again, after a check command changes.
@@ -908,9 +928,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Settings → Tools or the attachments may have changed what's available.
   useEffect(() => {
     if (!visible) return;
+    // The session this was asked for: a failure that arrives later belongs to it.
+    const askedFor = sessionId;
     getToolContext(workingDir, attachedPaths(attachments), promptDir)
       .then(setToolContext)
-      .catch((e) => setError(e.message));
+      .catch((e) => showSessionError(askedFor, e.message));
   }, [visible, attachments, workingDir, promptDir, contextVersion]);
 
   // On only when the user wants tools and some are ready in this chat.
@@ -944,13 +966,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // until it ends, so they can't change meanwhile (Session settings says so, too).
   const attachmentsLocked = runActive;
   const changeAttachments = (fn: (as: Attachment[]) => Attachment[]) => {
-    if (runnerActive(sessionId)) setError(ATTACHMENTS_LOCKED_NOTE);
+    if (runnerActive(sessionId)) showSessionError(sessionId, ATTACHMENTS_LOCKED_NOTE);
     else updateSession((s) => ({ attachments: fn(s.attachments) }));
   };
   // Replaces the working directory (null clears it). The old one is not kept
   // as an attachment.
   const changeWorkingDir = (dir: string | null) => {
-    if (runnerActive(sessionId)) setError(ATTACHMENTS_LOCKED_NOTE);
+    if (runnerActive(sessionId)) showSessionError(sessionId, ATTACHMENTS_LOCKED_NOTE);
     else {
       updateSession({ workingDir: dir });
       // Remembered for the picker; if that fails the folder is still set.
@@ -973,7 +995,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       // A message to a running plan is text only (the server refuses images too):
       // say so and keep the images where they are.
       if (images?.length) {
-        setError("Images can't be attached while a plan is running. Remove them to send the text, or wait for the plan to finish.");
+        showSessionError(sessionId, "Images can't be attached while a plan is running. Remove them to send the text, or wait for the plan to finish.");
         return false;
       }
       try {
@@ -983,7 +1005,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           // server refuses (no plan any more, one being answered already).
           const options = runOptions();
           if (!options) {
-            setError("Choose a server and a model to ask a side question, or switch to Tell the plan.");
+            showSessionError(sessionId, "Choose a server and a model to ask a side question, or switch to Tell the plan.");
             return false;
           }
           accepted();
@@ -992,18 +1014,18 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           await sendToRun(sessionId, text);
         }
         // A refusal shown earlier is out of date now; the run's own error stays.
-        if (error !== mirroredError.current) setError(null);
+        setErrors((s) => clearSendRefusal(s, sessionId));
         toBottom();
         return true;
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        showSessionError(sessionId, e instanceof Error ? e.message : String(e));
         return false;
       }
     }
     // A reply is streaming: another message waits for its end (the server
     // refuses it too, see sendNote).
     if (turnRunning) {
-      setError("A reply is still streaming. Wait for it to finish, or stop it, then send your message.");
+      showSessionError(sessionId, "A reply is still streaming. Wait for it to finish, or stop it, then send your message.");
       return false;
     }
     // The one before this is still being saved and sent.
@@ -1084,7 +1106,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           // empty session if one was created. The previews stay alive because
           // submitDraft restores these images to the box.
           const name = pendingImages[0]?.name ?? "Image";
-          setError(`${name}: upload failed — ${e instanceof Error ? e.message : String(e)}`);
+          showSessionError(id, `${name}: upload failed — ${e instanceof Error ? e.message : String(e)}`);
           // Delete any images that uploaded before the failure.
           await Promise.all(refs.map((ref) => deleteImage(id, ref.id).catch(() => {})));
           // If this was a brand-new chat, remove the empty session.
@@ -1112,7 +1134,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           .then(() => setSessions((ss) => ss.filter((x) => x.id !== id)))
           .catch(() => {});
       }
-      runRefused(e);
+      runRefused(e, id);
       return false;
     } finally {
       starting.current = null;
@@ -1154,8 +1176,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     }
   };
   // A command the server couldn't do shows as the error, in its own words.
-  const showFailure = (command: Promise<unknown>) =>
-    void command.catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  // The failure belongs to the session open when the command was sent.
+  const showFailure = (command: Promise<unknown>) => {
+    const id = sessionId;
+    void command.catch((e) => showSessionError(id, e instanceof Error ? e.message : String(e)));
+  };
   // Turns an approval for the rest of this session on or off (Session settings,
   // Approvals). The page's copy changes at once; the server's, by a command, so
   // a run that is going sees it too.
@@ -1195,9 +1220,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   useEffect(() => setTellPlan(false), [sessionId]);
   // Says why a refused Run or a refused save didn't happen. A save refused
   // because the session changed (or runs) elsewhere shows the server's copy.
-  const runRefused = (e: unknown) => {
-    if (e instanceof ApiError && (e.data.reason === "run active" || e.data.reason === "stale revision")) reloadRef.current(conflictMessage(e));
-    else setError(e instanceof Error ? e.message : String(e));
+  // `id` is the session the action was for. If another one is open by now, it is
+  // not reloaded: the message waits in its own session.
+  const runRefused = (e: unknown, id: string) => {
+    if (e instanceof ApiError && (e.data.reason === "run active" || e.data.reason === "stale revision")) {
+      if (openId.current === id) reloadRef.current(conflictMessage(e));
+      else showSessionError(id, conflictMessage(e));
+    } else showSessionError(id, e instanceof Error ? e.message : String(e));
   };
 
   // The plan card's Run. This session is saved and the server is told to run
@@ -1208,6 +1237,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // was just moved in, runs where it is.
   const runFromCard = async () => {
     if (!connector || !model || runnerActive(sessionId)) return;
+    const id = sessionId;
     try {
       if (!planMovedIn && !(await modelLoaded())) return;
       const ranIn = await startRun();
@@ -1219,7 +1249,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         loadSession(sessionId);
       }
     } catch (e) {
-      runRefused(e);
+      runRefused(e, id);
     }
   };
 
@@ -1902,7 +1932,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               onSetCheckCommand={(folder, command) =>
                 setCheckCommand(folder, command)
                   .then(() => setContextVersion((v) => v + 1))
-                  .catch((e) => setError(e.message))
+                  .catch((e) => showGlobalError(e.message))
               }
             />
             </Box>
