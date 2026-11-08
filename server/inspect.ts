@@ -213,6 +213,9 @@ const inspectPage: ToolSpec = {
       "(headings, buttons, inputs and links with their names). With script, also run that JavaScript in the page " +
       "and return its JSON result, for example " +
       "[...document.querySelectorAll('button')].map(b => b.getBoundingClientRect()) to check layout. " +
+      "Use it whenever the user asks you to check, look at or debug a page, or asks why a change isn't showing: " +
+      "this is how you see a page, so don't say you can't. " +
+      "You get measurements and text, not a picture, so report what you found and don't say it looks right. " +
       "No screenshot, and no clicking or typing. localhost pages open at once; other sites ask the user first.",
     {
       type: "object",
