@@ -34,6 +34,8 @@ import {
   ToggleButtonGroup,
   Tooltip,
   Typography,
+  type SxProps,
+  type Theme,
   type TypographyProps,
   useMediaQuery,
   useTheme,
@@ -60,6 +62,7 @@ import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
 import StickyNote2OutlinedIcon from "@mui/icons-material/StickyNote2Outlined";
+import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import CloseIcon from "@mui/icons-material/Close";
@@ -125,6 +128,8 @@ import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
 import RecentFolders from "./RecentFolders";
 import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
+import { DO_IT_MESSAGE, doItDisabled, hasDoIt, noteBoxes, noteLabel, shownCalls } from "./agent/replyNotes";
+import type { NoteKindId } from "./replyNoteKinds";
 import {
   PlanView,
   checkRoom,
@@ -1398,6 +1403,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       onResend={i === lastFailedTurnIndex ? retry : undefined}
       resendDisabled={i === lastFailedTurnIndex ? runActive : undefined}
       sessionId={sessionId}
+      replyRunning={runActive || turnRunning}
+      onDoIt={() => send(DO_IT_MESSAGE, undefined, () => {})}
     />
   );
   // Each update_plan call's turn, to show the plan it wrote after that turn.
@@ -2346,6 +2353,36 @@ function Composer({
   );
 }
 
+// How each kind of note under a reply looks. Keyed by the kind's id, so a kind
+// added to the table (replyNoteKinds.ts) does not compile until it has a style.
+// Which boxes show, their labels and the Do it button come from the helper in
+// agent/replyNotes.ts.
+const NOTE_STYLES: Record<NoteKindId, { box: SxProps<Theme>; icon?: ReactNode; label: SxProps<Theme>; text: SxProps<Theme> }> = {
+  // Quiet: a plain outline and a lightbulb.
+  idea: {
+    box: { display: "flex", gap: 1, alignItems: "flex-start", p: 1.25, border: 1, borderColor: "divider", borderRadius: 1, color: "text.secondary" },
+    icon: <LightbulbOutlinedIcon fontSize="small" sx={{ mt: 0.25, flexShrink: 0 }} />,
+    label: { fontWeight: 600 },
+    text: {},
+  },
+  // Loud: a warning-coloured bar, a light tint and bold text.
+  action: {
+    box: {
+      display: "flex",
+      gap: 1,
+      alignItems: "center",
+      px: 1.5,
+      py: 1,
+      borderLeft: 4,
+      borderLeftColor: "warning.main",
+      borderRadius: 1,
+      bgcolor: (t) => alpha(t.palette.warning.main, 0.1),
+    },
+    label: { fontWeight: 700, color: "warning.main" },
+    text: { fontWeight: 700 },
+  },
+};
+
 // One bubble per turn: a user message, or every assistant step of one reply
 // (thinking, tool calls, text) in the order they happened.
 function MessageBubble({
@@ -2362,6 +2399,8 @@ function MessageBubble({
   since,
   rate,
   sessionId,
+  replyRunning,
+  onDoIt,
 }: {
   parts: ChatMessage[];
   streaming: boolean;
@@ -2386,6 +2425,10 @@ function MessageBubble({
   rate?: { current: StreamRate };
   // Session id, for building image URLs.
   sessionId?: string;
+  // Whether any reply is streaming (the Do it button waits), and what the
+  // button does: send "yes, go ahead" as the next message.
+  replyRunning?: boolean;
+  onDoIt?: () => void;
 }) {
   // This message's own choice of formatted or raw text; null follows
   // Settings → Chat. Declared before the early return below, as hooks must be.
@@ -2420,7 +2463,10 @@ function MessageBubble({
     : streaming && !last.content;
   // With steps hidden, a finished reply that was all steps (e.g. stopped
   // mid-tool) would be an empty box.
-  if (!isUser && !showSteps && !waiting && !parts.some((m) => m.content)) return null;
+
+  // Ideas and action items under a finished reply (never while it streams).
+  const notes = !isUser && !streaming ? noteBoxes(parts) : [];
+  if (!isUser && !showSteps && !waiting && !parts.some((m) => m.content) && !notes.length) return null;
   const hasError = !!failed;
   const errorLine = failed && (
     <Stack spacing={0.5} sx={{ alignItems: isUser ? "flex-end" : "flex-start", mt: 0.5, flexShrink: 0 }}>
@@ -2566,10 +2612,32 @@ function MessageBubble({
                 </Stack>
               )}
               {showSteps &&
-                m.toolCalls?.map((c) => (
+                shownCalls(m.toolCalls).map((c) => (
                   <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} stopped={!streaming} />
                 ))}
             </Fragment>
+          ))}
+          {notes.map((box, i) => (
+            // The outer box is spaced by the reply card's rule for non-step
+            // children; the inner one is the drawn box and pads itself.
+            <Box key={`note-${i}`}>
+              <Box data-note={box.kind} sx={NOTE_STYLES[box.kind].box}>
+                {NOTE_STYLES[box.kind].icon}
+                <Box sx={{ minWidth: 0, flexGrow: 1 }}>
+                  <Typography variant="caption" sx={{ display: "block", ...NOTE_STYLES[box.kind].label }}>
+                    {noteLabel(box)}
+                  </Typography>
+                  <Typography variant="body2" sx={{ overflowWrap: "anywhere", ...NOTE_STYLES[box.kind].text }}>
+                    {box.text}
+                  </Typography>
+                </Box>
+                {hasDoIt(box) && (
+                  <Button size="small" variant="outlined" color="warning" onClick={onDoIt} disabled={doItDisabled(!!replyRunning)} sx={{ flexShrink: 0 }}>
+                    Do it
+                  </Button>
+                )}
+              </Box>
+            </Box>
           ))}
           {streaming && since != null ? (
             // The counter sits beside the waiting dots, and stays on this
@@ -3103,13 +3171,13 @@ function ApprovalPrompt({ approval, onDecide, onAlways, canMakePlan: offerPlan }
       {/* Approves this and the same kind of thing for the rest of this session;
           Session settings, Approvals, turns it off. */}
       {onAlways && approval.type === "change" && autoApproves({ changes: true }, approval) && (
-        <Button size="small" onClick={() => onAlways("changes")} sx={{ mt: 0.5, ml: -1 }}>
+        <Button size="small" onClick={() => onAlways("changes")} sx={{ mt: 0.5, ml: "-5px" }}>
           Approve all changes in this session
         </Button>
       )}
       {onAlways && approval.type === "command" && (
         <Tooltip title="Every command, git or not, runs as you with your network access and credentials">
-          <Button size="small" color="warning" onClick={() => onAlways("commands")} sx={{ mt: 0.5, ml: -1 }}>
+          <Button size="small" color="warning" onClick={() => onAlways("commands")} sx={{ mt: 0.5, ml: "-5px" }}>
             Approve all commands in this session
           </Button>
         </Tooltip>

@@ -25,6 +25,7 @@ import { sessionFolder } from "./sessionFile.ts";
 import { sessionHash } from "../src/sessionRoute.ts";
 import { THREAD_TOOLS, threadInstructions } from "./threads.ts";
 import { TODO_TOOLS, todoInstructions } from "./todos.ts";
+import { REPLY_NOTE_TOOLS, replyNoteInstructions } from "./replyNotes.ts";
 import { TERMINAL_TOOLS, exec } from "./terminal.ts";
 import { WEB_TOOLS } from "./web.ts";
 import { WORKTREE_TOOLS } from "./worktree.ts";
@@ -63,6 +64,14 @@ const GROUPS: Group[] = [
       "Things you want to come back to. When you ask, the model saves one in the session; My Todos, on the " +
       "empty chat, lists them across sessions and starts one where it was saved.",
     instructions: todoInstructions,
+  },
+  {
+    id: "replyNotes",
+    label: "Ideas and action items",
+    description:
+      "Instead of writing an idea or something left for you at the end of a reply, the model hands it over as a " +
+      "note shown in its own box under the reply. Not available to side questions.",
+    instructions: replyNoteInstructions,
   },
   {
     id: "threads",
@@ -145,6 +154,7 @@ const TOOLS: ToolSpec[] = [
   ...RULE_TOOLS,
   ...PLAN_TOOLS,
   ...TODO_TOOLS,
+  ...REPLY_NOTE_TOOLS,
   ...THREAD_TOOLS,
   ...DISK_TOOLS,
   ...WRITE_TOOLS,

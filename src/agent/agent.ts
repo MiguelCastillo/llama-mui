@@ -5,6 +5,7 @@ import { closeOpenToolCalls } from "../closeOpenToolCalls.ts";
 import { callKey, shareTokens } from "./helpers.ts";
 import { ProgressWatch } from "./progress.ts";
 import { applyTodoCall, openTodos } from "./todos.ts";
+import { addNote, isNoteTool, noteFromCall } from "./replyNotes.ts";
 import { PLANNING_NOTE, planFromCall, extractContext, extractPlanSummary } from "./plan.ts";
 
 // Maximum number of identical tool calls (same name + arguments) before the
@@ -65,12 +66,14 @@ export function shouldBlockRepeat(
   call: ToolCall,
 ): { blocked: boolean; key: string; times: number } {
   const key = callKey(call);
-  const times = ran.get(key) ?? 0;
+  // A note is never a repeat: two of them are two notes.
+  const times = isNoteTool(call.name) ? 0 : ran.get(key) ?? 0;
   return { blocked: times >= MAX_REPEATS, key, times };
 }
 
 // Records that a tool call just ran. Call after every successful execution.
 export function recordCall(ran: Map<string, number>, call: ToolCall): void {
+  if (isNoteTool(call.name)) return;
   const key = callKey(call);
   const times = ran.get(key) ?? 0;
   ran.set(key, times + 1);
@@ -238,6 +241,8 @@ export async function runTurn(
     const watch = new ProgressWatch();
     let stopReason: string | null = null;
     let planned = false;
+    // True when a call put a note on the reply this round.
+    let noted = false;
 
     for (let round = 0; ; round++) {
       const lastTurn: boolean = stopReason !== null;
@@ -303,6 +308,7 @@ export async function runTurn(
       }
       if (toolCalls.length) reply.toolCalls = toolCalls;
       history = [...history, reply];
+      const replyAt = history.length - 1;
       setMessages([...forgotten, ...history]);
 
       if (!toolCalls.length) {
@@ -318,8 +324,9 @@ export async function runTurn(
         let diff: string | undefined;
 
         const key = callKey(call);
-        const times = ran.get(key) ?? 0;
-        ran.set(key, times + 1);
+        // Notes are not counted: each one is a new note.
+        const times = isNoteTool(call.name) ? 0 : ran.get(key) ?? 0;
+        if (!isNoteTool(call.name)) ran.set(key, times + 1);
         const openList = () => openTodos(todosRef.current).map(({ id, summary }) => ({ id, summary }));
 
         try {
@@ -422,6 +429,15 @@ export async function runTurn(
           changeTodos(applyTodoCall(todosRef.current, call, newId().slice(0, 8), Date.now()));
         }
 
+        // A note (one of the kinds in replyNoteKinds.ts) goes on the reply that
+        // called it, up to its kind's per-reply cap. In a main-chat reply it
+        // ends the turn, as a saved plan does: the note is shown in its own
+        // box, and a reply that went on would repeat it.
+        if (isNoteTool(call.name) && !result.startsWith("Error:") && noteFromCall(call)) {
+          history = history.map((m, i) => (i === replyAt ? addNote(m, call) : m));
+          if (planning) noted = true;
+        }
+
         if (call.name === "update_plan" && !result.startsWith("Error:")) {
           const current = planRef.current ?? [];
           const finished = current.length > 0 && current.every((st: any) => st.status === "done");
@@ -469,7 +485,7 @@ export async function runTurn(
         setMessages([...forgotten, ...history]);
       }
 
-      if (planned) {
+      if (planned || noted) {
         ok = true;
         break;
       }

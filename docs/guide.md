@@ -134,6 +134,48 @@ far (`context`, written in the same call, so a thread started later has it), `li
 (`todos`), so copying that file carries them; chat applies each call to the
 session, as it does for `update_plan`, since the server never writes that file.
 
+The **Ideas and action items** group (`server/replyNotes.ts`) lets the model
+hand over short notes instead of writing them at the end of its reply text.
+The kinds of note live in one small table (`src/replyNoteKinds.ts`, plain
+data that the server and chat both read). Each row has an id, the tool name,
+a one-sentence description of when to use it, any extra argument, the label on
+its box and a limit per reply. There are two rows today. `add_idea` is a
+suggestion you didn't ask for, only when it's worth your time, at most two per
+reply. `add_action_item` is something left only for you to do; its `can_do`
+flag says whether the model could do it itself with your approval. Each is one
+plain sentence (a blank or over-400-character one is refused with a message
+saying what to fix) and the tool answers "Shown to the user." The tool specs,
+their help text in Settings → Tools and that answer all come from the table.
+Like `update_plan` and `add_todo`, the server only checks the call; chat
+records it on the assistant message as one list, `notes` (each with its kind,
+its text and, for an action, `canDo`), so notes are saved with the session and
+are not parsed out of the reply text. The
+history the model sees keeps the call and its answer ("Shown to the user."),
+not the `notes` list, so on the next turn the model can still see what it
+showed and "yes, go ahead" has something to refer to. A round with one of these
+calls ends the turn, as a saved plan does, so the model doesn't add a second
+reply that repeats it; the repeat guard doesn't count them as repeats of other
+calls. Side questions don't get these tools (they only have read-only ones).
+
+Under a finished reply, chat draws each note from its row in the table: an
+idea in a quiet outlined box with a lightbulb and the label "Idea", an action
+item in a stronger box (warning-coloured bar on the left, light tint, bold
+text) labelled "Your action". Ideas come first, then actions, each kind up to
+its limit. An action with `canDo` also has a **Do it** button that sends "yes,
+go ahead" as your next message; it is disabled while a reply is streaming. The
+note calls are hidden from the tool-call rows in the steps. Replies that write
+a plain-text "Your action:" line instead (older chats, or a model that doesn't
+use the tool) are shown as ordinary text, with no box, and read fine.
+
+**To add a kind of note:** add a row to the table (id, tool name, one-sentence
+description that doesn't overlap another kind's, tool label and summary in
+Settings → Tools, box label, optional limit and extra arguments), and give it
+a style where chat draws the boxes. The tool, its validation, the help text
+and the end-the-turn behaviour come from the row; no new loop code. The new id
+also goes in the list of kind ids at the top of the same file; the type check
+then points at the style table in chat until the new kind has a style. The
+server test that lists the tool names needs the new name too.
+
 A plan's last step is told to say in a sentence or two whether it all worked
 (paths, branches or commands only if you need them next), and to add a
 "Follow-up:" line only when something must happen after (restart the server,
@@ -387,6 +429,14 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
 | **Chat update** | Facts about the session that changed since: other attachments, a new working directory, tools turned off | After your next message, only when the facts changed | Until the next chat update replaces it |
 | **Note** | An instruction for one turn: the planning note (see [How plans work](#how-plans-work)) | After the message it's for | That turn only |
 
+- **Ideas and action items** are told to the model in the system prompt, in
+  the instructions of the tool group of that name, written from the table of
+  note kinds: an idea only when it's worth your time, at most two per reply; an
+  action item only for something left for you, with `can_do` true if the model
+  could do it with your approval; neither repeated in the reply text, since each
+  shows in its own box and the reply ends after the call. After a call, the
+  model sees it and its "Shown to the user." answer in later turns, so it knows
+  what you were shown. Your standing rules can still shape when it uses them.
 - **The system prompt** (`toolsSystemPrompt` in `server/tools.ts`) is the
   same in every session except its last lines, the working directory and, when
   the `inspect_page` tool is on, the session's own address, so a new session

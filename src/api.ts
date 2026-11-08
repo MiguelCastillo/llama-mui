@@ -86,6 +86,13 @@ export interface ChatMessage {
   blocks?: Anthropic.ContentBlockParam[];
   // Set on assistant messages that asked to run tools.
   toolCalls?: ToolCall[];
+  // On an assistant message: what the model's note tools put under the reply
+  // (an idea, something left for the user), shown in their own boxes. `kind` is
+  // an id from NOTE_KINDS (replyNoteKinds.ts); `canDo` is set when the model
+  // could do it itself with the user's approval (they get a button to say yes).
+  // Never sent to the model as such; the call and its result are what the
+  // history keeps.
+  notes?: { kind: string; text: string; canDo?: boolean }[];
   // Set on tool messages: which call this is the result of.
   toolCallId?: string;
   // Set on the result of a file change the user approved: the diff they saw,

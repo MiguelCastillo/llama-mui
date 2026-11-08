@@ -403,6 +403,79 @@ describe("streamChat with a tool call that never got a result", () => {
   });
 });
 
+// A reply that ended with an action item and an idea, then the user's "go ahead".
+// The boxes under the reply are kept on it for display; the model must only see
+// the calls it made and their "Shown to the user." answers.
+const noteCalls: ToolCall[] = [
+  { id: "n1", name: "add_action_item", arguments: '{"text":"Restart the server","can_do":true}' },
+  { id: "n2", name: "add_idea", arguments: '{"text":"Cache the lookup"}' },
+];
+const noteHistory: ChatMessage[] = [
+  { role: "user", content: "Why is it slow?" },
+  {
+    role: "assistant",
+    content: "The lookup runs twice.",
+    toolCalls: noteCalls,
+    notes: [
+      { kind: "action", text: "Restart the server", canDo: true },
+      { kind: "idea", text: "Cache the lookup" },
+    ],
+  },
+  { role: "tool", content: "Shown to the user.", toolCallId: "n1" },
+  { role: "tool", content: "Shown to the user.", toolCallId: "n2" },
+  { role: "user", content: "yes, go ahead" },
+];
+const noteFields = ['"notes"', '"canDo"', '"kind"'];
+
+describe("streamChat after a reply that made a note call", () => {
+  const send = (api: "anthropic" | "openai") =>
+    streamChat({ ...request, api, kind: "llama", messages: noteHistory }, () => {}, new AbortController().signal);
+
+  it("sends the reply's text, its calls and their answers with the Messages API, and no note fields", async () => {
+    const requests = serve([
+      { type: "message_start", message: { id: "m1", type: "message", role: "assistant", content: [], model: "qwen", stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ]);
+    await send("anthropic");
+    const sent = requests[0].body.messages;
+    expect(sent[1].role).toBe("assistant");
+    expect(sent[1].content).toEqual([
+      { type: "text", text: "The lookup runs twice." },
+      { type: "tool_use", id: "n1", name: "add_action_item", input: { text: "Restart the server", can_do: true } },
+      { type: "tool_use", id: "n2", name: "add_idea", input: { text: "Cache the lookup" } },
+    ]);
+    // Both answers come back together in the next user turn, ahead of anything else.
+    expect(sent[2].role).toBe("user");
+    expect(sent[2].content.slice(0, 2)).toEqual([
+      { type: "tool_result", tool_use_id: "n1", content: "Shown to the user." },
+      { type: "tool_result", tool_use_id: "n2", content: "Shown to the user." },
+    ]);
+    expect(sent[sent.length - 1].content.at(-1)).toEqual({ type: "text", text: "yes, go ahead" });
+    const text = JSON.stringify(sent);
+    for (const field of noteFields) expect(text).not.toContain(field);
+  });
+
+  it("sends the same with the Chat Completions API, and no note fields", async () => {
+    const requests = serve([{ choices: [{ delta: {} }] }]);
+    await send("openai");
+    const sent = requests[0].body.messages;
+    expect(sent[1]).toEqual({
+      role: "assistant",
+      content: "The lookup runs twice.",
+      tool_calls: [
+        { id: "n1", type: "function", function: { name: "add_action_item", arguments: '{"text":"Restart the server","can_do":true}' } },
+        { id: "n2", type: "function", function: { name: "add_idea", arguments: '{"text":"Cache the lookup"}' } },
+      ],
+    });
+    expect(sent[2]).toEqual({ role: "tool", tool_call_id: "n1", content: "Shown to the user." });
+    expect(sent[3]).toEqual({ role: "tool", tool_call_id: "n2", content: "Shown to the user." });
+    expect(sent[sent.length - 1]).toEqual({ role: "user", content: "yes, go ahead" });
+    const text = JSON.stringify(sent);
+    for (const field of noteFields) expect(text).not.toContain(field);
+  });
+});
+
 describe("streamChat with the Messages API", () => {
   // A reply that thinks, says something and calls a tool. llama.cpp's
   // signature is empty; Claude's isn't.
