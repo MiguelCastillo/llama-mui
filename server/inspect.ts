@@ -216,6 +216,9 @@ const inspectPage: ToolSpec = {
       "Use it whenever the user asks you to check, look at or debug a page, or asks why a change isn't showing: " +
       "this is how you see a page, so don't say you can't. " +
       "You get measurements and text, not a picture, so report what you found and don't say it looks right. " +
+      "Each call opens a fresh browser that shares nothing with the user's own: an app that remembers what was " +
+      "open (a chat, a login) shows its starting screen, so an empty page is not what the user sees, and a URL " +
+      "you guess may not exist. Say so when it matters, and check the app's routes before trying an address. " +
       "No screenshot, and no clicking or typing. localhost pages open at once; other sites ask the user first.",
     {
       type: "object",
