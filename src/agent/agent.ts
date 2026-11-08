@@ -430,12 +430,13 @@ export async function runTurn(
         }
 
         // A note (one of the kinds in replyNoteKinds.ts) goes on the reply that
-        // called it, up to its kind's per-reply cap. In a main-chat reply it
-        // ends the turn, as a saved plan does: the note is shown in its own
-        // box, and a reply that went on would repeat it.
+        // called it, up to its kind's per-reply cap. It ends the turn, as a
+        // saved plan does: the note is shown in its own box, and a reply that
+        // went on would repeat it. The one exception is a plan step, which must
+        // run on to its own end whatever the model notes along the way.
         if (isNoteTool(call.name) && !result.startsWith("Error:") && noteFromCall(call)) {
           history = history.map((m, i) => (i === replyAt ? addNote(m, call) : m));
-          if (planning) noted = true;
+          if (!planStep) noted = true;
         }
 
         if (call.name === "update_plan" && !result.startsWith("Error:")) {

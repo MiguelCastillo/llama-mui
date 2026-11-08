@@ -154,8 +154,12 @@ history the model sees keeps the call and its answer ("Shown to the user."),
 not the `notes` list, so on the next turn the model can still see what it
 showed and "yes, go ahead" has something to refer to. A round with one of these
 calls ends the turn, as a saved plan does, so the model doesn't add a second
-reply that repeats it; the repeat guard doesn't count them as repeats of other
-calls. Side questions don't get these tools (they only have read-only ones).
+reply that repeats it; this holds whether or not the plan tool is offered, and
+the one exception is a step of a running plan, which always goes on to its own
+end. Other calls in the same round still run and their
+results are saved, but the model only sees them on your next message, so it is
+told to call a note tool only once it has what it needs from other tools. The
+repeat guard doesn't count notes as repeats of other calls. Side questions don't get these tools (they only have read-only ones).
 
 Under a finished reply, chat draws each note from its row in the table: an
 idea in a quiet outlined box with a lightbulb and the label "Idea", an action
@@ -434,7 +438,9 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   note kinds: an idea only when it's worth your time, at most two per reply; an
   action item only for something left for you, with `can_do` true if the model
   could do it with your approval; neither repeated in the reply text, since each
-  shows in its own box and the reply ends after the call. After a call, the
+  shows in its own box and the reply ends after the call; and a note tool only
+  once it has what it needs from other tools, since it won't see the results of
+  anything else called in the same round. After a call, the
   model sees it and its "Shown to the user." answer in later turns, so it knows
   what you were shown. Your standing rules can still shape when it uses them.
 - **The system prompt** (`toolsSystemPrompt` in `server/tools.ts`) is the

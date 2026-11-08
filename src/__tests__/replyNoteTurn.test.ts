@@ -71,6 +71,23 @@ describe("ideas and action items in a turn", () => {
     expect(assistants(r.messages)[0].notes).toHaveLength(6);
   });
 
+  it("runs another tool called in the same round, saves both results and makes no second model call", async () => {
+    mockStream.mockResolvedValueOnce({
+      toolCalls: [{ id: "r1", name: "read_file", arguments: JSON.stringify({ path: "a.txt" }) }, idea("i1", "Try X")],
+      usage: undefined,
+    });
+    const t = setup();
+    mockRunTool.mockImplementation(async (call: any) => ({ result: call.name === "read_file" ? "file contents" : "Shown to the user." }));
+    const r = await runTurn(t.config, t.cb);
+    expect(mockStream).toHaveBeenCalledTimes(1);
+    expect(mockRunTool.mock.calls.map((c) => c[0].name)).toEqual(["read_file", "add_idea"]);
+    const tools = r.messages.filter((m) => m.role === "tool");
+    expect(tools.map((m) => m.content)).toEqual(["file contents", "Shown to the user."]);
+    const [reply] = assistants(r.messages);
+    expect(reply.toolCalls).toHaveLength(2);
+    expect(reply.notes).toEqual([{ kind: "idea", text: "Try X" }]);
+  });
+
   it("goes on when the call was refused, and records nothing", async () => {
     mockStream
       .mockResolvedValueOnce({ toolCalls: [idea("i1", "")], usage: undefined })
@@ -82,13 +99,25 @@ describe("ideas and action items in a turn", () => {
     expect(assistants(r.messages)[0].notes).toBeUndefined();
   });
 
-  it("does not end a turn that isn't a main-chat reply", async () => {
+  it("ends the turn after the round even when the plan tool is off and it is not a plan step", async () => {
     mockStream
       .mockResolvedValueOnce({ toolCalls: [idea("i1", "x")], usage: undefined })
       .mockResolvedValue({ toolCalls: [], usage: undefined });
     const t = setup(false);
-    await runTurn(t.config, t.cb);
+    const r = await runTurn(t.config, t.cb);
+    expect(mockStream).toHaveBeenCalledTimes(1);
+    expect(assistants(r.messages)[0].notes).toEqual([{ kind: "idea", text: "x" }]);
+  });
+
+  it("does not end a plan step", async () => {
+    mockStream
+      .mockResolvedValueOnce({ toolCalls: [idea("i1", "x")], usage: undefined })
+      .mockResolvedValue({ toolCalls: [], usage: undefined });
+    const t = setup();
+    t.config.planStep = "s1";
+    const r = await runTurn(t.config, t.cb);
     expect(mockStream).toHaveBeenCalledTimes(2);
+    expect(assistants(r.messages)[0].notes).toEqual([{ kind: "idea", text: "x" }]);
   });
 
   it("never counts them as repeats", async () => {

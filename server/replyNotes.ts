@@ -13,7 +13,9 @@ import { ToolError, type ToolSpec, fn } from "./toolkit.ts";
 export const replyNoteInstructions =
   NOTE_KINDS.map((k) => `${k.tool}: ${noteDescription(k)}`).join("\n") +
   "\nEach is shown to the user in its own box under your reply, so don't repeat it in your reply text, " +
-  "and your reply ends after the call.";
+  "and your reply ends after the call. " +
+  "Call a note tool only once you have what you need from other tools, because your reply ends after it " +
+  "and you won't see the results of anything else called in the same round.";
 
 // The cleaned text of a note call, or a ToolError saying what to fix.
 export function checkNote(args: any): string {

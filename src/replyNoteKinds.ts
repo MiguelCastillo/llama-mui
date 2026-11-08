@@ -46,14 +46,14 @@ export const NOTE_KINDS: readonly NoteKind[] = [
     id: "action",
     tool: "add_action_item",
     description:
-      "Hand the user something that is left for them after your work and that only they can do or approve, as one plain sentence, not for steps you can take now",
+      "Hand the user something that is left after your work, either because only they can do it, or because you could do it with their approval, in which case set can_do to true, as one plain sentence",
     toolLabel: "Add an action item",
     toolSummary: "Show the user something left for them to do, under your reply.",
     extraArgs: {
       can_do: {
         type: "boolean",
         description:
-          "True if you could do it yourself with the user's approval (they get a button to say yes); false if only they can. Default false.",
+          "True if you could do it yourself with the user's approval (they get a button to say yes); false (the default) if only the user can do it.",
       },
     },
     label: "Your action",
