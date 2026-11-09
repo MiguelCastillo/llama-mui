@@ -306,21 +306,27 @@ export function threadResult(child: Pick<Session, "plan" | "messages">): string 
   ].join("\n");
 }
 
-// The note's line, in plain words. Before the status is known (undefined) the
-// thread is shown as running.
-export function threadLabel(status: ThreadStatus | undefined, summary: string): string {
+// The status part of the note's line, in plain words ("Done in a thread"): the
+// heading of the note, with the summary shown under it. Before the status is
+// known (undefined) the thread is shown as running.
+export function threadStatusWord(status: ThreadStatus | undefined): string {
   switch (status) {
     case "done":
-      return `Done in a thread: ${summary}`;
+      return "Done in a thread";
     case "failed":
-      return `Failed in a thread: ${summary}`;
+      return "Failed in a thread";
     case "unfinished":
-      return `Not finished in a thread: ${summary}`;
+      return "Not finished in a thread";
     case "missing":
-      return `Thread was deleted: ${summary}`;
+      return "Thread was deleted";
     default:
-      return `Running in a thread: ${summary}`;
+      return "Running in a thread";
   }
+}
+
+// The note's whole line: the status word, then the summary.
+export function threadLabel(status: ThreadStatus | undefined, summary: string): string {
+  return `${threadStatusWord(status)}: ${summary}`;
 }
 
 // Splits a report into the lines worth showing on their own and the rest.

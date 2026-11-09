@@ -1094,16 +1094,21 @@ the step, not in the chat.
   or a change the model makes during a run. A plan that hasn't started yet,
   rewritten by the model, moves to the turn that rewrote it.
 - When a plan runs in a thread (see [Running a plan](#running-a-plan)), a
-  note takes its place in the chat, one note for each thread. While the
-  thread's run is going it shows a spinner and **Running in a thread**, then
-  the plan summary. When the run ends, the spinner goes away and the note
-  says how it ended: **Done in a thread** (every step done), **Failed in a
-  thread** (a step failed, or one didn't pass its check) or **Not finished in
-  a thread** (stopped, or waiting for you). Under it is a short report of
-  what happened: a sentence or two when it worked, with a **Follow-up:** line
-  only if something is still to do (restart the server, commit); when it
-  didn't, what went wrong and a **Next:** line with the move to make. Click the note to open the thread, with
-  the chat scrolled to the plan.
+  note takes its place in the chat, one note for each thread, laid out like
+  the plan card: one padded box with a bold heading, the text under it, and
+  buttons along the bottom. While the thread's run is going the heading is
+  **Running in a thread**, with a spinner, and the plan summary under it. When
+  the run ends, the spinner goes away and the heading says how it ended, with
+  an icon: **Done in a thread** (every step done), **Failed in a thread** (a
+  step failed, or one didn't pass its check) or **Not finished in a thread**
+  (stopped, or waiting for you). Under the summary is a short report of what
+  happened: a sentence or two when it worked, with a **Follow-up:** line only
+  if something is still to do (restart the server, commit); when it didn't,
+  what went wrong and a **Next:** line with the move to make. The buttons at
+  the bottom: **Open thread** (while the thread exists), which opens it with
+  the chat scrolled to the plan, and, on a done note with more than its
+  follow-up to say, **Details**, which shows the rest of the report (then
+  **Hide details**). The heading and summary are not a button.
 - Pressing Run does not open the thread: you stay in the chat. When the thread
   needs you, its note shows the question with the same buttons the thread shows:
   approve or deny a command or a file change (with the command or diff), or
@@ -1116,8 +1121,8 @@ the step, not in the chat.
   the page was closed when the run ended; the note is up to date when you
   open it. Only the outcome and the report are sent to the chat that started
   the thread; the thread's messages stay in the thread.
-- The report is plain text under the note: select it and copy it as you would
-  any text (the line above it is the button that opens the thread).
+- The report is plain text in the note: select it and copy it as you would
+  any text.
 - The chat's model is told how each ended thread went: its next message carries
   a "Chat update" with the outcome and report of every thread that has one, so
   you can say "go on from what the thread found" and it knows. Each report is
