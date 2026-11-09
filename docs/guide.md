@@ -996,7 +996,16 @@ in it or it is running a plan.
   request from the tap, and if the model isn't loaded, or is still loading, the
   reply says so ("isn't loaded, so nothing was sent" or "is still loading").
   What you have typed and not sent is kept in this browser, per chat (the
-  newest 30), so a refresh brings it back; it goes when the message does. The reply
+  newest 30), so a refresh brings it back; it goes when the message does.
+  **Editing a message:** with an empty box, no plan running and no reply
+  streaming, the up arrow puts your last message (not a side question) back in
+  the box, under a small "Editing your last message" label. Sending it replaces
+  that message and everything after it, and keeps its pictures. The ✕ on the
+  label, or **Esc**, cancels and empties the box (when not editing, Esc still
+  stops a running reply). On any earlier message you sent, the hover row has an
+  **Edit** button that copies its text into the box, only while the box is
+  empty; sending then is a normal new message and cuts nothing. Side questions
+  have no Edit button. The reply
   streams back as events and shows the way a plan's steps do: the messages as
   they grow, the usage, the session's name when the model has written it, any
   question for you (a command to approve, a folder to allow) in the chat, and

@@ -118,6 +118,7 @@ import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import { loadDraft, saveDraft } from "./drafts";
 import { submitDraft } from "./submitDraft";
 import { optimisticSend } from "./optimisticSend";
+import { lastEditable } from "./editLast";
 import { newId } from "./uuid";
 import SessionSettings, { ATTACHMENTS_LOCKED_NOTE, AttachmentIcon } from "./SessionSettings";
 import SessionsPanel from "./SessionsPanel";
@@ -511,6 +512,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const error = visibleError(errors, sessionId);
   // A suggestion clicked on the empty screen, for the message box to take.
   const [fill, setFill] = useState<{ text: string; n: number } | null>(null);
+  // The position of the user message being edited: sending then replaces it and
+  // everything after it. Null when the box is for a new message.
+  const [editing, setEditing] = useState<number | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
   // Whether the last loadSession read its session (false: it opened as a new chat).
@@ -998,6 +1002,43 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
   const attach = (a: Attachment) => changeAttachments((as) => (as.some((x) => x.path === a.path) ? as : [...as, a]));
 
+  // The message being edited, while it is still the last one the user sent and
+  // nothing runs. Anything else ends the edit: another chat, a reply or plan
+  // starting, a newer message.
+  const editTarget = editing !== null ? lastEditable(messages, planRunning, turnRunning) : null;
+  const stillEditing = editTarget !== null && editTarget.index === editing;
+  useEffect(() => {
+    if (editing !== null && !stillEditing) setEditing(null);
+  }, [editing, stillEditing]);
+  useEffect(() => {
+    setEditing(null);
+  }, [sessionId]);
+  // The up arrow in an empty box: takes the last message you sent back into
+  // the box to change it. Returns whether there was one (none while a plan runs
+  // or a reply streams).
+  const editLast = (): boolean => {
+    const target = lastEditable(messages, planRunning, turnRunning);
+    if (!target) return false;
+    setEditing(target.index);
+    setFill({ text: target.text, n: Date.now() });
+    return true;
+  };
+  // Whether the message box has nothing in it (no text, no images), told by
+  // the box: the Edit button on a past message only works then.
+  const [boxEmpty, setBoxEmpty] = useState(true);
+  // The Edit button on a message you sent, at `index` in the messages. The
+  // last one is replaced when sent, like the up arrow; an older one only has
+  // its text copied into the box, to be sent as a new message (nothing is cut).
+  const editMessage = (index: number) => {
+    if (!boxEmpty) return;
+    const last = lastEditable(messages, planRunning, turnRunning);
+    if (last && last.index === index) {
+      editLast();
+      return;
+    }
+    setFill({ text: messages[index].content, n: Date.now() });
+  };
+
   // Sends what the user typed. Returns whether it went. `accepted` is called
   // once the send is certain to start (not refused above), so the message box
   // can clear at once instead of waiting while the session is saved and the
@@ -1052,6 +1093,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // one request from the tap instead of two.
     toBottom();
     accepted();
+    // Editing the last message: it and what followed are replaced, like Resend,
+    // and the images it was sent with stay (new ones are added to them).
+    if (editTarget && stillEditing) {
+      const id = sessionId;
+      const index = editTarget.index;
+      setEditing(null);
+      const went = await chatTurn(text, messages.slice(0, index), false, images, editTarget.images.length ? editTarget.images : undefined);
+      // Refused: the text is back in the box, so it is still an edit.
+      if (!went && openId.current === id) setEditing(index);
+      return went;
+    }
     return chatTurn(text, messages, planOn, images);
   };
 
@@ -1111,13 +1163,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       }
       // Upload pending images before sending the chat turn, or use refs already
       // uploaded (e.g. from a Resend retry).
-      let refs: ImageRef[] = [];
-      if (existingRefs?.length) {
-        refs = existingRefs;
-      } else if (pendingImages?.length) {
+      // Both can be given when a message is edited: its own images stay and
+      // the ones added in the box follow them.
+      let uploaded: ImageRef[] = [];
+      if (pendingImages?.length) {
         try {
           const uploads = pendingImages.map((img) => uploadImage(id, img.blob));
-          refs = await Promise.all(uploads);
+          uploaded = await Promise.all(uploads);
         } catch (e) {
           // Upload failed: delete any images that did upload, and clean up the
           // empty session if one was created. The previews stay alive because
@@ -1125,7 +1177,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           const name = pendingImages[0]?.name ?? "Image";
           showSessionError(id, `${name}: upload failed — ${e instanceof Error ? e.message : String(e)}`);
           // Delete any images that uploaded before the failure.
-          await Promise.all(refs.map((ref) => deleteImage(id, ref.id).catch(() => {})));
+          await Promise.all(uploaded.map((ref) => deleteImage(id, ref.id).catch(() => {})));
           // If this was a brand-new chat, remove the empty session.
           if (!listed && before.length === 0) {
             deleteSession(id).catch(() => {});
@@ -1133,6 +1185,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           return false;
         }
       }
+      const refs = [...(existingRefs ?? []), ...uploaded];
       await sendChat(id, text, { ...options, planning, images: refs.length ? refs : undefined });
       // Until the server's copy of the session arrives (mirrorView), show the
       // message as sent, and a failure of the reply that came before it as gone.
@@ -1415,6 +1468,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       connectorName={connector ? connector.name || connector.kind : undefined}
       onResend={i === lastFailedTurnIndex ? retry : undefined}
       resendDisabled={i === lastFailedTurnIndex ? runActive : undefined}
+      onEdit={t.parts[0].role === "user" && !t.parts[0].aside && !t.parts[0].planStep ? () => editMessage(t.start) : undefined}
+      editDisabled={!boxEmpty}
       sessionId={sessionId}
       replyRunning={runActive || turnRunning}
       onDoIt={() => send(DO_IT_MESSAGE, undefined, () => {})}
@@ -1979,6 +2034,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                     : "Message (Enter to send, Shift+Enter for a new line)"
               }
               onSend={send}
+              onEditLast={editLast}
+              editing={stillEditing}
+              onCancelEdit={() => setEditing(null)}
+              onEmptyChange={setBoxEmpty}
               fill={fill}
               // Stop here is for a reply that is streaming, on a phone (Escape does it
               // elsewhere). A plan run is paused from its card, and the box keeps Send
@@ -2020,6 +2079,10 @@ function Composer({
   sessionId,
   placeholder,
   onSend,
+  onEditLast,
+  editing,
+  onCancelEdit,
+  onEmptyChange,
   onStop,
   disabled,
   below,
@@ -2044,6 +2107,15 @@ function Composer({
   // send is certain to start (never for a refused one), so the box can clear
   // before the server has answered; a false result then means it failed.
   onSend: (text: string, images: PendingImage[] | undefined, accepted: () => void) => Promise<boolean>;
+  // The up arrow in an empty box: puts the last message you sent in the box to
+  // edit. Returns whether there was one to take.
+  onEditLast: () => boolean;
+  // Whether the box holds your last message to replace, and how to give that
+  // up (the box is emptied here, Chat forgets the edit).
+  editing: boolean;
+  onCancelEdit: () => void;
+  // Told whenever the box becomes empty (no text, no images) or not.
+  onEmptyChange: (empty: boolean) => void;
   onStop?: () => void;
   disabled: boolean;
   // Whether a plan is running (attach button disabled with explanation).
@@ -2077,6 +2149,10 @@ function Composer({
     saveDraft(sessionId, value);
   };
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const isEmpty = text.trim() === "" && !pendingImages.length;
+  useEffect(() => {
+    onEmptyChange(isEmpty);
+  }, [isEmpty]);
   useEffect(() => {
     if (!fill) return;
     edit(fill.text);
@@ -2175,6 +2251,14 @@ function Composer({
       setSending(false);
     }
   };
+  // Gives up editing the last message: the box is emptied, nothing is sent.
+  const cancelEdit = () => {
+    onCancelEdit();
+    setText("");
+    saveDraft(sessionId, "");
+    pendingImages.forEach((img) => revokePreview(img.preview));
+    setPendingImages([]);
+  };
   return (
     <Stack
       direction="column"
@@ -2193,6 +2277,24 @@ function Composer({
       onDragLeave={onDragLeave}
       onPaste={onPaste}
     >
+      {/* While your last message is in the box to replace: says so, with a way out. */}
+      {editing && (
+        <Stack direction="row" sx={{ alignItems: "center", alignSelf: "flex-start", mb: 0.5 }}>
+          <Typography variant="caption" color="text.secondary">
+            Editing your last message
+          </Typography>
+          <IconButton
+            size="small"
+            aria-label="Cancel editing"
+            title="Cancel editing (Esc)"
+            onClick={cancelEdit}
+            disabled={sending}
+            sx={{ ml: 0.5, p: 0.25, color: "text.secondary" }}
+          >
+            <CloseIcon fontSize="inherit" />
+          </IconButton>
+        </Stack>
+      )}
       {/* Image preview row: hidden when there are no pending images. */}
       {pendingImages.length > 0 && (
         <Stack
@@ -2298,6 +2400,24 @@ function Composer({
               e.preventDefault();
               send();
             }
+            // Esc while editing the last message gives the edit up. Used here, so
+            // the window-level Esc handlers (stop a reply) see it as handled; when
+            // not editing it is left alone and still stops a running reply.
+            if (e.key === "Escape" && editing && !sending && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              cancelEdit();
+              return;
+            }
+            // Up arrow in an empty box takes the last message back to edit. With
+            // anything in the box, or a modifier held, it moves the caret as usual.
+            if (
+              e.key === "ArrowUp" &&
+              !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey &&
+              !e.nativeEvent.isComposing &&
+              text === "" && !pendingImages.length && !sending
+            ) {
+              if (onEditLast()) e.preventDefault();
+            }
           }}
         />
         {/* Send lines up with the input's top edge; the context
@@ -2402,6 +2522,8 @@ function MessageBubble({
   connectorName,
   onResend,
   resendDisabled,
+  onEdit,
+  editDisabled,
   since,
   rate,
   sessionId,
@@ -2430,6 +2552,10 @@ function MessageBubble({
   onResend?: () => void;
   // Disabled state for the resend button.
   resendDisabled?: boolean;
+  // Edit button on a message you sent (not a side question): takes its text
+  // back into the message box. Disabled while the box has something in it.
+  onEdit?: () => void;
+  editDisabled?: boolean;
   // While this reply streams: when the task started, for the counter beside
   // the waiting dots, and how fast the current round is streaming.
   since?: number | null;
@@ -2529,6 +2655,14 @@ function MessageBubble({
             )
           }
         />
+        {onEdit && !isAside && (
+          <PanelButton
+            label={editDisabled ? "Edit: the message box must be empty" : "Edit"}
+            icon={<EditOutlinedIcon />}
+            onClick={onEdit}
+            disabled={editDisabled}
+          />
+        )}
         {hidden && (
           <PanelButton
             label={showHidden ? "Hide what was sent with this message" : "Show what was sent with this message, unseen"}
