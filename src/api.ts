@@ -129,11 +129,19 @@ export interface ChatMessage {
   // apart from it (server/aside.ts). They are in the chat, but no plan step
   // sees them; a chat turn after the plan does.
   aside?: boolean;
+  // On a user message: the response it replies to (its text). Shown in the
+  // chat, so the history keeps what was answered; never sent to the model,
+  // which only gets the message's own text.
+  replyTo?: { text: string };
   // On a user message: references to images uploaded to this session. The
   // base64 data is read per request and passed to the model; never saved
   // into the session. Only meaningful on user messages.
   images?: ImageRef[];
 }
+
+// The most of a response that is kept as a message's `replyTo`: the chat only
+// shows a few lines of it, and a very long response would bloat the session.
+export const MAX_REPLY_QUOTE = 2000;
 
 export interface StepStats {
   ms: number;

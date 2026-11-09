@@ -33,7 +33,10 @@
 //            With no run, it is a chat turn, run here: the body also carries
 //            the run's choices ({ connectorId, model, toolsOn, thinkOn }, as
 //            for `run`) and `planning` (true when the reply should only write
-//            a plan). The session must be saved first: the history is what is
+//            a plan) and, optionally, `replyTo` (the text of the response the
+//            message replies to: saved on the message so the chat shows it,
+//            cut at MAX_REPLY_QUOTE characters, never sent to the model).
+//            The session must be saved first: the history is what is
 //            saved, and `text` is the new message. The answer is { ok,
 //            revision } once the reply has begun; it streams as events. While
 //            a reply streams, another message is refused ("reply running").
@@ -62,6 +65,7 @@ import * as runners from "./runners.ts";
 import { AUTO_KINDS, type AutoKind, withAuto } from "../src/autoApprove.ts";
 import { sessionFolder } from "./sessionFile.ts";
 import { validateRefs } from "./images.ts";
+import { MAX_REPLY_QUOTE } from "../src/api.ts";
 
 export interface RunOptions {
   connectorId: string;
@@ -79,7 +83,7 @@ export interface CommandDeps {
   start: (id: string, options: RunOptions) => Promise<{ sessionId: string } | void>;
   // Starts one chat reply for the saved session (a message to a session with
   // no run). Tests pass a fake.
-  chat?: (id: string, text: string, options: RunOptions & { planning: boolean }) => Promise<void>;
+  chat?: (id: string, text: string, options: RunOptions & { planning: boolean; replyTo?: string }) => Promise<void>;
   // Starts a side question in a session whose plan runs (see aside.ts); answers
   // once it has begun. Tests pass a fake.
   aside?: (id: string, text: string, options: RunOptions) => Promise<void>;
@@ -121,6 +125,15 @@ const askIdOf = (body: any): string => {
 const autoKindOf = (v: unknown): AutoKind => {
   if (typeof v === "string" && (AUTO_KINDS as readonly string[]).includes(v)) return v as AutoKind;
   throw new HttpError(400, `kind must be one of ${AUTO_KINDS.join(", ")}`);
+};
+
+// The response a message replies to: left out, or a string. Blank is the same
+// as none, and one longer than MAX_REPLY_QUOTE is cut short with "…".
+const replyToOf = (v: unknown): string | undefined => {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "string") throw new HttpError(400, "replyTo must be text");
+  if (!v.trim()) return undefined;
+  return v.length > MAX_REPLY_QUOTE ? `${v.slice(0, MAX_REPLY_QUOTE).trimEnd()}…` : v;
 };
 
 // Handles POST /api/sessions/<id>/commands/<name>; returns false for anything else.
@@ -170,7 +183,7 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
         if (body.planning !== undefined && typeof body.planning !== "boolean") throw new HttpError(400, "planning must be true or false");
         // Validate image refs (empty list is fine — no images is fine too).
         const validated = images ? await validateRefs(id, images) : undefined;
-        await deps.chat(id, text, { ...parseRunOptions(body), planning: body.planning === true, images: validated });
+        await deps.chat(id, text, { ...parseRunOptions(body), planning: body.planning === true, images: validated, replyTo: replyToOf(body.replyTo) });
       }
       break;
     }

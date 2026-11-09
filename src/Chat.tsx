@@ -66,6 +66,7 @@ import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import CloseIcon from "@mui/icons-material/Close";
+import ReplyOutlinedIcon from "@mui/icons-material/ReplyOutlined";
 import { keyframes } from "@mui/material/styles";
 import {
   type ChatMessage,
@@ -109,6 +110,7 @@ import {
   saveSession,
   noteRevision,
   ApiError,
+  MAX_REPLY_QUOTE,
 } from "./api";
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { pickModel } from "./modelChoice";
@@ -515,6 +517,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // The position of the user message being edited: sending then replaces it and
   // everything after it. Null when the box is for a new message.
   const [editing, setEditing] = useState<number | null>(null);
+  // The response the next message replies to (Reply under a response): kept per
+  // chat, cleared when the message is sent or the card is closed.
+  const [replyTarget, setReplyTarget] = useState<{ id: string; text: string; n: number } | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
   // Whether the last loadSession read its session (false: it opened as a new chat).
@@ -1044,6 +1049,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // can clear at once instead of waiting while the session is saved and the
   // server is told; if the send then fails, it returns false and the box
   // gets its text back.
+  // The response being replied to in this chat. Not while a plan runs: a
+  // message then is a side question or goes to the plan, and carries no quote.
+  const pendingReply = !planRunning && replyTarget?.id === sessionId ? replyTarget : null;
   const send = async (text: string, images: PendingImage[] | undefined, accepted: () => void) => {
     // While a plan runs, a message is a side question (Ask) or goes to the run
     // (Tell the plan): the server folds that in before the next step and says
@@ -1092,19 +1100,34 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // says in the reply if the model isn't loaded or is still loading. That is
     // one request from the tap instead of two.
     toBottom();
+    // The quote goes with the message and the card closes once it is accepted;
+    // a send that then fails brings the card back, as the box gets its text back.
+    const quoted = pendingReply;
     accepted();
+    if (quoted) setReplyTarget(null);
     // Editing the last message: it and what followed are replaced, like Resend,
-    // and the images it was sent with stay (new ones are added to them).
+    // and the images it was sent with stay (new ones are added to them). Its
+    // own quote stays too, unless a new response is being replied to.
     if (editTarget && stillEditing) {
       const id = sessionId;
       const index = editTarget.index;
       setEditing(null);
-      const went = await chatTurn(text, messages.slice(0, index), false, images, editTarget.images.length ? editTarget.images : undefined);
+      const went = await chatTurn(
+        text,
+        messages.slice(0, index),
+        false,
+        images,
+        editTarget.images.length ? editTarget.images : undefined,
+        quoted?.text ?? messages[index]?.replyTo?.text,
+      );
       // Refused: the text is back in the box, so it is still an edit.
       if (!went && openId.current === id) setEditing(index);
+      if (!went && quoted) setReplyTarget((now) => now ?? quoted);
       return went;
     }
-    return chatTurn(text, messages, planOn, images);
+    const went = await chatTurn(text, messages, planOn, images, undefined, quoted?.text);
+    if (!went && quoted) setReplyTarget((now) => now ?? quoted);
+    return went;
   };
 
   // What the server needs from here to run a plan or a reply: which connector
@@ -1124,7 +1147,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // question for the user, an error. `planning`: the reply only writes a plan
   // (see PLANNING_NOTE). Returns whether it went; a refusal shows as the error,
   // in the server's own words, and the text stays where it was typed.
-  const chatTurn = (text: string, before: ChatMessage[], planning: boolean, pendingImages?: PendingImage[], existingRefs?: ImageRef[]): Promise<boolean> => {
+  // `replyTo`: the text of the response this message replies to (shown with the
+  // message; the model never gets it).
+  const chatTurn = (text: string, before: ChatMessage[], planning: boolean, pendingImages?: PendingImage[], existingRefs?: ImageRef[], replyTo?: string): Promise<boolean> => {
     if (!runOptions()) return Promise.resolve(false);
     const id = sessionId;
     // Show the message at once; the saves and the server's answer follow. Its
@@ -1133,15 +1158,15 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // the session has arrived and replaced it already).
     return optimisticSend({
       before,
-      message: { role: "user", content: text },
+      message: { role: "user", content: text, replyTo: replyTo ? { text: replyTo.slice(0, MAX_REPLY_QUOTE) } : undefined },
       prior: messages,
       setMessages: (shown) => updateSession({ messages: shown }),
       canShow: () => openId.current === id,
       canRestore: () => openId.current === id && !getView(id)?.session,
-      work: () => runTurn(text, before, planning, pendingImages, existingRefs),
+      work: () => runTurn(text, before, planning, pendingImages, existingRefs, replyTo),
     });
   };
-  const runTurn = async (text: string, before: ChatMessage[], planning: boolean, pendingImages?: PendingImage[], existingRefs?: ImageRef[]): Promise<boolean> => {
+  const runTurn = async (text: string, before: ChatMessage[], planning: boolean, pendingImages?: PendingImage[], existingRefs?: ImageRef[], replyTo?: string): Promise<boolean> => {
     const options = runOptions();
     if (!options) return false;
     const id = sessionId;
@@ -1186,12 +1211,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         }
       }
       const refs = [...(existingRefs ?? []), ...uploaded];
-      await sendChat(id, text, { ...options, planning, images: refs.length ? refs : undefined });
+      await sendChat(id, text, { ...options, planning, images: refs.length ? refs : undefined, replyTo });
       // Until the server's copy of the session arrives (mirrorView), show the
       // message as sent, and a failure of the reply that came before it as gone.
       if (openId.current === id && !getView(id)?.session) {
         updateSession({
-          messages: [...before, { role: "user", content: text, images: refs.length ? refs : undefined }],
+          messages: [...before, { role: "user", content: text, images: refs.length ? refs : undefined, replyTo: replyTo ? { text: replyTo.slice(0, MAX_REPLY_QUOTE) } : undefined }],
           failed: null,
         });
       }
@@ -1429,7 +1454,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     toBottom();
     // The images are already on the server: send the same refs again.
     const refs = userMsg.images?.length ? userMsg.images : undefined;
-    await chatTurn(userMsg.content, messages.slice(0, index), false, undefined, refs);
+    await chatTurn(userMsg.content, messages.slice(0, index), false, undefined, refs, userMsg.replyTo?.text);
   };
 
   // Tool results show inside the call that asked for them, and the assistant
@@ -1476,6 +1501,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       todos={todos}
       onAddTodo={(text) => updateSession((s) => ({ todos: [...s.todos, ideaTodo(text, newId().slice(0, 8), Date.now())] }))}
       onMakePlan={(text) => send(planMessage(text), undefined, () => {})}
+      onReply={planRunning ? undefined : (text) => setReplyTarget({ id: sessionId, text, n: Date.now() })}
     />
   );
   // Each update_plan call's turn, to show the plan it wrote after that turn.
@@ -2039,6 +2065,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               onCancelEdit={() => setEditing(null)}
               onEmptyChange={setBoxEmpty}
               fill={fill}
+              reply={pendingReply}
+              onCancelReply={() => setReplyTarget(null)}
               // Stop here is for a reply that is streaming, on a phone (Escape does it
               // elsewhere). A plan run is paused from its card, and the box keeps Send
               // for messages to it.
@@ -2093,7 +2121,13 @@ function Composer({
   tellPlan,
   onTellPlan,
   onStopAside,
+  reply,
+  onCancelReply,
 }: {
+  // The response the message replies to: a card above the box shows its first
+  // lines, and a new `n` focuses the box. Closing the card calls onCancelReply.
+  reply?: { text: string; n: number } | null;
+  onCancelReply?: () => void;
   // The box is as tall as the Send column beside it (Send with the meter under it).
   tall?: boolean;
   // Whether to show the Send button. Enter sends either way; on a wide screen the box goes without it.
@@ -2158,6 +2192,10 @@ function Composer({
     edit(fill.text);
     inputRef.current?.focus();
   }, [fill]);
+  // Replying to a response puts the cursor in the box.
+  useEffect(() => {
+    if (reply) inputRef.current?.focus();
+  }, [reply?.n]);
   // From the tap until the message has gone (or been refused): the button shows
   // it, and a second tap or Enter doesn't send the text again. The box clears
   // as soon as the send is accepted, and gets the text back if it fails.
@@ -2292,6 +2330,36 @@ function Composer({
             sx={{ ml: 0.5, p: 0.25, color: "text.secondary" }}
           >
             <CloseIcon fontSize="inherit" />
+          </IconButton>
+        </Stack>
+      )}
+      {/* The response being replied to: its first lines, with a close button. */}
+      {reply && (
+        <Stack
+          direction="row"
+          spacing={0.5}
+          sx={{ alignItems: "flex-start", mb: 0.5, pl: 1, borderLeft: "3px solid", borderColor: "primary.main", color: "text.secondary" }}
+        >
+          <ReplyOutlinedIcon fontSize="small" sx={{ mt: 0.25, flexShrink: 0 }} />
+          <Typography
+            variant="body2"
+            title="The response you are replying to"
+            sx={{
+              flexGrow: 1,
+              minWidth: 0,
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              display: "-webkit-box",
+              WebkitBoxOrient: "vertical",
+              WebkitLineClamp: 3,
+              overflow: "hidden",
+              maxHeight: "4.5rem",
+            }}
+          >
+            {reply.text}
+          </Typography>
+          <IconButton aria-label="Cancel reply" size="small" onClick={onCancelReply} sx={{ flexShrink: 0 }}>
+            <CloseIcon fontSize="small" />
           </IconButton>
         </Stack>
       )}
@@ -2532,7 +2600,10 @@ function MessageBubble({
   todos,
   onAddTodo,
   onMakePlan,
+  onReply,
 }: {
+  // Reply to this response: its text becomes the quote above the next message.
+  onReply?: (text: string) => void;
   parts: ChatMessage[];
   streaming: boolean;
   toolResults: Map<string, ChatMessage>;
@@ -2681,20 +2752,17 @@ function MessageBubble({
     ) : undefined;
   // The small buttons on the top edge of the model's reply (shown on hover):
   // Copy for now. None while it streams or when it has no text.
+  const replyText = parts
+    .map((m) => m.content)
+    .filter(Boolean)
+    .join("\n\n");
   const replyTools =
     !isUser && !streaming && parts.some((m) => m.content) ? (
-      <PanelButton
-        label="Copy"
-        icon={<ContentCopyOutlinedIcon />}
-        onClick={() =>
-          void copyText(
-            parts
-              .map((m) => m.content)
-              .filter(Boolean)
-              .join("\n\n"),
-          )
-        }
-      />
+      <>
+        <PanelButton label="Copy" icon={<ContentCopyOutlinedIcon />} onClick={() => void copyText(replyText)} />
+        {/* Reply: the whole response becomes the quote of the next message. Not for a side question's answer. */}
+        {onReply && !isAside && <PanelButton label="Reply" icon={<ReplyOutlinedIcon />} onClick={() => onReply(replyText)} />}
+      </>
     ) : undefined;
   // What goes inside the card, for a message you sent and for a reply alike.
   const content = (
@@ -2716,6 +2784,28 @@ function MessageBubble({
             }
       }
     >
+      {/* The response this message replies to: a quiet quote above your text, kept for the history. Never part of raw/formatted or Copy. */}
+      {isUser && parts[0].replyTo?.text && (
+        <Typography
+          variant="body2"
+          title="The response this message replies to"
+          sx={{
+            pl: 1,
+            borderLeft: "3px solid",
+            borderColor: "currentColor",
+            opacity: 0.75,
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            display: "-webkit-box",
+            WebkitBoxOrient: "vertical",
+            WebkitLineClamp: 4,
+            overflow: "hidden",
+            maxHeight: "6rem",
+          }}
+        >
+          {parts[0].replyTo.text}
+        </Typography>
+      )}
       {parts.map((m, i) => (
         <Fragment key={i}>
           {showSteps && m.reasoning && (

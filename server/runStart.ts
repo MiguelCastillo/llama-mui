@@ -130,13 +130,13 @@ async function startInThread(
 export async function startTurnFromOptions(
   id: string,
   text: string,
-  options: RunOptions & { planning: boolean },
+  options: RunOptions & { planning: boolean; replyTo?: string },
   deps: RunnerDeps = {},
 ): Promise<void> {
   const disk = await readSession(id);
   if (!disk) throw new HttpError(404, "No such session");
   const env = await buildEnv(disk, options);
-  await startTurn(id, env, { text, planning: options.planning, images: options.images }, deps);
+  await startTurn(id, env, { text, planning: options.planning, images: options.images, replyTo: options.replyTo }, deps);
 }
 
 // Starts a side question in a session whose plan is running: the `ask`

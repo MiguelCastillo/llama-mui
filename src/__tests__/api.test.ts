@@ -46,6 +46,20 @@ describe("toMessages", () => {
     ]);
   });
 
+  it("does not send the response a user message replies to", () => {
+    const plain: ChatMessage[] = [
+      { role: "assistant", content: "Use a map." },
+      { role: "user", content: "Why a map?" },
+    ];
+    const replying: ChatMessage[] = [
+      plain[0],
+      { role: "user", content: "Why a map?", replyTo: { text: "Use a map, not a list, for lookups." } },
+    ];
+    const result = toMessages(replying);
+    expect(result).toEqual(toMessages(plain));
+    expect(JSON.stringify(result)).not.toContain("not a list");
+  });
+
   it("appends update and note to user text", () => {
     const history: ChatMessage[] = [
       {

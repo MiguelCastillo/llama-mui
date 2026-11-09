@@ -481,6 +481,16 @@ describe("messages to the run", () => {
     expect(getView("a")).toMatchObject({ kind: "turn", status: "running" });
   });
 
+  it("sendChat sends the response being replied to as replyTo, and leaves it out otherwise", async () => {
+    const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, planning: false };
+    void sendChat("a", "Why a map?", { ...options, replyTo: "Use a map." });
+    await vi.waitFor(() => expect(commands()).toHaveLength(1));
+    expect(commands()[0].body).toEqual({ text: "Why a map?", ...options, replyTo: "Use a map." });
+    void sendChat("a", "Thanks", options);
+    await vi.waitFor(() => expect(commands()).toHaveLength(2));
+    expect(commands()[1].body).not.toHaveProperty("replyTo");
+  });
+
   it("sendChat throws the server's plain refusal, so the text stays in the box", async () => {
     serve(() => ({ status: 409, body: { error: "This session is busy: a reply is already running in it.", reason: "already running" } }));
     const refused = await sendChat("a", "More", { connectorId: "c1", model: "m", toolsOn: false, thinkOn: false, planning: false }).catch((e) => e);

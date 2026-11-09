@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_REPLY_QUOTE } from "../../src/api.ts";
 import type { RunnerEnv } from "../../src/runnerTypes.ts";
 import type { CommandDeps } from "../commands.ts";
 import { askOn, askedAnswer, fakeRun, finish, handles, makeSession, resetFakes, started } from "./fakeRun.ts";
@@ -407,6 +408,30 @@ describe("message with no run: one chat reply, run here", () => {
     // Without the flag it is an ordinary reply.
     await command("a", "message", { ...options, text: "again" }, "POST", { ...deps, chat });
     expect(chat).toHaveBeenLastCalledWith("a", "again", expect.objectContaining({ planning: false }));
+  });
+
+  it("hands the starter the response being replied to, cut short if very long, and ignores a blank one", async () => {
+    saved("a");
+    const chat = vi.fn(async () => {});
+    const sent = (replyTo: unknown) => command("a", "message", { ...chatOptions, text: "why?", replyTo }, "POST", { ...deps, chat });
+    expect((await sent("Use a map.")).status).toBe(200);
+    expect(chat).toHaveBeenLastCalledWith("a", "why?", expect.objectContaining({ replyTo: "Use a map." }));
+    await sent("x".repeat(MAX_REPLY_QUOTE + 500));
+    const kept = (chat.mock.calls.at(-1) as any)[2].replyTo as string;
+    expect(kept).toBe(`${"x".repeat(MAX_REPLY_QUOTE)}…`);
+    await sent("   ");
+    expect((chat.mock.calls.at(-1) as any)[2].replyTo).toBeUndefined();
+  });
+
+  it("refuses a replyTo that isn't text", async () => {
+    saved("a");
+    const chat = vi.fn(async () => {});
+    for (const bad of [5, { text: "x" }, ["x"], true]) {
+      const r = await command("a", "message", { ...chatOptions, text: "why?", replyTo: bad }, "POST", { ...deps, chat });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/replyTo must be text/);
+    }
+    expect(chat).not.toHaveBeenCalled();
   });
 
   it("says plainly what is wrong with the request", async () => {

@@ -407,8 +407,14 @@ export async function sendMessage(id: string, text: string): Promise<{ step: num
 // (Resend saves it cut short), and `text` is the new message. `planning`: the
 // reply only writes a plan. Throws an ApiError (a plain refusal: a reply is
 // already streaming, the server isn't in the list any more); the caller keeps
-// the text where the user typed it. Answers once the run shows.
-export async function sendChat(id: string, text: string, options: RunOptions & { planning: boolean; images?: ImageRef[] }): Promise<void> {
+// the text where the user typed it. Answers once the run shows. `replyTo`: the
+// text of the response the message replies to; the server saves it on the
+// message, and the model never gets it.
+export async function sendChat(
+  id: string,
+  text: string,
+  options: RunOptions & { planning: boolean; images?: ImageRef[]; replyTo?: string },
+): Promise<void> {
   const before = generation.get(id) ?? 0;
   await sendCommand(id, "message", { text, ...options });
   await waitUntil(() => (generation.get(id) ?? 0) !== before, START_WAIT_MS);

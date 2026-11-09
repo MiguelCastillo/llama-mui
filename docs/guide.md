@@ -192,7 +192,11 @@ is made once, in that table, and no box is styled on its own.
   shown on hover, and are drawn by PanelButton: a new tool only gives a label
   (the tooltip), an icon and what it does. Ideas, action items, your own
   messages and the model's replies all have Copy (a reply's copies its text,
-  and more tools will join it). A table in a reply uses the same toolbar
+  and more tools will join it). A finished reply that has text also has
+  **Reply**: it puts a small card with the start of that reply above the
+  message box (close it to cancel) and your next message is saved with that
+  reply as a quote, shown quietly above your text in the history. The model
+  only gets your question, never the quote. A table in a reply uses the same toolbar
   (PanelToolbar) for one tool: it stretches the table, which is otherwise only
   as wide as its columns, to the chat's width and back.
 - **Actions** respond to the content (Do it, Add to todos, Make plan). They are

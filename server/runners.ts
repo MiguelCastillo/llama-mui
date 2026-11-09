@@ -456,7 +456,7 @@ export function startRunner(
 export function startTurn(
   id: string,
   env: RunnerEnv,
-  turn: { text: string; planning: boolean; images?: { id: string; mediaType: string }[] },
+  turn: { text: string; planning: boolean; images?: { id: string; mediaType: string }[]; replyTo?: string },
   deps: RunnerDeps = {},
 ): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
   return launch(id, env, deps, turn);
@@ -466,7 +466,7 @@ async function launch(
   id: string,
   env: RunnerEnv,
   deps: RunnerDeps,
-  turn: { text: string; planning: boolean; images?: { id: string; mediaType: string }[] } | null,
+  turn: { text: string; planning: boolean; images?: { id: string; mediaType: string }[]; replyTo?: string } | null,
 ): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
   if (store.has(id)) throw turn ? busy() : alreadyRunning();
   const disk = await readSession(id);
@@ -568,7 +568,7 @@ async function launch(
       if (e.stopRequested) return;
       // The reply streams into the session as it goes (makeReply's callbacks),
       // and says how it ended through the error and `failed`; nothing to keep.
-      await reply(turn.text, e.session.messages, { planning: turn.planning, images: turn.images });
+      await reply(turn.text, e.session.messages, { planning: turn.planning, images: turn.images, replyTo: turn.replyTo });
     })()
       .catch((err) => {
         if (!e.stopRequested) e.handle.setError(String(err?.message ?? err));

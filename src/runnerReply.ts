@@ -45,7 +45,7 @@ export async function modelLoaded(h: RunnerHandle): Promise<boolean> {
 // and whether the model finished (not stopped, failed or cut off by a limit).
 // `planStep`: the turn runs that plan step; its messages carry the step's id.
 export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
-  return async (text, given, { planning = false, planStep, from, images } = {}) => {
+  return async (text, given, { planning = false, planStep, from, images, replyTo } = {}) => {
     const { connector, model, toolsOn, thinkOn, toolContext } = h.env;
     // A plan step never sees a side question (see src/asides.ts): `before` is
     // the plan's own messages, and what the turn writes has them put back where
@@ -173,6 +173,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         started,
         text,
         images,
+        replyTo,
         imagesBase64: Object.keys(imageMap).length > 0 ? imageMap : undefined,
       },
       callbacks,
