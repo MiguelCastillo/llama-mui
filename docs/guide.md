@@ -164,7 +164,7 @@ repeat guard doesn't count notes as repeats of other calls. Side questions don't
 Under a finished reply, chat draws each note from its row in the table: an
 idea in a quiet outlined box with a lightbulb and the label "Idea", an action
 item in a stronger box (warning-coloured bar on the left, light tint, bold
-text) labelled "Your action". Ideas come first, then actions, each kind up to
+label, regular-weight text) labelled "Your action". Ideas come first, then actions, each kind up to
 its limit. An action with `canDo` also has a **Do it** button under the text that sends "yes,
 go ahead" as your next message; it is disabled while a reply is streaming.
 An idea box has two buttons of its own under the text, which the table offers per kind (an

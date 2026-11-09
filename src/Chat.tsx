@@ -2600,10 +2600,10 @@ const NOTE_STYLES: Record<NoteKindId, { icon?: ReactNode; label: SxProps<Theme>;
     label: { fontWeight: 700, color: "info.main" },
     text: {},
   },
-  // Loud: warning-coloured label and bold text.
+  // Loud: warning-coloured bold label; the text under it is regular weight.
   action: {
     label: { fontWeight: 700, color: "warning.main" },
-    text: { fontWeight: 700 },
+    text: {},
   },
 };
 
