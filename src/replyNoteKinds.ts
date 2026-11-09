@@ -33,6 +33,9 @@ export type NoteKind = {
   // session's todos, "plan" asks the model to make a plan for it. None when
   // absent.
   offers?: ("todo" | "plan")[];
+  // The user can mark a box of this kind done (and open it again). Not set:
+  // the box has no such state.
+  hasDone?: boolean;
 };
 
 export const NOTE_KINDS: readonly NoteKind[] = [
@@ -62,6 +65,7 @@ export const NOTE_KINDS: readonly NoteKind[] = [
       },
     },
     label: "Your action",
+    hasDone: true,
   },
 ];
 

@@ -63,6 +63,7 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
 import StickyNote2OutlinedIcon from "@mui/icons-material/StickyNote2Outlined";
 import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutlineOutlined";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import CloseIcon from "@mui/icons-material/Close";
@@ -135,14 +136,18 @@ import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
 import {
   DO_IT_MESSAGE,
   doItDisabled,
+ doItPress,
   hasDoIt,
+  hasDone,
   ideaTodo,
   noteBoxes,
   noteLabel,
   offersOf,
   planMessage,
+  setNoteDone,
   shownCalls,
   todoAdded,
+  type NoteBox,
 } from "./agent/replyNotes";
 import type { NoteKindId } from "./replyNoteKinds";
 import {
@@ -1052,7 +1057,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // The response being replied to in this chat. Not while a plan runs: a
   // message then is a side question or goes to the plan, and carries no quote.
   const pendingReply = !planRunning && replyTarget?.id === sessionId ? replyTarget : null;
-  const send = async (text: string, images: PendingImage[] | undefined, accepted: () => void) => {
+  // `base`: the messages to build the turn on instead of the ones shown (Do it
+  // has marked its box done there, and that must be saved with the message).
+  const send = async (text: string, images: PendingImage[] | undefined, accepted: () => void, base?: ChatMessage[]) => {
+    const history = base ?? messages;
     // While a plan runs, a message is a side question (Ask) or goes to the run
     // (Tell the plan): the server folds that in before the next step and says
     // which one (see the notes under the chat). Either way a refusal shows as
@@ -1114,7 +1122,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       setEditing(null);
       const went = await chatTurn(
         text,
-        messages.slice(0, index),
+        history.slice(0, index),
         false,
         images,
         editTarget.images.length ? editTarget.images : undefined,
@@ -1125,7 +1133,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       if (!went && quoted) setReplyTarget((now) => now ?? quoted);
       return went;
     }
-    const went = await chatTurn(text, messages, planOn, images, undefined, quoted?.text);
+    const went = await chatTurn(text, history, planOn, images, undefined, quoted?.text);
     if (!went && quoted) setReplyTarget((now) => now ?? quoted);
     return went;
   };
@@ -1497,7 +1505,30 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       editDisabled={!boxEmpty}
       sessionId={sessionId}
       replyRunning={runActive || turnRunning}
-      onDoIt={() => send(DO_IT_MESSAGE, undefined, () => {})}
+      // Do it marks its box done at once and the mark is saved with the message;
+      // if the message is refused the box goes back to open. Pressed again, the
+      // box is done and nothing is sent. The message is found by identity in the
+      // latest list (see onNoteDone).
+      onDoIt={(box) => {
+        const id = sessionId;
+        const now = sessionRef.current.messages;
+        const at = now.indexOf(t.parts[box.part]);
+        const press = doItPress(now, at, box.note);
+        if (!press.send) return;
+        updateSession({ messages: press.messages });
+        void send(DO_IT_MESSAGE, undefined, () => {}, press.messages).then((went) => {
+          if (!went && openId.current === id) updateSession((s) => ({ messages: setNoteDone(s.messages, at, box.note, false) }));
+        });
+      }}
+      // The box knows its message only as a place among the turn's assistant
+      // messages (tool results sit between them in the session), so the
+      // message is found by identity in the current list.
+      onNoteDone={(box, done) =>
+        updateSession((s) => {
+          const at = s.messages.indexOf(t.parts[box.part]);
+          return { messages: setNoteDone(s.messages, at, box.note, done) };
+        })
+      }
       todos={todos}
       onAddTodo={(text) => updateSession((s) => ({ todos: [...s.todos, ideaTodo(text, newId().slice(0, 8), Date.now())] }))}
       onMakePlan={(text) => send(planMessage(text), undefined, () => {})}
@@ -2576,6 +2607,14 @@ const NOTE_STYLES: Record<NoteKindId, { icon?: ReactNode; label: SxProps<Theme>;
   },
 };
 
+// A box the user marked done is quiet whatever its kind: a check, muted label
+// and muted text, and no bold.
+const DONE_STYLE: { icon: ReactNode; label: SxProps<Theme>; text: SxProps<Theme> } = {
+  icon: <CheckCircleOutlineIcon fontSize="small" sx={{ flexShrink: 0, color: "text.secondary" }} />,
+  label: { fontWeight: 700, color: "text.secondary" },
+  text: { color: "text.secondary" },
+};
+
 // One bubble per turn: a user message, or every assistant step of one reply
 // (thinking, tool calls, text) in the order they happened.
 function MessageBubble({
@@ -2597,6 +2636,7 @@ function MessageBubble({
   sessionId,
   replyRunning,
   onDoIt,
+  onNoteDone,
   todos,
   onAddTodo,
   onMakePlan,
@@ -2636,7 +2676,10 @@ function MessageBubble({
   // Whether any reply is streaming (the Do it button waits), and what the
   // button does: send "yes, go ahead" as the next message.
   replyRunning?: boolean;
-  onDoIt?: () => void;
+  onDoIt?: (box: NoteBox) => void;
+  // Mark a box done, or open again (Mark done / Reopen). Waits while a reply
+  // runs, like the buttons above.
+  onNoteDone?: (box: NoteBox, done: boolean) => void;
   // The session's todos (an idea already added shows "Added"), and what the
   // idea buttons do: add the idea as a todo, or send "Make a plan for this: …".
   // Both wait while a reply runs, since the server owns the session then and
@@ -2885,10 +2928,19 @@ function MessageBubble({
         // or focus (always where there is no hover).
         <Panel
           key={`note-${i}`}
-          variant={box.kind}
+          variant={box.done && box.kind === "action" ? "actionDone" : box.kind}
           tools={<PanelButton label="Copy" icon={<ContentCopyOutlinedIcon />} onClick={() => void copyText(box.text)} />}
           actions={
-            offersOf(box).length > 0 || hasDoIt(box) ? (
+            box.done ? (
+              // Done: only a way back; Do it and the idea buttons are gone.
+              <PanelAction
+                label="Reopen"
+                variant="outlined"
+                color="inherit"
+                onClick={() => onNoteDone?.(box, false)}
+                disabled={doItDisabled(!!replyRunning)}
+              />
+            ) : offersOf(box).length > 0 || hasDoIt(box) || hasDone(box.kind) ? (
               <>
                 {offersOf(box).includes("todo") &&
                   (() => {
@@ -2916,7 +2968,16 @@ function MessageBubble({
                     label="Do it"
                     variant="contained"
                     color="warning"
-                    onClick={onDoIt}
+                    onClick={() => onDoIt?.(box)}
+                    disabled={doItDisabled(!!replyRunning)}
+                  />
+                )}
+                {hasDone(box.kind) && (
+                  <PanelAction
+                    label="Mark done"
+                    variant="outlined"
+                    color="inherit"
+                    onClick={() => onNoteDone?.(box, true)}
                     disabled={doItDisabled(!!replyRunning)}
                   />
                 )}
@@ -2927,13 +2988,13 @@ function MessageBubble({
           {/* The title on one line with its icon, the text under it. The panel's
               own gap is a little big between the two, so the header pulls up. */}
           <Box sx={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 0.75, mb: -0.5 }}>
-            {NOTE_STYLES[box.kind].icon}
-            <Typography variant="body1" sx={NOTE_STYLES[box.kind].label}>
-              {noteLabel(box)}
+            {(box.done ? DONE_STYLE : NOTE_STYLES[box.kind]).icon}
+            <Typography variant="body1" sx={(box.done ? DONE_STYLE : NOTE_STYLES[box.kind]).label}>
+              {box.done ? `${noteLabel(box)} · done` : noteLabel(box)}
             </Typography>
           </Box>
           <Box sx={{ flexBasis: "100%", minWidth: 0 }}>
-            <Typography variant="body1" sx={{ overflowWrap: "anywhere", ...NOTE_STYLES[box.kind].text }}>
+            <Typography variant="body1" sx={{ overflowWrap: "anywhere", ...(box.done ? DONE_STYLE : NOTE_STYLES[box.kind]).text }}>
               {box.text}
             </Typography>
           </Box>

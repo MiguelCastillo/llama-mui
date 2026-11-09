@@ -431,7 +431,7 @@ const noteHistory: ChatMessage[] = [
     content: "The lookup runs twice.",
     toolCalls: noteCalls,
     notes: [
-      { kind: "action", text: "Restart the server", canDo: true },
+      { kind: "action", text: "Restart the server", canDo: true, done: true },
       { kind: "idea", text: "Cache the lookup" },
     ],
   },
@@ -439,7 +439,7 @@ const noteHistory: ChatMessage[] = [
   { role: "tool", content: "Shown to the user.", toolCallId: "n2" },
   { role: "user", content: "yes, go ahead" },
 ];
-const noteFields = ['"notes"', '"canDo"', '"kind"'];
+const noteFields = ['"notes"', '"canDo"', '"done"', '"kind"'];
 
 describe("streamChat after a reply that made a note call", () => {
   const send = (api: "anthropic" | "openai") =>

@@ -61,7 +61,47 @@ export const shownCalls = (calls: ToolCall[] | undefined): ToolCall[] => (calls 
 
 // One box under a finished reply. `canDo` is true only on a kind that can offer
 // the "Do it" button, and only when the model said it could do the thing.
-export type NoteBox = { kind: NoteKindId; text: string; canDo: boolean };
+// `done` is true when the user marked it done (only the kinds that have that
+// state; see hasDone below). `part` is the index of the message in the reply's
+// `parts`, `note` the index in that message's saved notes list: where to find
+// the note again to change it (see setNoteDone).
+export type NoteBox = { kind: NoteKindId; text: string; canDo: boolean; done: boolean; part: number; note: number };
+
+// Whether a saved entry is a note (saved files can hold anything).
+const isNote = (n: any): n is Note => typeof n?.kind === "string" && typeof n?.text === "string";
+
+// Whether a kind can be marked done, as its table row says.
+export const hasDone = (kind: string) => kindById(kind)?.hasDone === true;
+
+// The messages with one note marked done (or open again, `done` false): the
+// `message`-th of `messages`, its `noteIndex`-th saved note. Nothing else is
+// touched; the same list comes back when there is no such note, its kind has no
+// done state, or it already is as asked. A box's `part` counts only the reply's
+// assistant messages (tool results sit between them in the session), so the
+// caller finds `message` by looking that message up in the list; the box's
+// `note` is the note index.
+export function setNoteDone(messages: ChatMessage[], message: number, noteIndex: number, done: boolean): ChatMessage[] {
+  const m = messages[message];
+  if (!m || m.role !== "assistant" || !Array.isArray(m.notes)) return messages;
+  const n = m.notes[noteIndex];
+  if (!isNote(n) || !hasDone(n.kind) || (n.done === true) === done) return messages;
+  const { done: _was, ...rest } = n;
+  const notes = m.notes.map((x, i) => (i === noteIndex ? (done ? { ...rest, done: true } : rest) : x));
+  return messages.map((x, i) => (i === message ? { ...m, notes } : x));
+}
+
+// What pressing "Do it" on a box does to the history: whether the message goes,
+// and the messages to build it on (the box marked done, when its kind has that
+// state). Nothing goes when the box is already done (a second press) or the
+// note isn't at that place any more. `message` and `noteIndex` are as for
+// setNoteDone. If the send is then refused, setNoteDone(..., false) puts the
+// box back to open.
+export function doItPress(messages: ChatMessage[], message: number, noteIndex: number): { send: boolean; messages: ChatMessage[] } {
+  const m = messages[message];
+  const n = m?.role === "assistant" && Array.isArray(m.notes) ? m.notes[noteIndex] : undefined;
+  if (!isNote(n) || (hasDone(n.kind) && n.done === true)) return { send: false, messages };
+  return { send: true, messages: setNoteDone(messages, message, noteIndex, true) };
+}
 
 // The boxes for one reply (its messages, in order): grouped by kind in the
 // table's order, each kind capped at its per-reply limit. Blank text and kinds
@@ -70,13 +110,16 @@ export function noteBoxes(parts: ChatMessage[]): NoteBox[] {
   const boxes: NoteBox[] = [];
   for (const kind of NOTE_KINDS) {
     const ofKind: NoteBox[] = [];
-    for (const m of parts) {
-      if (m.role !== "assistant") continue;
-      for (const n of notesOf(m)) {
+    parts.forEach((m, part) => {
+      if (m.role !== "assistant" || !Array.isArray(m.notes)) return;
+      m.notes.forEach((n, note) => {
+        if (!isNote(n)) return;
         const text = n.text.trim();
-        if (n.kind === kind.id && text) ofKind.push({ kind: kind.id, text, canDo: canDoOf(kind) && n.canDo === true });
-      }
-    }
+        if (n.kind === kind.id && text) {
+          ofKind.push({ kind: kind.id, text, canDo: canDoOf(kind) && n.canDo === true, done: hasDone(kind.id) && n.done === true, part, note });
+        }
+      });
+    });
     boxes.push(...(kind.max === undefined ? ofKind : ofKind.slice(0, kind.max)));
   }
   return boxes;

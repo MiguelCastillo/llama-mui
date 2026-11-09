@@ -15,7 +15,7 @@ import type { SxProps, Theme } from "@mui/material/styles";
 //   left-aligned and styled like the buttons in the approval prompts: the main
 //   answer is a filled button, the others are outlined.
 
-export type PanelVariant = "idea" | "action" | "message" | "messageAside" | "reply" | "replyAside";
+export type PanelVariant = "idea" | "action" | "actionDone" | "message" | "messageAside" | "reply" | "replyAside";
 
 export const PANEL_VARIANTS: Record<PanelVariant, SxProps<Theme>> = {
   // Standing out, but less than an action: an info-coloured bar and tint.
@@ -43,6 +43,20 @@ export const PANEL_VARIANTS: Record<PanelVariant, SxProps<Theme>> = {
     borderLeftColor: "warning.main",
     borderRadius: 1,
     bgcolor: (t) => alpha(t.palette.warning.main, 0.1),
+  },
+  // An action the user marked done: the same shape, but quiet: a grey bar and
+  // a faint grey fill instead of the warning colour.
+  actionDone: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 1,
+    alignItems: "center",
+    px: 1.5,
+    py: 1,
+    borderLeft: 4,
+    borderLeftColor: "divider",
+    borderRadius: 1,
+    bgcolor: "action.hover",
   },
   // What you typed: quieter than the reply, a faint tint of the theme's colour
   // behind normal text, not a solid fill. What you typed is one block, so the
@@ -218,7 +232,7 @@ export default function Panel({
   return (
     <Box sx={{ position: "relative", width: "100%", ...revealToolbarSx }}>
       <Box
-        data-note={variant === "idea" || variant === "action" ? variant : undefined}
+        data-note={variant === "idea" ? "idea" : variant === "action" || variant === "actionDone" ? "action" : undefined}
         sx={[PANEL_VARIANTS[variant], error && { border: 1, borderColor: "error.main" }] as SxProps<Theme>}
       >
         {children}

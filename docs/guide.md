@@ -177,7 +177,15 @@ button reads "Added" and is disabled; this is worked out from the todos each
 time, not stored, so completing the todo (it's no longer open) offers the
 button again. **Make plan** sends "Make a plan for this: <the idea>" as your
 next message, the same way Do it sends its message, and is disabled while a
-reply is streaming. The note calls are hidden from the tool-call rows in the steps. Replies that write
+reply is streaming.
+
+An action box can also be marked done, with or without a Do it button (it is
+the only button when the action has no `canDo`). **Mark done** turns the box
+quiet: muted text, a check icon and the label "Your action · done", with no Do
+it button, and a **Reopen** button to undo it. Do it marks its box done at once
+and then sends its message; if the send is refused the box goes back to open.
+The mark is saved on the note as `done` so it survives a reload, and it is
+never sent to the model. Ideas have no done state. The note calls are hidden from the tool-call rows in the steps. Replies that write
 a plain-text "Your action:" line instead (older chats, or a model that doesn't
 use the tool) are shown as ordinary text, with no box, and read fine.
 

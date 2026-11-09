@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage, Todo, ToolCall } from "../../api";
 import { NOTE_KINDS } from "../../replyNoteKinds";
-import { addNote, DO_IT_MESSAGE, doItDisabled, hasDoIt, ideaTodo, isNoteTool, noteBoxes, noteFromCall, noteLabel, notesOf, offersOf, planMessage, shownCalls, todoAdded, type NoteBox } from "../replyNotes";
+import { addNote, DO_IT_MESSAGE, doItDisabled, doItPress, hasDoIt, hasDone, setNoteDone, ideaTodo, isNoteTool, noteBoxes, noteFromCall, noteLabel, notesOf, offersOf, planMessage, shownCalls, todoAdded, type NoteBox } from "../replyNotes";
 
 const call = (name: string, args: object): ToolCall => ({ id: "t", name, arguments: JSON.stringify(args) });
 const reply: ChatMessage = { role: "assistant", content: "Done." };
+const box = (b: Partial<NoteBox> & Pick<NoteBox, "kind">): NoteBox => ({ text: "x", canDo: false, done: false, part: 0, note: 0, ...b });
 
 describe("noteFromCall", () => {
   it("reads an idea, trimmed", () => {
@@ -80,10 +81,25 @@ describe("noteBoxes", () => {
       { role: "assistant", content: "b", notes: [{ kind: "idea", text: "One" }, { kind: "action", text: "Check the log" }] },
     ];
     expect(noteBoxes(parts)).toEqual([
-      { kind: "idea", text: "One", canDo: false },
-      { kind: "action", text: "Restart", canDo: true },
-      { kind: "action", text: "Check the log", canDo: false },
+      { kind: "idea", text: "One", canDo: false, done: false, part: 1, note: 0 },
+      { kind: "action", text: "Restart", canDo: true, done: false, part: 0, note: 0 },
+      { kind: "action", text: "Check the log", canDo: false, done: false, part: 1, note: 1 },
     ]);
+  });
+
+  it("carries done for an action, and ignores it on a kind without that state", () => {
+    const parts: ChatMessage[] = [
+      { role: "assistant", content: "", notes: [{ kind: "idea", text: "A", done: true }, { kind: "action", text: "B", done: true }, { kind: "action", text: "C" }] },
+    ];
+    expect(noteBoxes(parts).map((b) => [b.text, b.done])).toEqual([["A", false], ["B", true], ["C", false]]);
+  });
+
+  it("points at each note by its message and its place in that message's notes, even past skipped ones", () => {
+    const parts: ChatMessage[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "", notes: [{ kind: "idea", text: " " }, { kind: "action", text: "Real" }] },
+    ];
+    expect(noteBoxes(parts)).toEqual([{ kind: "action", text: "Real", canDo: false, done: false, part: 1, note: 1 }]);
   });
 
   it("shows at most each kind's limit, skips blank text, and ignores user messages", () => {
@@ -99,14 +115,14 @@ describe("noteBoxes", () => {
       },
     ];
     expect(noteBoxes(parts)).toEqual([
-      { kind: "idea", text: "A", canDo: false },
-      { kind: "idea", text: "B", canDo: false },
+      { kind: "idea", text: "A", canDo: false, done: false, part: 1, note: 0 },
+      { kind: "idea", text: "B", canDo: false, done: false, part: 1, note: 2 },
     ]);
   });
 
   it("skips a kind the table doesn't have, and a canDo on a kind that can't offer it", () => {
     const parts: ChatMessage[] = [{ role: "assistant", content: "", notes: [{ kind: "tip", text: "?" }, { kind: "idea", text: "A", canDo: true }] }];
-    expect(noteBoxes(parts)).toEqual([{ kind: "idea", text: "A", canDo: false }]);
+    expect(noteBoxes(parts)).toEqual([{ kind: "idea", text: "A", canDo: false, done: false, part: 0, note: 1 }]);
   });
 
   it("is empty for a reply with none", () => {
@@ -115,14 +131,14 @@ describe("noteBoxes", () => {
 });
 
 describe("the boxes' labels and button", () => {
-  const idea: NoteBox = { kind: "idea", text: "x", canDo: false };
-  const can: NoteBox = { kind: "action", text: "y", canDo: true };
-  const cannot: NoteBox = { kind: "action", text: "y", canDo: false };
+  const idea = box({ kind: "idea", text: "x" });
+  const can = box({ kind: "action", text: "y", canDo: true });
+  const cannot = box({ kind: "action", text: "y" });
 
   it("labels each box with its kind's label from the table", () => {
     expect(noteLabel(idea)).toBe("Idea");
     expect(noteLabel(can)).toBe("Your action");
-    for (const k of NOTE_KINDS) expect(noteLabel({ kind: k.id, text: "x", canDo: false })).toBe(k.label);
+    for (const k of NOTE_KINDS) expect(noteLabel(box({ kind: k.id }))).toBe(k.label);
   });
 
   it("offers Do it only on a box the assistant could do", () => {
@@ -140,13 +156,100 @@ describe("the boxes' labels and button", () => {
 
 describe("offersOf", () => {
   it("lists the buttons the kind's table row offers, and none for a kind without", () => {
-    expect(offersOf({ kind: "idea", text: "x", canDo: false })).toEqual(["todo", "plan"]);
-    expect(offersOf({ kind: "action", text: "x", canDo: true })).toEqual([]);
-    expect(offersOf({ kind: "tip" as any, text: "x", canDo: false })).toEqual([]);
+    expect(offersOf(box({ kind: "idea" }))).toEqual(["todo", "plan"]);
+    expect(offersOf(box({ kind: "action", canDo: true }))).toEqual([]);
+    expect(offersOf(box({ kind: "tip" as any }))).toEqual([]);
   });
 
   it("matches the table: only kinds that set offers have buttons", () => {
-    for (const k of NOTE_KINDS) expect(offersOf({ kind: k.id, text: "x", canDo: false })).toEqual(k.offers ?? []);
+    for (const k of NOTE_KINDS) expect(offersOf(box({ kind: k.id }))).toEqual(k.offers ?? []);
+  });
+});
+
+describe("hasDone", () => {
+  it("is true only for the action kind", () => {
+    expect(hasDone("action")).toBe(true);
+    expect(hasDone("idea")).toBe(false);
+    expect(hasDone("tip")).toBe(false);
+  });
+});
+
+describe("setNoteDone", () => {
+  const messages: ChatMessage[] = [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "a", notes: [{ kind: "idea", text: "One" }, { kind: "action", text: "Restart", canDo: true }, { kind: "action", text: "Check" }] },
+    { role: "assistant", content: "b", notes: [{ kind: "action", text: "Other" }] },
+  ];
+
+  it("marks one note done and leaves everything else as it was", () => {
+    const out = setNoteDone(messages, 1, 1, true);
+    expect(out[1].notes).toEqual([{ kind: "idea", text: "One" }, { kind: "action", text: "Restart", canDo: true, done: true }, { kind: "action", text: "Check" }]);
+    expect(out[0]).toBe(messages[0]);
+    expect(out[2]).toBe(messages[2]);
+    expect(out[1].content).toBe("a");
+    expect(messages[1].notes?.[1]).toEqual({ kind: "action", text: "Restart", canDo: true });
+  });
+
+  it("opens it again, dropping the done mark", () => {
+    const done = setNoteDone(messages, 2, 0, true);
+    expect(done[2].notes).toEqual([{ kind: "action", text: "Other", done: true }]);
+    const open = setNoteDone(done, 2, 0, false);
+    expect(open[2].notes).toEqual([{ kind: "action", text: "Other" }]);
+    expect("done" in open[2].notes![0]).toBe(false);
+  });
+
+  it("works from the box's place: its message's index and its note index", () => {
+    const parts = messages.slice(1);
+    const boxes = noteBoxes(parts);
+    const check = boxes.find((b) => b.text === "Check")!;
+    const out = setNoteDone(messages, 1 + check.part, check.note, true);
+    expect(noteBoxes(out.slice(1)).map((b) => [b.text, b.done])).toEqual([["One", false], ["Restart", false], ["Check", true], ["Other", false]]);
+  });
+
+  it("returns the same list when nothing would change", () => {
+    expect(setNoteDone(messages, 1, 0, true)).toBe(messages); // an idea has no done state
+    expect(setNoteDone(messages, 1, 2, false)).toBe(messages); // already open
+    expect(setNoteDone(setNoteDone(messages, 1, 2, true), 1, 2, true)).toEqual(setNoteDone(messages, 1, 2, true));
+    const done = setNoteDone(messages, 1, 2, true);
+    expect(setNoteDone(done, 1, 2, true)).toBe(done); // already done
+    expect(setNoteDone(messages, 0, 0, true)).toBe(messages); // a user message
+    expect(setNoteDone(messages, 9, 0, true)).toBe(messages); // no such message
+    expect(setNoteDone(messages, 1, 9, true)).toBe(messages); // no such note
+  });
+});
+
+describe("doItPress", () => {
+  const messages: ChatMessage[] = [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "a", notes: [{ kind: "idea", text: "One" }, { kind: "action", text: "Restart", canDo: true }] },
+  ];
+
+  it("sends, with the box marked done in the messages it builds on", () => {
+    const press = doItPress(messages, 1, 1);
+    expect(press.send).toBe(true);
+    expect(press.messages[1].notes?.[1]).toEqual({ kind: "action", text: "Restart", canDo: true, done: true });
+    expect(messages[1].notes?.[1].done).toBeUndefined();
+  });
+
+  it("does nothing on a second press, once the box is done", () => {
+    const first = doItPress(messages, 1, 1);
+    const second = doItPress(first.messages, 1, 1);
+    expect(second.send).toBe(false);
+    expect(second.messages).toBe(first.messages);
+  });
+
+  it("puts the box back to open when the send is refused", () => {
+    const press = doItPress(messages, 1, 1);
+    expect(setNoteDone(press.messages, 1, 1, false)).toEqual(messages);
+  });
+
+  it("sends without a mark on a kind that has no done state, and not at all for no such note", () => {
+    const idea = doItPress(messages, 1, 0);
+    expect(idea.send).toBe(true);
+    expect(idea.messages).toBe(messages);
+    expect(doItPress(messages, 1, 9).send).toBe(false);
+    expect(doItPress(messages, 0, 0).send).toBe(false);
+    expect(doItPress(messages, 7, 0).send).toBe(false);
   });
 });
 

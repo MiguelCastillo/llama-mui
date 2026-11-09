@@ -90,9 +90,10 @@ export interface ChatMessage {
   // (an idea, something left for the user), shown in their own boxes. `kind` is
   // an id from NOTE_KINDS (replyNoteKinds.ts); `canDo` is set when the model
   // could do it itself with the user's approval (they get a button to say yes).
+  // `done` is set when the user marked the action done; never sent to the model.
   // Never sent to the model as such; the call and its result are what the
   // history keeps.
-  notes?: { kind: string; text: string; canDo?: boolean }[];
+  notes?: { kind: string; text: string; canDo?: boolean; done?: boolean }[];
   // Set on tool messages: which call this is the result of.
   toolCallId?: string;
   // Set on the result of a file change the user approved: the diff they saw,
