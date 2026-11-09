@@ -173,12 +173,15 @@ export function PanelAction({
   disabled,
   variant,
   color,
+  title,
 }: {
   label: string;
   onClick?: () => void;
   disabled?: boolean;
   variant?: "contained" | "outlined" | "text";
   color?: "inherit" | "primary" | "secondary" | "success" | "error" | "info" | "warning";
+  // A longer explanation, shown by the browser when hovering the button.
+  title?: string;
 }) {
   return (
     <Button
@@ -187,6 +190,7 @@ export function PanelAction({
       color={color}
       onClick={onClick}
       disabled={disabled}
+      title={title}
     >
       {label}
     </Button>

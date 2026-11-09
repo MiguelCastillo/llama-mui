@@ -208,9 +208,10 @@ or does about a thing (run it, discard it, do it, add it to the todos), is a
 labelled button in a row at the bottom of that thing, filled for the main one
 and outlined for the rest, by default. It is not an icon in the corner. Icons
 are for tools on the content, in the hover toolbar. The plan follows it: Run
-(Continue once it has started) and Discard are buttons under the steps. Only
-the Pause icon, which is shown while the plan runs, and Clone, which is shown
-on a plan you are only reading, are still icons in its header.
+(Continue once it has started) is the filled button, and Pause (while the plan
+runs), Clone (on a plan you are only reading) and Discard are outlined buttons
+in the same row under the steps. A step's own tools (mark done, rerun, edit,
+remove) are the hover toolbar of its row.
 
 **To add a kind of note:** add a row to the table (id, tool name, one-sentence
 description that doesn't overlap another kind's, tool label and summary in
@@ -549,8 +550,8 @@ Small models often say they're done when they aren't. A plan makes the work
 visible and checked: the model writes the steps, chat runs them one at a time,
 and a step only gets its checkmark when a separate check agrees it's done. The
 code is in `src/agent/` (`plan.ts` for the prompts and the check, `agent.ts`
-for `runPlan` and the turn loop), the plan card in `src/PlanView.tsx`, and
-`server/plan.ts`. The logic in `src/agent/` has no React and is tested with
+for `runPlan` and the turn loop), the plan card in `src/PlanView.tsx` (each
+step's row is `src/PlanStepRow.tsx`), and `server/plan.ts`. The logic in `src/agent/` has no React and is tested with
 vitest (`npm test`).
 
 ### When a plan is made
@@ -666,9 +667,10 @@ vitest (`npm test`).
   everyday words, and the plan can have a one-sentence summary of its own that
   says what will be different for you. The card shows the
   summary as the step's main line, with the full instruction at the top of the
-  step's chevron (the same one that shows what happened); the model still gets
-  the instruction when the step runs. Plans saved before summaries show the
-  whole instruction instead, and the chevron has nothing extra to show for it. A step with no summary, or one over 80
+  step's details (click the step to open them; they also show what happened);
+  the model still gets the instruction when the step runs. Plans saved before
+  summaries show the whole instruction instead, and the details have nothing
+  extra to show for it. A step with no summary, or one over 80
   characters, is refused like any other limit.
 - **You**: before or between runs, hover a step to edit its text or remove
   it. There's no way to add a step yet; ask the model for a new plan instead.
@@ -712,8 +714,8 @@ vitest (`npm test`).
   to go away once it's proven.
 - The plan may also include a `context` field: a brief description of the
   decisions, constraints, and other details from the conversation that each
-  step needs (since each step starts without the chat). It shows collapsed
-  in the plan card.
+  step needs (since each step starts without the chat). It shows in the plan
+  card behind a quiet "Context" line at the top, closed until you click it.
 - Then chat runs the **check command** of the working directory, if it has
   one, once the plan has changed files. It's set per folder in **Chat
   settings**, in the Working directory section (for this repo,
@@ -875,8 +877,8 @@ nothing starts again by itself: see
   request at a time, so a second session's reply, or a side question, can wait
   in its queue until the request before it is done; it starts as soon as the
   server is free.
-- **Pause** on the plan card shows only while the plan runs, in place of
-  **Run** or **Continue**. It ends the run at once: it aborts the request, the
+- **Pause** on the plan card is an outlined button in the row under the steps.
+  It shows only while the plan runs, in place of **Run** or **Continue**. It ends the run at once: it aborts the request, the
   step goes back to pending with the note "Paused", and the plan stays. The run
   is over, so a paused plan survives a server restart, and **Continue** picks
   it up again from that step (the step starts over; earlier steps' answers are
@@ -1066,6 +1068,18 @@ A plan card shows in the chat right after the turn that wrote it, and stays
 there as you scroll; later messages go below it. A step's messages show under
 the step, not in the chat.
 
+- The card is one column with the same gap between its parts. From the top:
+  the plan's one-sentence summary; a quiet **Context** line that opens the
+  context; the bold heading "Plan · 2 of 4 done" (with the total time and, while
+  it runs, the elapsed counter) over a thin progress bar; the steps; the row of
+  buttons; then the **Result** once every step is done. A step shows its status
+  icon, its number and title, its time, and any note or question under it.
+  Clicking the step opens its details (the chevron at its right only shows
+  whether they are open); hovering it shows its tools in the usual hover
+  toolbar. The buttons appear only when they apply: **Run** or **Continue**
+  and **Discard** on a plan that isn't running or finished, **Pause** while it
+  runs, **Clone** on a plan you can only read.
+
 - Once every step is done, the plan is finished and read-only: no step
   buttons (rerun, edit, remove) and no **Discard plan**. Nothing in it runs
   again. To redo it, **Clone** starts a new plan with the same steps, all
@@ -1172,8 +1186,8 @@ done · 13m 21s") once two or more steps have a time.
 ### Where the step messages go
 
 A step's messages (the "Do step" message, the reply, its tool calls and any
-retry) carry the step's id and don't show in the chat. Click the arrow next to
-a step to see them. They're still sent to the model, so later steps know what
+retry) carry the step's id and don't show in the chat. Click a step (its row,
+or press Enter on it) to see them. They're still sent to the model, so later steps know what
 earlier ones did. The plan, with each step's status, is saved with the chat; a
 step that was running when the page closed comes back as pending.
 

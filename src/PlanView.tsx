@@ -2,59 +2,26 @@
 // while the plan isn't running, and a disputed or failed step accepted as done.
 // A step that has run can be opened to see its turns (the "Do step" message,
 // the reply, its tool calls), which the chat itself doesn't show; `details`
-// draws them, or returns null for a step with none.
+// draws them, or returns null for a step with none. Each step is drawn by
+// PlanStepRow.
 
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useState } from "react";
 import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
   Box,
   Button,
-  CircularProgress,
-  IconButton,
+  Collapse,
+  LinearProgress,
   Paper,
   Stack,
-  TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
-import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import CancelIcon from "@mui/icons-material/Cancel";
-import ReplayOutlinedIcon from "@mui/icons-material/ReplayOutlined";
-import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
-import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import WorktreeLines from "./WorktreeLines";
-import PauseIcon from "@mui/icons-material/Pause";
-import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import ExpandLessIcon from "@mui/icons-material/ExpandLess";
-import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
-import DoneIcon from "@mui/icons-material/Done";
 import { type PlanStep } from "./api";
-import { canMarkDone, stepLine } from "./agent/plan";
+import { stepLine } from "./agent/plan";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { PanelAction } from "./Panel";
-
-const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
-  pending: <RadioButtonUncheckedIcon fontSize="small" color="disabled" />,
-  running: <CircularProgress size="1rem" sx={{ m: "0.125rem" }} />,
-  done: <CheckCircleIcon fontSize="small" color="success" />,
-  failed: <CancelIcon fontSize="small" color="error" />,
-  disputed: <HelpOutlineIcon fontSize="small" color="warning" />,
-  waiting: <HelpOutlineIcon fontSize="small" color="warning" />,
-};
-
-// A step put back to pending, keeping its id and its summary (the summary key
-// is left out when there is none, so old plans stay as they were).
-const pending = (s: PlanStep, patch: Partial<PlanStep> = {}): PlanStep => ({
-  id: s.id,
-  text: s.text,
-  ...(s.summary ? { summary: s.summary } : {}),
-  status: "pending",
-  ...patch,
-});
+import { PlanStepRow, type StepEdit } from "./PlanStepRow";
 
 export function PlanView({
   steps,
@@ -119,8 +86,9 @@ export function PlanView({
   // Once every step is done, nothing in the plan runs again: no rerun, edit
   // or cancel. Redoing work is a new plan, from a new message.
   const readOnly = !onChange || steps.every((s) => s.status === "done");
-  const [editing, setEditing] = useState<{ i: number; text: string; summary: string } | null>(null);
+  const [editing, setEditing] = useState<StepEdit | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [contextOpen, setContextOpen] = useState(false);
   const toggle = (id: string) =>
     setOpen((o) => {
       const next = new Set(o);
@@ -132,22 +100,19 @@ export function PlanView({
   // A waiting step (a question for the user) reruns without an answer on
   // Continue; "Answer and continue" on the step passes one.
   const next = steps.find((s) => s.status !== "done");
-  const unfinished = next?.status === "pending" || next?.status === "failed" || next?.status === "waiting";
+  const unfinished =
+    next?.status === "pending" ||
+    next?.status === "failed" ||
+    next?.status === "waiting";
   // A step that was stopped or interrupted by a restart is back to pending with
   // a note saying so: the plan has started, so the button says Continue.
   const started = steps.some((s) => s.status !== "pending" || !!s.note);
+  // Which buttons the bottom row shows.
+  const showRun = !!(unfinished && onRun && !running);
+  const showPause = !!(running && onPause);
+  const showClone = !!(onClone && readOnly);
+  const showDiscard = !!(onCancel && !readOnly && !running);
 
-  // Rerunning a step leaves the ones after it done, but built on the old version.
-  const rerun = (i: number) =>
-    onChange?.(
-      steps.map((s, j) =>
-        j === i
-          ? pending(s)
-          : j > i && s.status === "done"
-            ? { ...s, stale: true }
-            : s,
-      ),
-    );
   const save = () => {
     if (!editing) return;
     const text = editing.text.trim();
@@ -157,7 +122,14 @@ export function PlanView({
     if (text) {
       onChange?.(
         steps.map((s, j) =>
-          j === editing.i ? { id: s.id, text, ...(summary ? { summary } : {}), status: "pending" } : s,
+          j === editing.i
+            ? {
+                id: s.id,
+                text,
+                ...(summary ? { summary } : {}),
+                status: "pending",
+              }
+            : s,
         ),
       );
     }
@@ -165,261 +137,171 @@ export function PlanView({
   };
 
   return (
-    <Paper variant="outlined" sx={{ px: 1, py: 0.75 }}>
-      {summary && (
-        <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
-          {summary}
-        </Typography>
-      )}
-      {context && (
-        <Accordion elevation={0} sx={{ bgcolor: "action.hover", "&:before": { display: "none" } }}>
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography variant="caption" color="text.secondary">
+    // One column, so every part (summary, header, steps, buttons, result,
+    // proposal) sits the same distance from the next.
+    <Paper variant="outlined" sx={{ px: 2, py: 1.5 }}>
+      <Stack spacing={1.5}>
+        {summary && (
+          <Typography variant="body1" color="text.secondary">
+            {summary}
+          </Typography>
+        )}
+        {context && (
+          <Box>
+            <Button
+              size="small"
+              color="inherit"
+              aria-expanded={contextOpen}
+              onClick={() => setContextOpen((o) => !o)}
+              endIcon={
+                <ExpandMoreIcon
+                  sx={{
+                    transform: contextOpen ? "rotate(180deg)" : "none",
+                    transition: "transform 0.15s",
+                  }}
+                />
+              }
+              sx={{
+                ml: -0.75,
+                color: "text.secondary",
+                textTransform: "none",
+                typography: "body1",
+              }}
+            >
               Context
-            </Typography>
-          </AccordionSummary>
-          <AccordionDetails sx={{ pt: 0.75 }}>
-            <Typography variant="body1" sx={{ whiteSpace: "pre-wrap" }}>
-              {context}
-            </Typography>
-          </AccordionDetails>
-        </Accordion>
-      )}
-      <Stack direction="row" sx={{ alignItems: "center", mb: 1 }}>
-        <Typography variant="body1" sx={{ flexGrow: 1, fontWeight: 500 }}>
-          Plan · {done} of {steps.length} done
-          {/* The steps' times added up; with one timed step it would repeat that step's time. */}
-          {steps.filter((s) => s.ms != null).length > 1 &&
-            ` · ${formatTime(steps.reduce((sum, s) => sum + (s.ms ?? 0), 0))}`}
-        </Typography>
-        {since != null && counter && <Box sx={{ mr: 1 }}>{counter(since)}</Box>}
-        {/* Icons, with the words as tooltip and accessible label. */}
-        {running && onPause && (
-          <Tooltip title="Pause: ends the run now and keeps the plan">
-            <IconButton size="small" aria-label="Pause" onClick={onPause}>
-              <PauseIcon />
-            </IconButton>
-          </Tooltip>
-        )}
-        {/* Removing the plan is for a plan that isn't running: pause it first. */}
-        {onClone && readOnly && (
-          <Tooltip title="Clone: a new plan with the same steps">
-            <IconButton size="small" aria-label="Clone" onClick={onClone}>
-              <ContentCopyOutlinedIcon />
-            </IconButton>
-          </Tooltip>
-        )}
-      </Stack>
-      <Stack spacing={0.5}>
-        {steps.map((s, i) => {
-          const turns = details(s.id);
-          // Nothing to unfold when the line already is the whole text (tidied, as stepLine does).
-          const instruction = stepLine(s) !== s.text.replace(/\s+/g, " ").trim() ? s.text : null;
-          const expandable = !!turns || !!instruction;
-          return (
-            <Box key={s.id}>
-              <Box
+            </Button>
+            <Collapse in={contextOpen} unmountOnExit>
+              <Typography
+                variant="body1"
+                color="text.secondary"
                 sx={{
-                  display: "flex",
-                  gap: 1,
-                  alignItems: "flex-start",
-                  "&:hover .step-actions": { visibility: "visible" },
+                  whiteSpace: "pre-wrap",
+                  mt: 0.5,
+                  pl: 1.5,
+                  borderLeft: 2,
+                  borderColor: "divider",
                 }}
               >
-                <Box sx={{ pt: 0.25 }}>{STATUS_ICON[s.status]}</Box>
-                <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                  {editing?.i === i ? (
-                    // Two fields, so the edit ends only when focus leaves both.
-                    <Stack
-                      spacing={1}
-                      onBlur={(e) => {
-                        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) save();
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) save();
-                        if (e.key === "Escape") setEditing(null);
-                      }}
-                    >
-                      <TextField
-                        size="small"
-                        fullWidth
-                        autoFocus
-                        label="Summary"
-                        placeholder={stepLine({ text: editing.text })}
-                        value={editing.summary}
-                        onChange={(e) => setEditing({ ...editing, summary: e.target.value })}
-                      />
-                      <TextField
-                        size="small"
-                        fullWidth
-                        multiline
-                        label="Instruction"
-                        value={editing.text}
-                        onChange={(e) => setEditing({ ...editing, text: e.target.value })}
-                      />
-                    </Stack>
-                  ) : (
-                    <>
-                      <Typography variant="body1">
-                        {i + 1}. {stepLine(s)}
-                        {/* Only a finished step has a time: running or rerunning it clears it. */}
-                        {s.ms != null && (
-                          <Typography variant="caption" color="text.secondary" component="span" sx={{ ml: 1 }}>
-                            {formatTime(s.ms)}
-                          </Typography>
-                        )}
-                      </Typography>
-                    </>
-                  )}
-                  {s.status === "failed" && s.note && (
-                    <Typography variant="caption" color="error.main" component="div">
-                      Not done: {s.note}
-                    </Typography>
-                  )}
-                  {s.status === "disputed" && s.note && (
-                    <Typography variant="caption" color="warning.main" component="div">
-                      {s.note}
-                    </Typography>
-                  )}
-                  {s.status === "waiting" && s.note && (
-                    <Typography variant="caption" color="warning.main" component="div" sx={{ whiteSpace: "pre-wrap" }}>
-                      {s.note}
-                    </Typography>
-                  )}
-                  {s.status === "waiting" && !running && !readOnly && (
-                    <AnswerForm
-                      onAnswer={(answer) => {
-                        onChange?.(
-                          steps.map((st, j) =>
-                            j === i ? pending(st, { answer, asked: st.note }) : st,
-                          ),
-                        );
-                        // changePlan updates the plan synchronously, so the run sees the answer.
-                        onRun?.();
-                      }}
-                    />
-                  )}
-                  {s.status === "pending" && s.note && (
-                    <Typography variant="caption" color="text.secondary" component="div">
-                      {s.note}
-                    </Typography>
-                  )}
-                  {s.stale && s.status === "done" && (
-                    <Typography variant="caption" color="warning.main" component="div">
-                      An earlier step changed; this may need a rerun.
-                    </Typography>
-                  )}
-                </Box>
-                {!running && !readOnly && (
-                  // Shown on hover so the list stays quiet.
-                  <Box className="step-actions" sx={{ visibility: "hidden", display: "flex", flexShrink: 0 }}>
-                    {canMarkDone(s.status) && (
-                      <Tooltip title="The check is wrong: mark it done">
-                        <IconButton
-                          size="small"
-                          onClick={() => onChange?.(steps.map((st, j) => (j === i ? pending(st, { status: "done" }) : st)))}
-                        >
-                          <DoneIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                    {(s.status === "done" || s.status === "failed" || s.status === "disputed" || s.status === "waiting") && (
-                      <Tooltip title="Rerun this step">
-                        <IconButton size="small" onClick={() => rerun(i)}>
-                          <ReplayOutlinedIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                    <Tooltip title="Edit step">
-                      <IconButton size="small" onClick={() => setEditing({ i, text: s.text, summary: s.summary ?? "" })}>
-                        <EditOutlinedIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Remove step">
-                      <IconButton size="small" onClick={() => onChange?.(steps.filter((_, j) => j !== i))}>
-                        <DeleteOutlinedIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                )}
-                {expandable && (
-                  <Tooltip title={open.has(s.id) ? "Hide details" : "Show the full instruction and what happened"}>
-                    <IconButton size="small" onClick={() => toggle(s.id)} aria-expanded={open.has(s.id)}>
-                      {open.has(s.id) ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-                    </IconButton>
-                  </Tooltip>
-                )}
-              </Box>
-              {s.status === "running" && prompt && <InView>{prompt}</InView>}
-              {expandable && open.has(s.id) && (
-                <Stack spacing={1} sx={{ ml: 3.5, mt: 1, mb: 1.5, pl: 1.5, borderLeft: 2, borderColor: "divider" }}>
-                  {instruction && (
-                    <Typography variant="caption" color="text.secondary" component="div" sx={{ whiteSpace: "pre-wrap" }}>
-                      {instruction}
-                    </Typography>
-                  )}
-                  {turns}
-                </Stack>
-              )}
-            </Box>
-          );
-        })}
-      </Stack>
-      {/* The plan's actions are buttons at the bottom, as in the approval
-          prompts: the main one filled (Run), the rest outlined (Discard). Removing
-          the plan is for a plan that isn't running: pause it first. */}
-      {((unfinished && onRun && !running) || (onCancel && !readOnly && !running)) && (
-        <Stack direction="row" spacing={1} sx={{ mt: 1.5, mb: 0.5 }}>
-          {unfinished && onRun && !running && (
-            <PanelAction label={started ? "Continue" : "Run"} variant="contained" color="primary" onClick={onRun} />
-          )}
-          {onCancel && !readOnly && !running && (
-            <PanelAction label="Discard" variant="outlined" color="inherit" onClick={onCancel} />
-          )}
-        </Stack>
-      )}
-      {result && steps.every((s) => s.status === "done") && (
-        <Box sx={{ mt: 1.5, pt: 1.5, borderTop: 1, borderColor: "divider", userSelect: "text" }}>
-          <Typography variant="subtitle1" component="h3" sx={{ fontWeight: 700, mb: 0.75 }}>
-            Result
-          </Typography>
-          <MarkdownRenderer content={result} />
-          <Box sx={{ mx: -1, mt: 0.5 }}>
-            <WorktreeLines lines={where ?? []} />
+                {context}
+              </Typography>
+            </Collapse>
           </Box>
+        )}
+        <Box>
+          <Stack direction="row" sx={{ alignItems: "center", mb: 0.75 }}>
+            <Typography
+              variant="subtitle1"
+              component="h3"
+              sx={{ flexGrow: 1, fontWeight: 700 }}
+            >
+              Plan · {done} of {steps.length} done
+              {/* The steps' times added up; with one timed step it would repeat that step's time. */}
+              {steps.filter((s) => s.ms != null).length > 1 &&
+                ` · ${formatTime(steps.reduce((sum, s) => sum + (s.ms ?? 0), 0))}`}
+            </Typography>
+            {since != null && counter && <Box>{counter(since)}</Box>}
+          </Stack>
+          <LinearProgress
+            variant="determinate"
+            value={steps.length ? (done / steps.length) * 100 : 0}
+            aria-label="Plan progress"
+            sx={{ height: "0.375rem", borderRadius: 1 }}
+          />
         </Box>
-      )}
-      {proposal && onProposal && <ProposalView steps={steps} proposal={proposal} onAnswer={onProposal} />}
+        <Stack spacing={0.5}>
+          {steps.map((s, i) => (
+            <PlanStepRow
+              key={s.id}
+              step={s}
+              index={i}
+              steps={steps}
+              running={running}
+              readOnly={readOnly}
+              editing={editing}
+              onEditing={setEditing}
+              onSave={save}
+              open={open.has(s.id)}
+              onToggle={() => toggle(s.id)}
+              onChange={onChange}
+              onRun={onRun}
+              details={details}
+              prompt={prompt}
+              formatTime={formatTime}
+            />
+          ))}
+        </Stack>
+        {/* The plan's actions are buttons at the bottom, as in the approval
+          prompts: the main one filled (Run), the rest outlined (Pause, Clone,
+          Discard). Removing the plan is for a plan that isn't running: pause it first. */}
+        {(showRun || showPause || showClone || showDiscard) && (
+          <Stack direction="row" spacing={1}>
+            {showRun && (
+              <PanelAction
+                label={started ? "Continue" : "Run"}
+                variant="contained"
+                color="primary"
+                onClick={onRun}
+              />
+            )}
+            {showPause && (
+              <PanelAction
+                label="Pause"
+                variant="outlined"
+                color="inherit"
+                title="Pause: ends the run now and keeps the plan"
+                onClick={onPause}
+              />
+            )}
+            {showClone && (
+              <PanelAction
+                label="Clone"
+                variant="outlined"
+                color="inherit"
+                title="Clone: a new plan with the same steps"
+                onClick={onClone}
+              />
+            )}
+            {showDiscard && (
+              <PanelAction
+                label="Discard"
+                variant="outlined"
+                color="inherit"
+                onClick={onCancel}
+              />
+            )}
+          </Stack>
+        )}
+        {result && steps.every((s) => s.status === "done") && (
+          <Box
+            sx={{
+              pt: 1.5,
+              borderTop: 1,
+              borderColor: "divider",
+              userSelect: "text",
+            }}
+          >
+            <Typography
+              variant="subtitle1"
+              component="h3"
+              sx={{ fontWeight: 700, mb: 0.75 }}
+            >
+              Result
+            </Typography>
+            <MarkdownRenderer content={result} />
+            <Box sx={{ mx: -1, mt: 0.5 }}>
+              <WorktreeLines lines={where ?? []} />
+            </Box>
+          </Box>
+        )}
+        {proposal && onProposal && (
+          <ProposalView
+            steps={steps}
+            proposal={proposal}
+            onAnswer={onProposal}
+          />
+        )}
+      </Stack>
     </Paper>
-  );
-}
-
-// The user's answer to a waiting step's question. The text is local state, so
-// typing doesn't change the plan until "Answer and continue".
-function AnswerForm({ onAnswer }: { onAnswer: (answer: string) => void }) {
-  const [text, setText] = useState("");
-  const answer = text.trim();
-  return (
-    <Stack direction="row" spacing={1} sx={{ mt: 0.75, alignItems: "flex-start" }}>
-      <TextField
-        size="small"
-        fullWidth
-        multiline
-        maxRows={4}
-        label="Your answer"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-      />
-      <Button
-        size="small"
-        variant="contained"
-        disabled={!answer}
-        onClick={() => onAnswer(answer)}
-        sx={{ flexShrink: 0, whiteSpace: "nowrap", mt: 0.5 }}
-      >
-        Answer and continue
-      </Button>
-    </Stack>
   );
 }
 
@@ -438,18 +320,27 @@ function ProposalView({
   const old = new Set(steps.map((s) => s.text));
   const removed = steps.filter((s) => !kept.has(s.text));
   return (
-    <Box sx={{ mt: 1.5, pt: 1.5, borderTop: 1, borderColor: "divider" }}>
+    <Box sx={{ pt: 1.5, borderTop: 1, borderColor: "divider" }}>
       <Typography variant="body1" sx={{ mb: 0.5, fontWeight: 500 }}>
         Llama suggests a change to the plan
       </Typography>
       <Stack spacing={0.25} sx={{ mb: 1 }}>
         {proposal.map((s, i) => (
-          <Typography key={s.id} variant="body1" color={old.has(s.text) ? "text.secondary" : "success.main"}>
+          <Typography
+            key={s.id}
+            variant="body1"
+            color={old.has(s.text) ? "text.secondary" : "success.main"}
+          >
             {old.has(s.text) ? " " : "+"} {i + 1}. {stepLine(s)}
           </Typography>
         ))}
         {removed.map((s) => (
-          <Typography key={s.id} variant="body1" color="error.main" sx={{ textDecoration: "line-through" }}>
+          <Typography
+            key={s.id}
+            variant="body1"
+            color="error.main"
+            sx={{ textDecoration: "line-through" }}
+          >
             − {stepLine(s)}
           </Typography>
         ))}
@@ -462,22 +353,6 @@ function ProposalView({
           Use this plan
         </Button>
       </Stack>
-    </Box>
-  );
-}
-
-// Scrolls its content into view once, when it appears: a step's prompt may
-// show above what's on screen, in a plan card higher up the chat.
-function InView({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  // Braces: scrollIntoView returns a Promise in newer browsers, and an effect
-  // that returns one crashes React when it cleans up.
-  useEffect(() => {
-    ref.current?.scrollIntoView({ block: "nearest" });
-  }, []);
-  return (
-    <Box ref={ref} sx={{ ml: 3.5, mt: 1, mb: 1.5 }}>
-      {children}
     </Box>
   );
 }
