@@ -10,6 +10,7 @@ const VALIDATORS: Record<keyof Preferences, (v: unknown) => boolean> = {
   showSteps: (v) => typeof v === "boolean",
   renderMarkdown: (v) => typeof v === "boolean",
   freshPlanSteps: (v) => typeof v === "boolean",
+  showModelName: (v) => typeof v === "boolean",
 };
 
 // Handles /api/preferences; returns false for anything else.

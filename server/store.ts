@@ -42,6 +42,8 @@ export interface Preferences {
   // Each plan step starts with a fresh context (see runPlan in
   // src/agent/agent.ts). A switch while it's tested; meant to go away.
   freshPlanSteps: boolean;
+  // The model's name in the line under a finished reply.
+  showModelName: boolean;
 }
 
 // Options for one model, keyed by its id (e.g. "unsloth/Qwen3.5-9B-GGUF:Q4_K_M"),
@@ -91,7 +93,7 @@ const empty = (): Store => ({
   connectors: [],
   toolsEnabled: true,
   disabledTools: [],
-  preferences: { showContextMeter: true, showSteps: true, renderMarkdown: true, freshPlanSteps: true },
+  preferences: { showContextMeter: true, showSteps: true, renderMarkdown: true, freshPlanSteps: true, showModelName: false },
   models: {},
   checkCommands: {},
 });

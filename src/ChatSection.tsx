@@ -23,6 +23,11 @@ const OPTIONS: { key: keyof Preferences; label: string; summary: string }[] = [
     summary:
       "Show formatting in messages (bold, lists, tables, code blocks with a Copy button), yours and the model's. Off shows the raw text, ** and backticks included.",
   },
+  {
+    key: "showModelName",
+    label: "Show model name",
+    summary: "Show which model wrote each reply, in the line under it with the time and speed. Off hides the name; the reply still remembers it.",
+  },
 ];
 
 export default function ChatSection() {

@@ -1409,6 +1409,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       forgotten={t.start < contextStart}
       showSteps={prefs?.showSteps ?? true}
       renderMarkdown={prefs?.renderMarkdown ?? true}
+      showModelName={prefs?.showModelName ?? false}
       failed={i === lastFailedTurnIndex ? failed : undefined}
       connectorName={connector ? connector.name || connector.kind : undefined}
       onResend={i === lastFailedTurnIndex ? retry : undefined}
@@ -2406,6 +2407,7 @@ function MessageBubble({
   forgotten,
   showSteps,
   renderMarkdown,
+  showModelName,
   failed,
   connectorName,
   onResend,
@@ -2428,6 +2430,8 @@ function MessageBubble({
   showSteps: boolean;
   // Off: messages show as typed, Markdown symbols and all (Settings → Chat).
   renderMarkdown: boolean;
+  // Off: the line under a reply leaves out the model's name (Settings → Chat).
+  showModelName: boolean;
   // Error message for the last user message in this turn.
   failed?: string | null;
   // Who answered the failed request, named in its error line.
@@ -2469,7 +2473,9 @@ function MessageBubble({
   // The finished reply's time and speed, kept on its last message.
   const took = [...parts].reverse().find((m) => m.took)?.took;
   // The model that wrote the reply (its last turn, if it changed midway).
-  const modelName = [...parts].reverse().find((m) => m.role === "assistant" && m.model)?.model;
+  const modelName = showModelName
+    ? [...parts].reverse().find((m) => m.role === "assistant" && m.model)?.model
+    : undefined;
   const isUser = parts[0].role === "user";
   // What was sent after this message without being shown: its chat update
   // and note (see docs/guide.md, "What the model is told"). Opened on request.

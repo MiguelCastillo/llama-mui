@@ -406,6 +406,7 @@ export interface Preferences {
   showSteps: boolean;
   renderMarkdown: boolean;
   freshPlanSteps: boolean;
+  showModelName: boolean;
 }
 export const getPreferences = () => call<Preferences>("GET", "/api/preferences");
 export const updatePreferences = (changes: Partial<Preferences>) => call<Preferences>("PATCH", "/api/preferences", changes);
