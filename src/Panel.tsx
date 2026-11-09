@@ -123,9 +123,12 @@ const toolbarSx: SxProps<Theme> = {
 
 // Shows the toolbar on hover or when a button in it has keyboard focus, and
 // always where there is no hover (touch). Goes on the box the toolbar sits in.
+// Only that box's own toolbar (its direct child) is shown: a panel nested in
+// another (an action box in a reply) keeps its toolbar hidden until the nested
+// panel itself is hovered.
 export const revealToolbarSx = {
-  "&:hover .hover-toolbar, &:focus-within .hover-toolbar": { opacity: 1 },
-  "@media (hover: none)": { "& .hover-toolbar": { opacity: 1 } },
+  "&:hover > .hover-toolbar, &:focus-within > .hover-toolbar": { opacity: 1 },
+  "@media (hover: none)": { "& > .hover-toolbar": { opacity: 1 } },
 };
 
 // The hover toolbar on its own, for a box that isn't a Panel but should act
