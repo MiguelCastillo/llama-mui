@@ -63,7 +63,6 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
 import StickyNote2OutlinedIcon from "@mui/icons-material/StickyNote2Outlined";
 import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
-import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutlineOutlined";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import CloseIcon from "@mui/icons-material/Close";
@@ -186,6 +185,7 @@ import {
   uploadImage,
 } from "./runClient";
 import ThreadNote from "./ThreadNote";
+import { DoneIcon } from "./DoneMark";
 import {
   clearOnShow,
   clearSendRefusal,
@@ -2607,11 +2607,12 @@ const NOTE_STYLES: Record<NoteKindId, { icon?: ReactNode; label: SxProps<Theme>;
   },
 };
 
-// A box the user marked done is quiet whatever its kind: a check, muted label
-// and muted text, and no bold.
+// A box the user marked done looks the same whatever its kind: the shared done
+// mark (DoneMark.tsx, the one "done" look in the UI), a bold label in the normal
+// text colour, and muted text. The box itself stays the quiet grey of the Panel.
 const DONE_STYLE: { icon: ReactNode; label: SxProps<Theme>; text: SxProps<Theme> } = {
-  icon: <CheckCircleOutlineIcon fontSize="small" sx={{ flexShrink: 0, color: "text.secondary" }} />,
-  label: { fontWeight: 700, color: "text.secondary" },
+  icon: <DoneIcon fontSize="small" sx={{ flexShrink: 0 }} />,
+  label: { fontWeight: 700 },
   text: { color: "text.secondary" },
 };
 

@@ -181,8 +181,9 @@ reply is streaming.
 
 An action box can also be marked done, with or without a Do it button (it is
 the only button when the action has no `canDo`). **Mark done** turns the box
-quiet: muted text, a check icon and the label "Your action · done", with no Do
-it button, and a **Reopen** button to undo it. Do it marks its box done at once
+quiet: muted text, a green outlined check icon and the label "Your action ·
+done" in bold in the normal text colour, with no Do it button, and a **Reopen**
+button to undo it. The box itself stays the quiet grey look. Do it marks its box done at once
 and then sends its message; if the send is refused the box goes back to open.
 The mark is saved on the note as `done` so it survives a reload, and it is
 never sent to the model. Ideas have no done state. The note calls are hidden from the tool-call rows in the steps. Replies that write
@@ -1130,6 +1131,10 @@ the step, not in the chat.
   the chat scrolled to the plan, and, on a done note with more than its
   follow-up to say, **Details**, which shows the rest of the report (then
   **Hide details**). The heading and summary are not a button.
+- "Done" looks the same everywhere: the outlined green check circle from the
+  shared done mark. A finished thread's note, a done plan step and a done
+  action box all use it, and any new "done" state should use it too, so the
+  look is changed in one place and doesn't drift.
 - Pressing Run does not open the thread: you stay in the chat. When the thread
   needs you, its note shows the question with the same buttons the thread shows:
   approve or deny a command or a file change (with the command or diff), or

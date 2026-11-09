@@ -1,12 +1,12 @@
 import { useState, type ReactNode } from "react";
 import { Box, Button, CircularProgress, Collapse, Paper, Stack, Typography } from "@mui/material";
-import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutlined";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import { reportParts, threadStatusWord, type NoteView } from "./planThread";
 import WorktreeLines from "./WorktreeLines";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { PanelAction } from "./Panel";
+import { DoneIcon } from "./DoneMark";
 
 // The status icons are as tall as the heading text, not MUI's fixed small size.
 const statusIconSx = { fontSize: "1.25em", flexShrink: 0 } as const;
@@ -72,7 +72,7 @@ export default function ThreadNote({
         <Box>
           <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             {view.running && <CircularProgress size="1.25em" sx={{ flexShrink: 0 }} aria-label="Running" />}
-            {isDone && <CheckCircleOutlineIcon color="success" aria-label="Done" sx={{ ...statusIconSx }} />}
+            {isDone && <DoneIcon aria-label="Done" sx={{ ...statusIconSx }} />}
             {ended && status === "failed" && <ErrorOutlineIcon color="error" aria-label="Failed" sx={{ ...statusIconSx }} />}
             {ended && status === "unfinished" && (
               <WarningAmberIcon color="warning" aria-label="Not finished" sx={{ ...statusIconSx }} />

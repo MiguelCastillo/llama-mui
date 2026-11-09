@@ -7,7 +7,6 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Box, Button, CircularProgress, Stack, TextField, Tooltip, Typography } from "@mui/material";
 import { PanelButton, PanelToolbar, revealToolbarSx } from "./Panel";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import ReplayOutlinedIcon from "@mui/icons-material/ReplayOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
@@ -15,7 +14,8 @@ import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
-import DoneIcon from "@mui/icons-material/Done";
+import MarkDoneIcon from "@mui/icons-material/Done";
+import { DoneIcon } from "./DoneMark";
 import { type PlanStep } from "./api";
 import { canMarkDone, stepLine } from "./agent/plan";
 
@@ -24,7 +24,7 @@ export type StepEdit = { i: number; text: string; summary: string };
 const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
   pending: <RadioButtonUncheckedIcon fontSize="small" color="disabled" />,
   running: <CircularProgress size="1rem" sx={{ m: "0.125rem" }} />,
-  done: <CheckCircleIcon fontSize="small" color="success" />,
+  done: <DoneIcon fontSize="small" />,
   failed: <CancelIcon fontSize="small" color="error" />,
   disputed: <HelpOutlineIcon fontSize="small" color="warning" />,
   waiting: <HelpOutlineIcon fontSize="small" color="warning" />,
@@ -215,7 +215,7 @@ export function PlanStepRow({
             {canMarkDone(s.status) && (
               <PanelButton
                 label="The check is wrong: mark it done"
-                icon={<DoneIcon />}
+                icon={<MarkDoneIcon />}
                 onClick={() => onChange?.(steps.map((st, j) => (j === i ? pending(st, { status: "done" }) : st)))}
               />
             )}
