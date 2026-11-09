@@ -165,9 +165,9 @@ Under a finished reply, chat draws each note from its row in the table: an
 idea in a quiet outlined box with a lightbulb and the label "Idea", an action
 item in a stronger box (warning-coloured bar on the left, light tint, bold
 text) labelled "Your action". Ideas come first, then actions, each kind up to
-its limit. An action with `canDo` also has a **Do it** button that sends "yes,
+its limit. An action with `canDo` also has a **Do it** button under the text that sends "yes,
 go ahead" as your next message; it is disabled while a reply is streaming.
-An idea box has two buttons of its own, which the table offers per kind (an
+An idea box has two buttons of its own under the text, which the table offers per kind (an
 `offers` list on the row, set on the idea kind only, so a new kind can opt in
 without new drawing code). **Add to todos** saves the idea to the chat's todo
 list with no model call: the title is the idea's first sentence cut to 80
@@ -181,13 +181,46 @@ reply is streaming. The note calls are hidden from the tool-call rows in the ste
 a plain-text "Your action:" line instead (older chats, or a model that doesn't
 use the tool) are shown as ordinary text, with no box, and read fine.
 
+Ideas, action items, your own messages and the model's replies (including side
+questions and their answers) are all drawn by one shared panel. It has a table
+of styles, one per look (idea, action, message, side question, reply, side
+answer), and two slots for buttons. So a change of look
+is made once, in that table, and no box is styled on its own.
+
+- **Tools** act on the content itself (Copy, formatted/raw, show hidden notes).
+  They are icon-only buttons in a small toolbar in the box's top right corner,
+  shown on hover, and are drawn by PanelButton: a new tool only gives a label
+  (the tooltip), an icon and what it does. Ideas, action items, your own
+  messages and the model's replies all have Copy (a reply's copies its text,
+  and more tools will join it). A table in a reply uses the same toolbar
+  (PanelToolbar) for one tool: it stretches the table, which is otherwise only
+  as wide as its columns, to the chat's width and back.
+- **Actions** respond to the content (Do it, Add to todos, Make plan). They are
+  always visible, labelled small buttons with no icon, left-aligned in a row
+  under the text on a line of their own, styled like the buttons in the
+  approval prompts: the main answer is filled (Do it is warning-coloured, Add
+  to todos the main colour) and the others are outlined (Make plan). They are
+  drawn by PanelAction: a label, what it does, and optionally disabled, a
+  variant and a colour.
+
+**The pattern, for anything new:** an action, meaning something the user decides
+or does about a thing (run it, discard it, do it, add it to the todos), is a
+labelled button in a row at the bottom of that thing, filled for the main one
+and outlined for the rest, by default. It is not an icon in the corner. Icons
+are for tools on the content, in the hover toolbar. The plan follows it: Run
+(Continue once it has started) and Discard are buttons under the steps. Only
+the Pause icon, which is shown while the plan runs, and Clone, which is shown
+on a plan you are only reading, are still icons in its header.
+
 **To add a kind of note:** add a row to the table (id, tool name, one-sentence
 description that doesn't overlap another kind's, tool label and summary in
 Settings → Tools, box label, optional limit and extra arguments), and give it
-a style where chat draws the boxes. The tool, its validation, the help text
-and the end-the-turn behaviour come from the row; no new loop code. The new id
-also goes in the list of kind ids at the top of the same file; the type check
-then points at the style table in chat until the new kind has a style. The
+a style where chat draws the boxes (its icon, label and text style) and a
+look in the panel's table of styles, under the same id. The tool, its
+validation, the help text and the end-the-turn behaviour come from the row; no
+new loop code. The new id also goes in the list of kind ids at the top of the
+same file; the type check then points at the style table in chat and the
+panel's table until the new kind has an entry in each. The
 server test that lists the tool names needs the new name too.
 
 A plan's last step is told to say in a sentence or two whether it all worked

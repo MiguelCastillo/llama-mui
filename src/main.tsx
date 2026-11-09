@@ -9,10 +9,16 @@ const SWITCH_ON = blue[200];
 
 // Light and dark schemes; MUI picks one from the OS setting.
 const theme = createTheme({
-  colorSchemes: { light: true, dark: true },
+  // The dark scheme's text is a soft off-white, not MUI's pure white: white on
+  // near-black glares over a long read.
+  colorSchemes: { light: true, dark: { palette: { text: { primary: "#e3e3e3" } } } },
   // One spacing unit is 0.5rem (8px at the default size), so every p, m, gap
   // and spacing in the app scales with the browser's font size.
   spacing: (factor: number) => `${0.5 * factor}rem`,
+  // Body text (replies, ideas, your messages) is a step up from MUI's 1rem, so
+  // long answers are easier to read. The reading width is in characters, so the
+  // chat's width follows this size.
+  typography: { body1: { fontSize: "1.0625rem" } },
   components: {
     MuiSwitch: {
       styleOverrides: {

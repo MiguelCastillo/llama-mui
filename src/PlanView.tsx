@@ -25,7 +25,6 @@ import CancelIcon from "@mui/icons-material/Cancel";
 import ReplayOutlinedIcon from "@mui/icons-material/ReplayOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import WorktreeLines from "./WorktreeLines";
 import PauseIcon from "@mui/icons-material/Pause";
 import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
@@ -36,6 +35,7 @@ import DoneIcon from "@mui/icons-material/Done";
 import { type PlanStep } from "./api";
 import { canMarkDone, stepLine } from "./agent/plan";
 import MarkdownRenderer from "./MarkdownRenderer";
+import { PanelAction } from "./Panel";
 
 const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
   pending: <RadioButtonUncheckedIcon fontSize="small" color="disabled" />,
@@ -209,25 +209,6 @@ export function PlanView({
             </IconButton>
           </Tooltip>
         )}
-        {onCancel && !readOnly && !running && (
-          <Tooltip title="Discard plan">
-            <IconButton size="small" aria-label="Discard plan" onClick={onCancel} sx={{ mr: unfinished ? 0.5 : 0 }}>
-              <DeleteOutlinedIcon />
-            </IconButton>
-          </Tooltip>
-        )}
-        {unfinished && onRun && !running && (
-          <Tooltip title={started ? "Continue the plan" : "Run the plan"}>
-            <IconButton
-              size="small"
-              aria-label={started ? "Continue" : "Run"}
-              onClick={onRun}
-              sx={{ bgcolor: "primary.main", color: "primary.contrastText", "&:hover": { bgcolor: "primary.dark" } }}
-            >
-              <PlayArrowIcon />
-            </IconButton>
-          </Tooltip>
-        )}
       </Stack>
       <Stack spacing={0.5}>
         {steps.map((s, i) => {
@@ -384,9 +365,22 @@ export function PlanView({
           );
         })}
       </Stack>
+      {/* The plan's actions are buttons at the bottom, as in the approval
+          prompts: the main one filled (Run), the rest outlined (Discard). Removing
+          the plan is for a plan that isn't running: pause it first. */}
+      {((unfinished && onRun && !running) || (onCancel && !readOnly && !running)) && (
+        <Stack direction="row" spacing={1} sx={{ mt: 1.5, mb: 0.5 }}>
+          {unfinished && onRun && !running && (
+            <PanelAction label={started ? "Continue" : "Run"} variant="contained" color="primary" onClick={onRun} />
+          )}
+          {onCancel && !readOnly && !running && (
+            <PanelAction label="Discard" variant="outlined" color="inherit" onClick={onCancel} />
+          )}
+        </Stack>
+      )}
       {result && steps.every((s) => s.status === "done") && (
         <Box sx={{ mt: 1.5, pt: 1.5, borderTop: 1, borderColor: "divider", userSelect: "text" }}>
-          <Typography variant="body1" sx={{ fontWeight: 500, mb: 0.5 }}>
+          <Typography variant="subtitle1" component="h3" sx={{ fontWeight: 700, mb: 0.75 }}>
             Result
           </Typography>
           <MarkdownRenderer content={result} />

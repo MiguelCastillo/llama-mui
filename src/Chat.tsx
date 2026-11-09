@@ -6,8 +6,7 @@ import {
   AccordionDetails,
   AccordionSummary,
   Alert,
-  alpha,
-  Box,
+   Box,
   Button,
   ButtonBase,
   Chip,
@@ -57,6 +56,7 @@ import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
 import SearchOffIcon from "@mui/icons-material/SearchOff";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
@@ -121,6 +121,7 @@ import { optimisticSend } from "./optimisticSend";
 import { newId } from "./uuid";
 import SessionSettings, { ATTACHMENTS_LOCKED_NOTE, AttachmentIcon } from "./SessionSettings";
 import SessionsPanel from "./SessionsPanel";
+import Panel, { PanelAction, PanelButton } from "./Panel";
 import EmptyChatCreature from "./EmptyChatCreature";
 import EmptyChatSuggestions from "./EmptyChatSuggestions";
 import { settleStart, startAction, type Start, type StartAction } from "./todos";
@@ -1835,7 +1836,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
       {/* Top padding keeps the first messages clear of the toolbar. */}
       <Box ref={scrollRef} onScroll={onScroll} sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3, position: "relative" }}>
-        <Container maxWidth={false} ref={contentRef}>
+        <Container maxWidth={false} ref={contentRef} sx={{ maxWidth: CHAT_MAX_WIDTH }}>
           <Stack spacing={2}>
             {connector === null ? (
               <Stack spacing={2} sx={{ alignItems: "center", mt: 8 }}>
@@ -1935,7 +1936,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       </Box>
 
       <Paper square elevation={0} sx={{ py: 2, bgcolor: "transparent" }}>
-        <Container maxWidth={false}>
+        <Container maxWidth={false} sx={{ maxWidth: CHAT_MAX_WIDTH }}>
           {/* On a wide screen Enter sends and there is no Send button: the settings button
               and the box are centered beside the context meter. On a phone Send has the
               meter under it, the box is as tall as both, and the settings button is centered. */}
@@ -2372,27 +2373,16 @@ function Composer({
 // added to the table (replyNoteKinds.ts) does not compile until it has a style.
 // Which boxes show, their labels and the Do it button come from the helper in
 // agent/replyNotes.ts.
-const NOTE_STYLES: Record<NoteKindId, { box: SxProps<Theme>; icon?: ReactNode; label: SxProps<Theme>; text: SxProps<Theme> }> = {
-  // Quiet: a plain outline and a lightbulb.
+const NOTE_STYLES: Record<NoteKindId, { icon?: ReactNode; label: SxProps<Theme>; text: SxProps<Theme> }> = {
+  // A lightbulb in the info colour and text at full strength. The box itself
+  // is drawn by the Panel (Panel.tsx).
   idea: {
-    box: { display: "flex", gap: 1, alignItems: "flex-start", p: 1.25, border: 1, borderColor: "divider", borderRadius: 1, color: "text.secondary" },
-    icon: <LightbulbOutlinedIcon fontSize="small" sx={{ mt: 0.25, flexShrink: 0 }} />,
-    label: { fontWeight: 600 },
+    icon: <LightbulbOutlinedIcon sx={{ mt: 0.125, flexShrink: 0, color: "info.main" }} />,
+    label: { fontWeight: 700, color: "info.main" },
     text: {},
   },
-  // Loud: a warning-coloured bar, a light tint and bold text.
+  // Loud: warning-coloured label and bold text.
   action: {
-    box: {
-      display: "flex",
-      gap: 1,
-      alignItems: "center",
-      px: 1.5,
-      py: 1,
-      borderLeft: 4,
-      borderLeftColor: "warning.main",
-      borderRadius: 1,
-      bgcolor: (t) => alpha(t.palette.warning.main, 0.1),
-    },
     label: { fontWeight: 700, color: "warning.main" },
     text: { fontWeight: 700 },
   },
@@ -2522,6 +2512,272 @@ function MessageBubble({
   // A side question or its answer (asked while a plan ran; the plan never saw
   // it): labelled, and quieter than the chat's own messages.
   const isAside = !!parts[0].aside;
+  // The small buttons on the top edge of a message you sent (shown on hover):
+  // what was sent unseen, and formatted/raw. None while it streams or is empty.
+  const userActions =
+    isUser && !streaming && parts.some((m) => m.content) ? (
+      <>
+        <PanelButton
+          label="Copy"
+          icon={<ContentCopyOutlinedIcon />}
+          onClick={() =>
+            void copyText(
+              parts
+                .map((m) => m.content)
+                .filter(Boolean)
+                .join("\n\n"),
+            )
+          }
+        />
+        {hidden && (
+          <PanelButton
+            label={showHidden ? "Hide what was sent with this message" : "Show what was sent with this message, unseen"}
+            icon={<StickyNote2OutlinedIcon />}
+            onClick={() => setShowHidden(!showHidden)}
+            pressed={showHidden}
+          />
+        )}
+        <PanelButton
+          label={showMarkdown ? "Show raw text" : "Show formatted"}
+          icon={<CodeOutlinedIcon />}
+          onClick={() => setOverride(!showMarkdown)}
+          pressed={!showMarkdown}
+        />
+      </>
+    ) : undefined;
+  // The small buttons on the top edge of the model's reply (shown on hover):
+  // Copy for now. None while it streams or when it has no text.
+  const replyTools =
+    !isUser && !streaming && parts.some((m) => m.content) ? (
+      <PanelButton
+        label="Copy"
+        icon={<ContentCopyOutlinedIcon />}
+        onClick={() =>
+          void copyText(
+            parts
+              .map((m) => m.content)
+              .filter(Boolean)
+              .join("\n\n"),
+          )
+        }
+      />
+    ) : undefined;
+  // What goes inside the card, for a message you sent and for a reply alike.
+  const content = (
+    <Stack
+      spacing={isUser ? 1 : 0}
+      sx={
+        isUser
+          ? undefined
+          : {
+              // Everything that isn't a step row is text (the reply, the dots,
+              // the buttons under it): no side padding, a little above and below.
+              "& > :not(.MuiAccordion-root)": { px: 0, py: 0.5 },
+              // Text right under a step row gets more room above it.
+              // A line above it closes the list, so a reply with no text ends
+              // with its last row and nothing under it.
+              "& > .MuiAccordion-root + :not(.MuiAccordion-root)": { pt: 2, borderTop: 1, borderColor: "divider" },
+              "& > :not(.MuiAccordion-root):first-child": { pt: 0 },
+              "& > :not(.MuiAccordion-root):last-child": { pb: 0 },
+            }
+      }
+    >
+      {parts.map((m, i) => (
+        <Fragment key={i}>
+          {showSteps && m.reasoning && (
+            <Accordion disableGutters elevation={0} sx={flatAccordionSx}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                {/* While it's thinking, the same dots as waiting for a reply. */}
+                {streaming && m === last && !m.content && !m.toolCalls ? (
+                  <TypingDots label="Thinking" />
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    Thoughts
+                  </Typography>
+                )}
+                <StepTime
+                  stats={m.stats}
+                  detail={(s) => `Thought for ${formatSeconds(s.ms)}${s.tokens ? `, ≈${s.tokens.toLocaleString()} tokens` : ""}`}
+                />
+              </AccordionSummary>
+              <AccordionDetails>
+                <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-wrap" }}>
+                  {m.reasoning}
+                </Typography>
+              </AccordionDetails>
+            </Accordion>
+          )}
+          {m.content &&
+            (() => {
+              const body = !showMarkdown ? (
+                <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</Typography>
+              ) : m.role === "assistant" ? (
+                <MarkdownRenderer content={m.content} />
+              ) : (
+                <MarkdownRenderer content={m.content} breaks />
+              );
+              // Replies always show in full; a long message of yours folds.
+              return isUser ? (
+                <FoldedMessage open={unfolded} onTooTall={setTooTall}>
+                  {body}
+                </FoldedMessage>
+              ) : (
+                body
+              );
+            })()}
+          {/* Image thumbnails for user messages: outside FoldedMessage, below text. */}
+          {isUser && parts[0].images && parts[0].images.length > 0 && sessionId && (
+            <Stack direction="row" spacing={1} sx={{ mt: 0.5, flexWrap: "wrap" }}>
+              {parts[0].images.map((img) => (
+                <Box
+                  component="img"
+                  key={img.id}
+                  src={`/api/sessions/${sessionId}/images/${img.id}`}
+                  alt={img.mediaType}
+                  onClick={() => setSelectedImage(`/api/sessions/${sessionId}/images/${img.id}`)}
+                  sx={{
+                    width: "6rem",
+                    height: "6rem",
+                    objectFit: "cover",
+                    borderRadius: 0.5,
+                    cursor: "pointer",
+                    border: "1px solid",
+                    borderColor: "divider",
+                  }}
+                />
+              ))}
+            </Stack>
+          )}
+          {showSteps &&
+            shownCalls(m.toolCalls).map((c) => (
+              <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} stopped={!streaming} />
+            ))}
+        </Fragment>
+      ))}
+      {notes.map((box, i) => (
+        // The Panel is spaced by the reply card's rule for non-step
+        // children; its look comes from the Panel's table of styles. The
+        // small icon buttons sit in its top right corner, shown on hover
+        // or focus (always where there is no hover).
+        <Panel
+          key={`note-${i}`}
+          variant={box.kind}
+          tools={<PanelButton label="Copy" icon={<ContentCopyOutlinedIcon />} onClick={() => void copyText(box.text)} />}
+          actions={
+            offersOf(box).length > 0 || hasDoIt(box) ? (
+              <>
+                {offersOf(box).includes("todo") &&
+                  (() => {
+                    const added = todoAdded(todos ?? [], box.text);
+                    return (
+                      <PanelAction
+                        label={added ? "Added" : "Add to todos"}
+                        variant="contained"
+                        color="primary"
+                        onClick={() => onAddTodo?.(box.text)}
+                        disabled={added || doItDisabled(!!replyRunning)}
+                      />
+                    );
+                  })()}
+                {offersOf(box).includes("plan") && (
+                  <PanelAction
+                    label="Make plan"
+                    variant="outlined"
+                    onClick={() => onMakePlan?.(box.text)}
+                    disabled={doItDisabled(!!replyRunning)}
+                  />
+                )}
+                {hasDoIt(box) && (
+                  <PanelAction
+                    label="Do it"
+                    variant="contained"
+                    color="warning"
+                    onClick={onDoIt}
+                    disabled={doItDisabled(!!replyRunning)}
+                  />
+                )}
+              </>
+            ) : undefined
+          }
+        >
+          {/* The title on one line with its icon, the text under it. The panel's
+              own gap is a little big between the two, so the header pulls up. */}
+          <Box sx={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 0.75, mb: -0.5 }}>
+            {NOTE_STYLES[box.kind].icon}
+            <Typography variant="body1" sx={NOTE_STYLES[box.kind].label}>
+              {noteLabel(box)}
+            </Typography>
+          </Box>
+          <Box sx={{ flexBasis: "100%", minWidth: 0 }}>
+            <Typography variant="body1" sx={{ overflowWrap: "anywhere", ...NOTE_STYLES[box.kind].text }}>
+              {box.text}
+            </Typography>
+          </Box>
+        </Panel>
+      ))}
+      {streaming && since != null ? (
+        // The counter sits beside the waiting dots, and stays on this
+        // line once text streams in and the dots go.
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: "1.5em" }}>
+          {waiting && <TypingDots />}
+          <Elapsed since={since} rate={rate} variant="caption" color="text.secondary" />
+        </Box>
+      ) : (
+        waiting && <TypingDots />
+      )}
+      {hidden && showHidden && (
+        <Typography
+          variant="body2"
+          component="div"
+          sx={{ whiteSpace: "pre-wrap", opacity: 0.8, borderTop: 1, borderColor: "currentColor", pt: 1 }}
+        >
+          {hidden}
+        </Typography>
+      )}
+      {!streaming && parts.some((m) => m.content) && (!isUser || tooTall) && (
+        <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 1, ...(isUser && { mb: -1, mr: -1 }) }}>
+          {isUser && tooTall && (
+            <Button size="small" onClick={() => setUnfolded(!unfolded)} aria-expanded={unfolded} sx={{ mr: "auto", ml: -1 }}>
+              {unfolded ? "Show less" : "Show all"}
+            </Button>
+          )}
+          {!isUser && hidden && (
+            <Tooltip title={showHidden ? "Hide what was sent with this message" : "Show what was sent with this message, unseen"}>
+              <IconButton
+                size="small"
+                onClick={() => setShowHidden(!showHidden)}
+                aria-pressed={showHidden}
+                sx={{ color: "text.secondary" }}
+              >
+                <StickyNote2OutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+          {(took || modelName) && (
+            <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
+              {modelName}
+              {modelName && took ? " · " : ""}
+              {took ? formatSeconds(took.ms) : ""}
+              {took?.clientTps ? ` · ${Math.round(took.clientTps)} tps (client)` : ""}
+              {took?.serverTps ? ` · ${Math.round(took.serverTps)} tps (server)` : ""}
+            </Typography>
+          )}
+          {!isUser && (
+            <Tooltip title={showMarkdown ? "Show raw text" : "Show formatted"}>
+              <IconButton
+                size="small"
+                onClick={() => setOverride(!showMarkdown)}
+                aria-pressed={!showMarkdown}
+                sx={{ color: "text.secondary" }}
+              >
+                <CodeOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+      )}
+    </Stack>
+  );
   return (
     <Box sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", gap: 1, opacity: forgotten ? 0.5 : isAside ? 0.85 : 1 }}>
       {isAside && (
@@ -2529,230 +2785,19 @@ function MessageBubble({
           Side question
         </Typography>
       )}
-      <Paper
-        variant={isUser && !isAside ? "elevation" : "outlined"}
-        elevation={isUser && !isAside ? 0 : undefined}
-        sx={{
-          // A reply's card has no padding of its own: its step rows (tool calls,
-          // thoughts) run edge to edge, and each text block pads itself (see
-          // the Stack below). What you typed is one block, so its card pads.
-          px: isUser ? 2 : 0,
-          py: isUser ? 1.5 : 0,
-          // Messages and replies both span the chat.
-          width: "100%",
-          maxWidth: "100%",
-          // What you typed is quieter than the reply: a faint tint of the theme's
-          // colour behind normal text, not a solid colour fill. A side question
-          // is quieter still: a dashed outline and a fainter tint.
-          bgcolor: isAside
-            ? isUser
-              ? (t) => alpha(t.palette.primary.main, 0.06)
-              : "action.hover"
-            : isUser
-              ? (t) => alpha(t.palette.primary.main, 0.14)
-              : "background.paper",
-          color: "text.primary",
-          ...(isAside && { borderStyle: "dashed" }),
-          // Only when failed: replies are outlined, and border: 0 would drop it.
-          ...(hasError && { border: 1, borderColor: "error.main" }),
-        }}
-      >
-        <Stack
-          spacing={isUser ? 1 : 0}
-          sx={
-            isUser
-              ? undefined
-              : {
-                  // Everything that isn't a step row is text (the reply, the dots,
-                  // the buttons under it): it pads itself on all four sides.
-                  "& > :not(.MuiAccordion-root)": { px: 2, py: 1 },
-                  // Text right under a step row gets more room above it.
-                  // A line above it closes the list, so a reply with no text ends
-                  // with its last row and nothing under it.
-                  "& > .MuiAccordion-root + :not(.MuiAccordion-root)": { pt: 2, borderTop: 1, borderColor: "divider" },
-                  "& > :not(.MuiAccordion-root):first-child": { pt: 1.5 },
-                  "& > :not(.MuiAccordion-root):last-child": { pb: 1.5 },
-                }
-          }
-        >
-          {parts.map((m, i) => (
-            <Fragment key={i}>
-              {showSteps && m.reasoning && (
-                <Accordion disableGutters elevation={0} sx={flatAccordionSx}>
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    {/* While it's thinking, the same dots as waiting for a reply. */}
-                    {streaming && m === last && !m.content && !m.toolCalls ? (
-                      <TypingDots label="Thinking" />
-                    ) : (
-                      <Typography variant="body2" color="text.secondary">
-                        Thoughts
-                      </Typography>
-                    )}
-                    <StepTime
-                      stats={m.stats}
-                      detail={(s) => `Thought for ${formatSeconds(s.ms)}${s.tokens ? `, ≈${s.tokens.toLocaleString()} tokens` : ""}`}
-                    />
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-wrap" }}>
-                      {m.reasoning}
-                    </Typography>
-                  </AccordionDetails>
-                </Accordion>
-              )}
-              {m.content &&
-                (() => {
-                  const body = !showMarkdown ? (
-                    <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</Typography>
-                  ) : m.role === "assistant" ? (
-                    <MarkdownRenderer content={m.content} />
-                  ) : (
-                    <MarkdownRenderer content={m.content} breaks />
-                  );
-                  // Replies always show in full; a long message of yours folds.
-                  return isUser ? (
-                    <FoldedMessage open={unfolded} onTooTall={setTooTall}>
-                      {body}
-                    </FoldedMessage>
-                  ) : (
-                    body
-                  );
-                })()}
-              {/* Image thumbnails for user messages: outside FoldedMessage, below text. */}
-              {isUser && parts[0].images && parts[0].images.length > 0 && sessionId && (
-                <Stack direction="row" spacing={1} sx={{ mt: 0.5, flexWrap: "wrap" }}>
-                  {parts[0].images.map((img) => (
-                    <Box
-                      component="img"
-                      key={img.id}
-                      src={`/api/sessions/${sessionId}/images/${img.id}`}
-                      alt={img.mediaType}
-                      onClick={() => setSelectedImage(`/api/sessions/${sessionId}/images/${img.id}`)}
-                      sx={{
-                        width: "6rem",
-                        height: "6rem",
-                        objectFit: "cover",
-                        borderRadius: 0.5,
-                        cursor: "pointer",
-                        border: "1px solid",
-                        borderColor: "divider",
-                      }}
-                    />
-                  ))}
-                </Stack>
-              )}
-              {showSteps &&
-                shownCalls(m.toolCalls).map((c) => (
-                  <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} stopped={!streaming} />
-                ))}
-            </Fragment>
-          ))}
-          {notes.map((box, i) => (
-            // The outer box is spaced by the reply card's rule for non-step
-            // children; the inner one is the drawn box and pads itself.
-            <Box key={`note-${i}`}>
-              <Box data-note={box.kind} sx={NOTE_STYLES[box.kind].box}>
-                {NOTE_STYLES[box.kind].icon}
-                <Box sx={{ minWidth: 0, flexGrow: 1 }}>
-                  <Typography variant="caption" sx={{ display: "block", ...NOTE_STYLES[box.kind].label }}>
-                    {noteLabel(box)}
-                  </Typography>
-                  <Typography variant="body2" sx={{ overflowWrap: "anywhere", ...NOTE_STYLES[box.kind].text }}>
-                    {box.text}
-                  </Typography>
-                </Box>
-                {hasDoIt(box) && (
-                  <Button size="small" variant="outlined" color="warning" onClick={onDoIt} disabled={doItDisabled(!!replyRunning)} sx={{ flexShrink: 0 }}>
-                    Do it
-                  </Button>
-                )}
-                {offersOf(box).length > 0 && (
-                  <Stack direction="row" spacing={1} sx={{ flexShrink: 0, alignSelf: "center" }}>
-                    {offersOf(box).includes("todo") &&
-                      (() => {
-                        const added = todoAdded(todos ?? [], box.text);
-                        return (
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={() => onAddTodo?.(box.text)}
-                            disabled={added || doItDisabled(!!replyRunning)}
-                          >
-                            {added ? "Added" : "Add to todos"}
-                          </Button>
-                        );
-                      })()}
-                    {offersOf(box).includes("plan") && (
-                      <Button size="small" variant="outlined" onClick={() => onMakePlan?.(box.text)} disabled={doItDisabled(!!replyRunning)}>
-                        Make plan
-                      </Button>
-                    )}
-                  </Stack>
-                )}
-              </Box>
-            </Box>
-          ))}
-          {streaming && since != null ? (
-            // The counter sits beside the waiting dots, and stays on this
-            // line once text streams in and the dots go.
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: "1.5em" }}>
-              {waiting && <TypingDots />}
-              <Elapsed since={since} rate={rate} variant="caption" color="text.secondary" />
-            </Box>
-          ) : (
-            waiting && <TypingDots />
-          )}
-          {hidden && showHidden && (
-            <Typography
-              variant="body2"
-              component="div"
-              sx={{ whiteSpace: "pre-wrap", opacity: 0.8, borderTop: 1, borderColor: "currentColor", pt: 1 }}
-            >
-              {hidden}
-            </Typography>
-          )}
-          {!streaming && parts.some((m) => m.content) && (
-            <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 1, mb: -1, mr: -1 }}>
-              {isUser && tooTall && (
-                <Button size="small" onClick={() => setUnfolded(!unfolded)} aria-expanded={unfolded} sx={{ mr: "auto", ml: -1 }}>
-                  {unfolded ? "Show less" : "Show all"}
-                </Button>
-              )}
-              {hidden && (
-                <Tooltip title={showHidden ? "Hide what was sent with this message" : "Show what was sent with this message, unseen"}>
-                  <IconButton
-                    size="small"
-                    onClick={() => setShowHidden(!showHidden)}
-                    aria-pressed={showHidden}
-                    sx={{ color: "text.secondary" }}
-                  >
-                    <StickyNote2OutlinedIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              )}
-              {(took || modelName) && (
-                <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
-                  {modelName}
-                  {modelName && took ? " · " : ""}
-                  {took ? formatSeconds(took.ms) : ""}
-                  {took?.clientTps ? ` · ${Math.round(took.clientTps)} tps (client)` : ""}
-                  {took?.serverTps ? ` · ${Math.round(took.serverTps)} tps (server)` : ""}
-                </Typography>
-              )}
-              <Tooltip title={showMarkdown ? "Show raw text" : "Show formatted"}>
-                <IconButton
-                  size="small"
-                  onClick={() => setOverride(!showMarkdown)}
-                  aria-pressed={!showMarkdown}
-                  sx={{ color: "text.secondary" }}
-                >
-                  <CodeOutlinedIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            </Box>
-          )}
-        </Stack>
-      </Paper>
+      {isUser ? (
+        // What you typed: drawn by the Panel, which owns its look and its
+        // hover toolbar (Panel.tsx).
+        <Panel variant={isAside ? "messageAside" : "message"} error={hasError} tools={userActions}>
+          {content}
+        </Panel>
+      ) : (
+        // The model's reply: drawn by the Panel too, with its own look from the
+        // table and a hover toolbar (Copy for now; more tools will join it).
+        <Panel variant={isAside ? "replyAside" : "reply"} error={hasError} tools={replyTools}>
+          {content}
+        </Panel>
+      )}
       {/* A message sent to a running plan: which step saw it. */}
       {isUser && (parts[0].seenByStep || parts[0].notSeen) && (
         <Typography variant="caption" color="text.secondary">
@@ -2775,6 +2820,15 @@ function MessageBubble({
     </Box>
   );
 }
+
+// The one control for how wide the chat reads: the widest the messages and the
+// input box get; on a wider screen they stay centered at this width. Text,
+// code and tables all fill it, so this decides how long a line gets. Long lines
+// are hard to follow, as the eye loses its place jumping to the next line. It
+// is 90ch plus the container's side padding (1.5rem each side). A "ch" is the
+// width of a "0" and follows the font size; prose letters are narrower, so
+// 90ch holds about 98 characters of ordinary text.
+const CHAT_MAX_WIDTH = "calc(90ch + 3rem)";
 
 // Flat, compact look shared by the tool-call and reasoning accordions: no
 // fill, a hairline between rows, a short summary row.
