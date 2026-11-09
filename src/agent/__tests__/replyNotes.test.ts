@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { ChatMessage, ToolCall } from "../../api";
+import type { ChatMessage, Todo, ToolCall } from "../../api";
 import { NOTE_KINDS } from "../../replyNoteKinds";
-import { addNote, DO_IT_MESSAGE, doItDisabled, hasDoIt, isNoteTool, noteBoxes, noteFromCall, noteLabel, notesOf, shownCalls, type NoteBox } from "../replyNotes";
+import { addNote, DO_IT_MESSAGE, doItDisabled, hasDoIt, ideaTodo, isNoteTool, noteBoxes, noteFromCall, noteLabel, notesOf, offersOf, planMessage, shownCalls, todoAdded, type NoteBox } from "../replyNotes";
 
 const call = (name: string, args: object): ToolCall => ({ id: "t", name, arguments: JSON.stringify(args) });
 const reply: ChatMessage = { role: "assistant", content: "Done." };
@@ -135,6 +135,93 @@ describe("the boxes' labels and button", () => {
     expect(DO_IT_MESSAGE).toBe("yes, go ahead");
     expect(doItDisabled(true)).toBe(true);
     expect(doItDisabled(false)).toBe(false);
+  });
+});
+
+describe("offersOf", () => {
+  it("lists the buttons the kind's table row offers, and none for a kind without", () => {
+    expect(offersOf({ kind: "idea", text: "x", canDo: false })).toEqual(["todo", "plan"]);
+    expect(offersOf({ kind: "action", text: "x", canDo: true })).toEqual([]);
+    expect(offersOf({ kind: "tip" as any, text: "x", canDo: false })).toEqual([]);
+  });
+
+  it("matches the table: only kinds that set offers have buttons", () => {
+    for (const k of NOTE_KINDS) expect(offersOf({ kind: k.id, text: "x", canDo: false })).toEqual(k.offers ?? []);
+  });
+});
+
+describe("ideaTodo", () => {
+  it("uses the first sentence as the summary and the whole idea as the description", () => {
+    const text = "Add a retry to the upload. It fails on slow networks and the user has to start again.";
+    expect(ideaTodo(text, "abc12345", 99)).toEqual({
+      id: "abc12345",
+      summary: "Add a retry to the upload.",
+      description: text,
+      context: "",
+      status: "open",
+      createdAt: 99,
+    });
+  });
+
+  it("keeps a short first sentence whole, whatever ends it", () => {
+    expect(ideaTodo("Is it worth it? Maybe.", "i", 1).summary).toBe("Is it worth it?");
+    expect(ideaTodo("Stop now! Really", "i", 1).summary).toBe("Stop now!");
+    expect(ideaTodo("Use v2.5 of the tool. Then more.", "i", 1).summary).toBe("Use v2.5 of the tool.");
+  });
+
+  it("cuts a long first sentence to 80 characters at a word boundary", () => {
+    const text = "Rewrite the settings page so that every option has a short help line under it and the layout stays the same on small screens.";
+    const s = ideaTodo(text, "i", 1).summary;
+    expect(s).toBe("Rewrite the settings page so that every option has a short help line under it");
+    expect(s.length).toBeLessThanOrEqual(80);
+    expect(text.startsWith(s)).toBe(true);
+    expect(text[s.length]).toBe(" ");
+  });
+
+  it("keeps a word that ends exactly at the limit, and drops trailing punctuation after a cut", () => {
+    const eighty = "a".repeat(40) + " " + "b".repeat(39);
+    expect(eighty).toHaveLength(80);
+    expect(ideaTodo(eighty + " more words", "i", 1).summary).toBe(eighty);
+    expect(ideaTodo("a".repeat(30) + ", " + "b".repeat(60), "i", 1).summary).toBe("a".repeat(30));
+  });
+
+  it("cuts a single very long word at 80 characters", () => {
+    expect(ideaTodo("x".repeat(120), "i", 1).summary).toBe("x".repeat(80));
+  });
+
+  it("uses the whole text when there is no sentence end", () => {
+    expect(ideaTodo("  Try caching the model list \n for a minute  ", "i", 1)).toMatchObject({
+      summary: "Try caching the model list for a minute",
+      description: "Try caching the model list \n for a minute",
+    });
+  });
+});
+
+describe("todoAdded", () => {
+  const todo = (description: string, status: Todo["status"]): Todo => ({ id: "t", summary: "s", description, context: "", status, createdAt: 1 });
+
+  it("is true when an open todo has the idea as its description", () => {
+    expect(todoAdded([todo("Try X", "open")], "Try X")).toBe(true);
+    expect(todoAdded([todo("Try X", "open")], "  Try X ")).toBe(true);
+  });
+
+  it("is false for a done todo, another description, or no todos", () => {
+    expect(todoAdded([todo("Try X", "done")], "Try X")).toBe(false);
+    expect(todoAdded([todo("Try Y", "open")], "Try X")).toBe(false);
+    expect(todoAdded([], "Try X")).toBe(false);
+  });
+
+  it("is true once an idea is added as a todo, and false again after that todo is done", () => {
+    const added = [ideaTodo("Try X", "a", 1)];
+    expect(todoAdded(added, "Try X")).toBe(true);
+    expect(todoAdded(added.map((t) => ({ ...t, status: "done" as const })), "Try X")).toBe(false);
+  });
+});
+
+describe("planMessage", () => {
+  it("asks for a plan for the idea", () => {
+    expect(planMessage("Try X")).toBe("Make a plan for this: Try X");
+    expect(planMessage(" Try X ")).toBe("Make a plan for this: Try X");
   });
 });
 

@@ -128,7 +128,18 @@ import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
 import RecentFolders from "./RecentFolders";
 import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
-import { DO_IT_MESSAGE, doItDisabled, hasDoIt, noteBoxes, noteLabel, shownCalls } from "./agent/replyNotes";
+import {
+  DO_IT_MESSAGE,
+  doItDisabled,
+  hasDoIt,
+  ideaTodo,
+  noteBoxes,
+  noteLabel,
+  offersOf,
+  planMessage,
+  shownCalls,
+  todoAdded,
+} from "./agent/replyNotes";
 import type { NoteKindId } from "./replyNoteKinds";
 import {
   PlanView,
@@ -1405,6 +1416,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       sessionId={sessionId}
       replyRunning={runActive || turnRunning}
       onDoIt={() => send(DO_IT_MESSAGE, undefined, () => {})}
+      todos={todos}
+      onAddTodo={(text) => updateSession((s) => ({ todos: [...s.todos, ideaTodo(text, newId().slice(0, 8), Date.now())] }))}
+      onMakePlan={(text) => send(planMessage(text), undefined, () => {})}
     />
   );
   // Each update_plan call's turn, to show the plan it wrote after that turn.
@@ -2401,6 +2415,9 @@ function MessageBubble({
   sessionId,
   replyRunning,
   onDoIt,
+  todos,
+  onAddTodo,
+  onMakePlan,
 }: {
   parts: ChatMessage[];
   streaming: boolean;
@@ -2429,6 +2446,13 @@ function MessageBubble({
   // button does: send "yes, go ahead" as the next message.
   replyRunning?: boolean;
   onDoIt?: () => void;
+  // The session's todos (an idea already added shows "Added"), and what the
+  // idea buttons do: add the idea as a todo, or send "Make a plan for this: …".
+  // Both wait while a reply runs, since the server owns the session then and
+  // would replace a todo added meanwhile.
+  todos?: Todo[];
+  onAddTodo?: (text: string) => void;
+  onMakePlan?: (text: string) => void;
 }) {
   // This message's own choice of formatted or raw text; null follows
   // Settings → Chat. Declared before the early return below, as hooks must be.
@@ -2635,6 +2659,29 @@ function MessageBubble({
                   <Button size="small" variant="outlined" color="warning" onClick={onDoIt} disabled={doItDisabled(!!replyRunning)} sx={{ flexShrink: 0 }}>
                     Do it
                   </Button>
+                )}
+                {offersOf(box).length > 0 && (
+                  <Stack direction="row" spacing={1} sx={{ flexShrink: 0, alignSelf: "center" }}>
+                    {offersOf(box).includes("todo") &&
+                      (() => {
+                        const added = todoAdded(todos ?? [], box.text);
+                        return (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={() => onAddTodo?.(box.text)}
+                            disabled={added || doItDisabled(!!replyRunning)}
+                          >
+                            {added ? "Added" : "Add to todos"}
+                          </Button>
+                        );
+                      })()}
+                    {offersOf(box).includes("plan") && (
+                      <Button size="small" variant="outlined" onClick={() => onMakePlan?.(box.text)} disabled={doItDisabled(!!replyRunning)}>
+                        Make plan
+                      </Button>
+                    )}
+                  </Stack>
                 )}
               </Box>
             </Box>

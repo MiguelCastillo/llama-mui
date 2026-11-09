@@ -5,7 +5,7 @@
 // come from the table in replyNoteKinds.ts. Never sent to the model as such:
 // the call and its result are what the history keeps.
 
-import type { ChatMessage, ToolCall } from "../api.ts";
+import type { ChatMessage, Todo, ToolCall } from "../api.ts";
 import { kindById, kindOfTool, NOTE_KINDS, NOTE_TOOL_NAMES, type NoteKind, type NoteKindId } from "../replyNoteKinds.ts";
 
 export const isNoteTool = (name: string) => NOTE_TOOL_NAMES.has(name);
@@ -92,3 +92,44 @@ export const DO_IT_MESSAGE = "yes, go ahead";
 // while a reply streams: the server would refuse the message).
 export const hasDoIt = (box: NoteBox) => box.canDo;
 export const doItDisabled = (replyRunning: boolean) => replyRunning;
+
+// ---- Turning an idea into a todo or a plan ----
+
+// The buttons a box offers besides "Do it", as its kind's table row says.
+export const offersOf = (box: NoteBox): NonNullable<NoteKind["offers"]> => kindById(box.kind)?.offers ?? [];
+
+// A todo's summary is at most this long (the todo tool's limit).
+export const TODO_SUMMARY_MAX = 80;
+
+// The first sentence of a text, cut to `max` characters at a word boundary
+// (a single word longer than that is cut where it hits the limit).
+function firstSentence(text: string, max: number): string {
+  const flat = text.trim().replace(/\s+/g, " ");
+  const end = flat.search(/[.!?](\s|$)/);
+  const sentence = end === -1 ? flat : flat.slice(0, end + 1);
+  if (sentence.length <= max) return sentence;
+  const cut = sentence.slice(0, max);
+  // Keep the whole word if the limit falls exactly on its end.
+  const atBoundary = sentence[max] === " ";
+  const space = cut.lastIndexOf(" ");
+  const words = atBoundary || space <= 0 ? cut : cut.slice(0, space);
+  return words.replace(/[\s,;:\-–—]+$/, "");
+}
+
+// The todo an idea becomes: its first sentence as the summary, the whole idea
+// as the description, no context. No model call is involved.
+export const ideaTodo = (text: string, id: string, now: number): Todo => ({
+  id,
+  summary: firstSentence(text, TODO_SUMMARY_MAX),
+  description: text.trim(),
+  context: "",
+  status: "open",
+  createdAt: now,
+});
+
+// Whether an open todo already holds this idea (a done one doesn't count, so
+// the idea can be added again).
+export const todoAdded = (todos: Todo[], text: string): boolean => todos.some((t) => t.status === "open" && t.description === text.trim());
+
+// What the "Make plan" button sends as the next message.
+export const planMessage = (text: string) => `Make a plan for this: ${text.trim()}`;

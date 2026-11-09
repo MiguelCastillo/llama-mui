@@ -166,8 +166,18 @@ idea in a quiet outlined box with a lightbulb and the label "Idea", an action
 item in a stronger box (warning-coloured bar on the left, light tint, bold
 text) labelled "Your action". Ideas come first, then actions, each kind up to
 its limit. An action with `canDo` also has a **Do it** button that sends "yes,
-go ahead" as your next message; it is disabled while a reply is streaming. The
-note calls are hidden from the tool-call rows in the steps. Replies that write
+go ahead" as your next message; it is disabled while a reply is streaming.
+An idea box has two buttons of its own, which the table offers per kind (an
+`offers` list on the row, set on the idea kind only, so a new kind can opt in
+without new drawing code). **Add to todos** saves the idea to the chat's todo
+list with no model call: the title is the idea's first sentence cut to 80
+characters at a word boundary, the description is the full idea text, and the
+context is empty. Once an open todo with that same description exists, the
+button reads "Added" and is disabled; this is worked out from the todos each
+time, not stored, so completing the todo (it's no longer open) offers the
+button again. **Make plan** sends "Make a plan for this: <the idea>" as your
+next message, the same way Do it sends its message, and is disabled while a
+reply is streaming. The note calls are hidden from the tool-call rows in the steps. Replies that write
 a plain-text "Your action:" line instead (older chats, or a model that doesn't
 use the tool) are shown as ordinary text, with no box, and read fine.
 

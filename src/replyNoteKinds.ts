@@ -29,6 +29,10 @@ export type NoteKind = {
   label: string;
   // At most this many per reply; more are dropped. No limit when absent.
   max?: number;
+  // Buttons the box offers besides "Do it": "todo" adds the note to the
+  // session's todos, "plan" asks the model to make a plan for it. None when
+  // absent.
+  offers?: ("todo" | "plan")[];
 };
 
 export const NOTE_KINDS: readonly NoteKind[] = [
@@ -41,6 +45,7 @@ export const NOTE_KINDS: readonly NoteKind[] = [
     toolSummary: "Show the user an idea under your reply, apart from the text.",
     label: "Idea",
     max: 2,
+    offers: ["todo", "plan"],
   },
   {
     id: "action",
