@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -16,6 +16,7 @@ import {
   List,
   ListItem,
   ListItemText,
+  MenuItem,
   Paper,
   Stack,
   Switch,
@@ -30,6 +31,7 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import AnthropicModels from "./AnthropicModels";
 import DefaultButton from "./DefaultButton";
+import { getSavedModelsConnectorId, pickModelsConnector, setSavedModelsConnectorId } from "./modelsConnector";
 import {
   type Connector,
   type Model,
@@ -50,8 +52,12 @@ import {
 // Options for each model on the selected server. They're saved per model id,
 // so they apply on any server that has the same model.
 export default function ModelsSection() {
-  // undefined while loading, null when no server is selected.
-  const [connector, setConnector] = useState<Connector | null | undefined>(undefined);
+  // Every configured connection, and the one this page shows. The pick is this
+  // page's own: the active connection in Settings only decides the first one.
+  const [connectors, setConnectors] = useState<Connector[] | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // undefined while loading, null when there is no connection to show.
+  const connector = connectors === null ? undefined : (connectors.find((c) => c.id === selectedId) ?? null);
   const [models, setModels] = useState<Model[] | null>(null);
   const [settings, setSettings] = useState<{ defaults: ModelSettings; models: Record<string, ModelSettings> } | null>(
     null,
@@ -75,19 +81,50 @@ export default function ModelsSection() {
       .catch((e) => setError(e.message));
     getConnectors()
       .then((l) => {
-        const active = l.connectors.find((c) => c.id === l.activeId) ?? null;
-        setConnector(active);
-        // Anthropic's API has no model manager; AnthropicModels lists its own.
-        if (active && active.kind === "llama") return listModelsAdmin(active.id).then(setModels);
+        setConnectors(l.connectors);
+        setSelectedId(pickModelsConnector(l.connectors, l.activeId, getSavedModelsConnectorId())?.id ?? null);
       })
       .catch((e) => setError(e.message));
   }, []);
+
+  // Lists the selected connection's models. Anthropic's API has no model
+  // manager; AnthropicModels lists its own. If the pick changes before the
+  // answer comes, the answer is dropped.
+  const connectorId = connector?.id;
+  const connectorKind = connector?.kind;
+  // The connection shown right now, so an action that finishes after the pick
+  // changed can tell its answer is for another connection and drop it.
+  const shownId = useRef<string | undefined>(undefined);
+  shownId.current = connectorId;
+  useEffect(() => {
+    if (!connectorId || connectorKind !== "llama") return;
+    let stale = false;
+    listModelsAdmin(connectorId)
+      .then((list) => !stale && setModels(list))
+      .catch((e) => !stale && setError(e.message));
+    return () => {
+      stale = true;
+    };
+  }, [connectorId, connectorKind]);
+
+  // Switches the connection this page shows: remembers it, and drops what the
+  // previous one left on the page (the effect above then loads the new models).
+  const selectConnector = (id: string) => {
+    setSavedModelsConnectorId(id);
+    setSelectedId(id);
+    setModels(null);
+    setSearchResults(null);
+    setSearchError(null);
+    setError(null);
+    setDeleting(null);
+    setLoading({});
+  };
 
   // Sets or, with "", clears the model chat starts with on this server.
   const changeDefault = (id: string) => {
     if (!connector) return;
     setDefaultModel(connector, id)
-      .then(setConnector)
+      .then((saved) => setConnectors((l) => l && l.map((c) => (c.id === saved.id ? saved : c))))
       .catch((e) => setError(e.message));
   };
 
@@ -110,38 +147,43 @@ export default function ModelsSection() {
   // until it's done, for up to two minutes (a big model takes a while to load).
   const setLoaded = async (id: string, load: boolean) => {
     if (!connector) return;
+    const cid = connector.id;
     setLoading((s) => ({ ...s, [id]: true }));
     try {
-      await (load ? loadModel : unloadModel)(connector.id, id);
+      await (load ? loadModel : unloadModel)(cid, id);
       const want = load ? "loaded" : "unloaded";
       for (let i = 0; i < 120; i++) {
-        const list = await listModelsAdmin(connector.id);
+        const list = await listModelsAdmin(cid);
+        // Stop polling if the page moved on to another connection.
+        if (shownId.current !== cid) break;
         setModels(list);
         if (list.find((m) => m.id === id)?.status === want) break;
         await new Promise((r) => setTimeout(r, 1000));
       }
     } catch (e: any) {
-      setError(e.message);
+      if (shownId.current === cid) setError(e.message);
     } finally {
       setLoading((s) => ({ ...s, [id]: false }));
     }
   };
 
   const handleDelete = async (id: string) => {
+    if (!connector) return;
+    const cid = connector.id;
     setLoading((s) => ({ ...s, [id]: true }));
     try {
-      const connectors = await getConnectors();
-      if (!connectors.activeId) throw new Error("No active connector");
-      await deleteModel(connectors.activeId, id);
-      setModels((m) => (m ? m.filter((x) => x.id !== id) : null));
+      await deleteModel(cid, id);
+      if (shownId.current === cid) setModels((m) => (m ? m.filter((x) => x.id !== id) : null));
     } catch (e: any) {
-      setError(e.message);
+      if (shownId.current === cid) setError(e.message);
     } finally {
       setLoading((s) => ({ ...s, [id]: false }));
     }
   };
 
   const handleSearch = async (query: string) => {
+    if (!connector) return;
+    const cid = connector.id;
     setSearching(true);
     setSearchError(null);
     if (!query.trim()) {
@@ -150,56 +192,78 @@ export default function ModelsSection() {
       return;
     }
     try {
-      const results = await searchModels(query);
-      setSearchResults(results);
+      const results = await searchModels(cid, query);
+      if (shownId.current === cid) setSearchResults(results);
     } catch (e: any) {
-      setSearchError(e.message);
-      setSearchResults([]);
+      if (shownId.current === cid) {
+        setSearchError(e.message);
+        setSearchResults([]);
+      }
     } finally {
       setSearching(false);
     }
   };
 
   const startDownload = async (result: SearchResult) => {
+    if (!connector) return;
+    const cid = connector.id;
     setDownloading(result.id);
     try {
-      const connectors = await getConnectors();
-      if (!connectors.activeId) throw new Error("No active connector");
       const modelId = result.id;
       // Extract repo and quant from model id like "meta-llama/Llama-2-7b.Q4_K_M"
       const [repo, quant] = modelId.split(":");
       const model = quant ? `${repo}:${quant}` : repo;
-      await downloadModel(connectors.activeId, model);
+      await downloadModel(cid, model);
       // Refresh models list
-      const active = connectors.connectors.find((c) => c.id === connectors.activeId);
-      if (active) {
-        setModels(await listModelsAdmin(active.id));
-      }
+      const list = await listModelsAdmin(cid);
+      if (shownId.current === cid) setModels(list);
     } catch (e: any) {
-      setError(e.message);
+      if (shownId.current === cid) setError(e.message);
     } finally {
       setDownloading(null);
     }
   };
 
+  // Picks which connection's models to show; it doesn't change the active one.
+  const picker = connectors && connectors.length > 0 && (
+    <TextField
+      select
+      size="small"
+      label="Connection"
+      value={connector?.id ?? ""}
+      onChange={(e) => selectConnector(e.target.value)}
+      sx={{ alignSelf: "flex-start", minWidth: "15rem" }}
+    >
+      {connectors.map((c) => (
+        <MenuItem key={c.id} value={c.id}>
+          {c.name}
+        </MenuItem>
+      ))}
+    </TextField>
+  );
+
   if (connector?.kind === "anthropic") {
     return (
-      <AnthropicModels
-        connector={connector}
-        think={(id) => !!settingsFor(id)?.think}
-        setThink={setThink}
-        changeDefault={changeDefault}
-      />
+      <Stack spacing={2}>
+        {picker}
+        <AnthropicModels
+          connector={connector}
+          think={(id) => !!settingsFor(id)?.think}
+          setThink={setThink}
+          changeDefault={changeDefault}
+        />
+      </Stack>
     );
   }
 
   return (
     <Stack spacing={2}>
+      {picker}
       <Box>
         <Typography variant="h5">Models</Typography>
         <Typography color="text.secondary">
-          Options for each model on {connector ? connector.name : "the selected server"}. They follow the model to any
-          server that has it.
+          Options for each model on {connector ? connector.name : "the selected connection"}. They follow the model to
+          any server that has it.
         </Typography>
       </Box>
 

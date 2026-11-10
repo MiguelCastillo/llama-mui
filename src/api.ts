@@ -393,11 +393,8 @@ export function deleteModel(connectorId: string, model: string): Promise<void> {
 }
 
 // Search Hugging Face for GGUF models (per-connector endpoint)
-export function searchModels(query: string): Promise<SearchResult[]> {
-  return getActiveConnectorId().then((activeId) => {
-    if (!activeId) throw new Error("No active connector");
-    return call<any[]>("GET", `/api/c/${activeId}/models/search?q=${encodeURIComponent(query)}`).then((r) => r);
-  });
+export function searchModels(connectorId: string, query: string): Promise<SearchResult[]> {
+  return call<SearchResult[]>("GET", `/api/c/${connectorId}/models/search?q=${encodeURIComponent(query)}`);
 }
 
 // Per-model options, keyed by model id. Models nobody changed use defaults.
