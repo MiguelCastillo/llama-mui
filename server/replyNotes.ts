@@ -15,7 +15,9 @@ export const replyNoteInstructions =
   "\nEach is shown to the user in its own box under your reply, so don't repeat it in your reply text, " +
   "and your reply ends after the call. " +
   "Call a note tool only once you have what you need from other tools, because your reply ends after it " +
-  "and you won't see the results of anything else called in the same round.";
+  "and you won't see the results of anything else called in the same round. " +
+  'If one of them is turned off in Settings, write that one as a plain line at the end of your reply instead: ' +
+  '"Idea: …", or "Your action: …" in bold as its own paragraph.';
 
 // The cleaned text of a note call, or a ToolError saying what to fix.
 export function checkNote(args: any): string {

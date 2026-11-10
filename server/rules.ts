@@ -9,9 +9,9 @@ import { createTwoFilesPatch } from "diff";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { type ToolSpec, ToolError, fn, reasonOf, requireApproval } from "./toolkit.ts";
 
-// Missing file means this; an empty file means no extra rules.
-export const DEFAULT_RULES =
-  "After you commit, run `git --no-pager show --stat --oneline HEAD` and tell the user which files went in.";
+// Missing file means this: no rules of the user's own. What every user wants
+// is built in (workingRules); the file only tunes it.
+export const DEFAULT_RULES = "";
 
 // Every request carries it, so it can't be allowed to fill the context.
 export const MAX_RULES = 20_000;
@@ -22,6 +22,42 @@ const rulesFile = () => path.join(os.homedir(), ".llama-mui", "rules.md");
 // so a server still running the old code keeps working until it's restarted.
 const legacyFile = () => path.join(os.homedir(), ".llama-mui", "instructions.md");
 
+// How the agent works for anyone: the built-in rules, first in the system
+// prompt and the same for every user, so their cached start is shared. The
+// user's own rules come right after and win where they differ. With tools off
+// the model can't look anything up, run checks or show a note box, so it gets
+// only what still applies, and writes ideas and actions as plain lines.
+export function workingRules(withTools: boolean): string {
+  const heading = "How to work. These are built in; the user's standing rules, if any follow, change them where they differ.";
+  const question =
+    "- If the user's message is a question, answer it. Don't turn it into a plan or an action. " +
+    "If a message holds both a question and a request, answer the question first.";
+  if (!withTools) {
+    return [
+      heading,
+      question,
+      "- Say what you don't know or couldn't check.",
+      '- If you noticed something worth doing that the user didn\'t ask for, you may end with a line starting "Idea: …", ' +
+        "only when it's worth their time, at most two per reply. If something is left that only the user can do, " +
+        'end with a line starting "Your action: …", in bold, as its own paragraph at the very end of the reply.',
+    ].join("\n");
+  }
+  return [
+    heading,
+    question,
+    "- Finish the work the user asked for, including checking it: after changing code, run the project's own checks, " +
+      "whichever it has (tests, a type check, a build), and report the result. Don't ask permission for steps that " +
+      "belong to that work. Say what you didn't check or couldn't do. If you need the user's input to go on, ask a plain question.",
+    '- Before you say something doesn\'t exist, or say "I don\'t know" or "I can\'t", use a tool to look: the code, ' +
+      "settings, logs, git, read_thread or a search.",
+    "- If a tool is refused, or the user denies a request, don't ask again: use what you already have, " +
+      "say what you couldn't check, and carry on.",
+    "- After you commit, run `git --no-pager show --stat --oneline HEAD` and tell the user which files went in.",
+    "- Use add_idea for something worth doing that the user didn't ask for, and add_action_item for anything left " +
+      "for the user, instead of writing either as a line in your reply.",
+  ].join("\n");
+}
+
 // The user's rules as the model first meets them: the governing rule set, which
 // comes before anything about tools and is sent whether or not tools are on. It
 // says what the text is and where it lives, so the model knows it as the user's
@@ -31,7 +67,8 @@ export function governingRules(text: string): string | null {
   if (!rules) return null;
   return [
     "Standing rules from the user. They come from the file ~/.llama-mui/rules.md, which the user edits in " +
-      "Settings → Agent, and they apply in every chat, with or without tools. Follow them over your own habits.",
+      "Settings → Agent, and they apply in every chat, with or without tools. Follow them over your own habits " +
+      "and over the built-in way of working above.",
     rules,
   ].join("\n\n");
 }

@@ -15,7 +15,7 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => home.dir, default: { ...actual, homedir: () => home.dir } };
 });
 
-const { DEFAULT_RULES, MAX_RULES, ruleRoutes } = await import("../rules.ts");
+const { DEFAULT_RULES, MAX_RULES, ruleRoutes, workingRules } = await import("../rules.ts");
 const { toolRoutes } = await import("../tools.ts");
 const { RULE_TOOLS } = await import("../rules.ts");
 const { ApprovalNeeded } = await import("../toolkit.ts");
@@ -98,27 +98,34 @@ describe("the agent's rules file", () => {
 });
 
 describe("the system prompt", () => {
-  it("opens with the labelled rules, then the tools' help, the home folder, and the working directory last", async () => {
-    await invoke("DELETE");
-    let parts = (await prompt()).split("\n\n");
-    expect(parts[0]).toMatch(/^Standing rules from the user\..*~\/\.llama-mui\/rules\.md.*with or without tools/s);
-    expect(parts[1]).toBe(DEFAULT_RULES);
-    expect(parts[2]).toMatch(/^You have tools/);
+  it("opens with the built-in way of working, then the labelled rules, the tools' help, the home folder, and the working directory last", async () => {
+    await invoke("PUT", { text: "Be brief." });
+    const parts = (await prompt()).split("\n\n");
+    expect(parts[0]).toBe(workingRules(true));
+    expect(parts[1]).toMatch(/^Standing rules from the user\..*~\/\.llama-mui\/rules\.md.*with or without tools.*built-in/s);
+    expect(parts[2]).toBe("Be brief.");
+    expect(parts[3]).toMatch(/^You have tools/);
+    expect(parts[4]).toMatch(/add_rule/);
     expect(parts.at(-2)).toBe(`The user's home folder is ${home.dir}.`);
     expect(parts.at(-1)).toBe("Working directory: /work");
-    expect(parts[3]).toMatch(/add_rule/);
-
-    await invoke("PUT", { text: "Be brief." });
-    parts = (await prompt()).split("\n\n");
-    expect(parts[1]).toBe("Be brief.");
-    expect(parts).not.toContain(DEFAULT_RULES);
   });
 
-  it("has no rules block for an empty file", async () => {
-    await invoke("PUT", { text: "  \n" });
-    const parts = (await prompt()).split("\n\n");
-    expect(parts[0]).toMatch(/^You have tools/);
-    expect(parts.some((p) => p.startsWith("Standing rules"))).toBe(false);
+  it("has no rules block without a file or for an empty one, and keeps the built-in way of working", async () => {
+    expect(DEFAULT_RULES).toBe("");
+    for (const set of [() => invoke("DELETE"), () => invoke("PUT", { text: "  \n" })]) {
+      await set();
+      const parts = (await prompt()).split("\n\n");
+      expect(parts[0]).toBe(workingRules(true));
+      expect(parts[1]).toMatch(/^You have tools/);
+      expect(parts.some((p) => p.startsWith("Standing rules"))).toBe(false);
+    }
+  });
+
+  it("tells a model with tools to use the note tools and show commits, and one without to write plain lines", () => {
+    expect(workingRules(true)).toMatch(/add_action_item/);
+    expect(workingRules(true)).toContain("git --no-pager show --stat --oneline HEAD");
+    expect(workingRules(false)).not.toMatch(/add_action_item|add_idea|tool/);
+    expect(workingRules(false)).toMatch(/"Your action: …", in bold/);
   });
 
   it("is the same for every session except the last line", async () => {
@@ -133,7 +140,8 @@ describe("the system prompt", () => {
     await save({ ...store, toolsEnabled: false });
     try {
       const text = await prompt();
-      expect(text).toMatch(/^Standing rules from the user\./);
+      expect(text.startsWith(workingRules(false))).toBe(true);
+      expect(text).toContain("Standing rules from the user.");
       expect(text).toContain("Be brief.");
       expect(text).not.toContain("You have tools");
       expect(text).not.toContain("Working directory");
@@ -186,7 +194,7 @@ describe("add_rule", () => {
     const approval = await asked({ text: "Check git first." });
     expect((approval as any).action).toBe("create");
     await run({ text: "Check git first." }, JSON.stringify(approval));
-    expect(await readFile(file(), "utf8")).toBe(`${DEFAULT_RULES}\n- Check git first.\n`);
+    expect(await readFile(file(), "utf8")).toBe("- Check git first.\n");
   });
 
   it("refuses an empty rule, a repeat, a long one, and one that would pass the size limit", async () => {

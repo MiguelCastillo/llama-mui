@@ -486,7 +486,7 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
 
 | Layer | What it holds | When it's sent | How long it holds |
 |---|---|---|---|
-| **System prompt** | What holds for the whole session: your standing rules first, then how to use each tool group, the plan rules, your home folder, the working directory | First in every request, and never changed in a session, except when you clear the context | The whole session |
+| **System prompt** | What holds for the whole session: the built-in way of working first, then your standing rules, then how to use each tool group, the plan rules, your home folder, the working directory | First in every request, and never changed in a session, except when you clear the context | The whole session |
 | **Chat update** | Facts about the session that changed since: other attachments, a new working directory, tools turned off | After your next message, only when the facts changed | Until the next chat update replaces it |
 | **Note** | An instruction for one turn: the planning note (see [How plans work](#how-plans-work)) | After the message it's for | That turn only |
 
@@ -521,16 +521,24 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   if you pick another one later, a chat update says so. Clearing the context
   makes the model reprocess its history anyway, so that is when the prompt is
   brought up to date: it names the working directory as it is then.
-- **Your rules** are the governing rules for the model; tools are only
+- **The built-in way of working** (`workingRules` in `server/rules.ts`) opens
+  the system prompt, the same for every user: answer a question instead of
+  turning it into a plan; finish and check the work without asking permission
+  for its steps, and say what wasn't checked; look with a tool before saying
+  something doesn't exist or can't be done; don't ask again after a refusal;
+  after a commit, show which files went in; and put ideas and things left for
+  you in the note tools, not in the reply. With tools off it keeps only what
+  still applies, and ideas and actions become plain "Idea: …" and bold
+  "Your action: …" lines. Behaviour every user would want belongs here, not
+  in a rules file.
+- **Your rules** tune that and govern the model; tools are only
   helpers under them. They are a plain file, `~/.llama-mui/rules.md`,
-  edited in Settings → Agent. They open the system prompt, under a heading that
-  says they are your standing rules, where the file is, and that they apply in
-  every chat, with or without tools. In a chat with tools off they are all the
-  system prompt holds. Clearing the context doesn't remove them: they aren't
+  edited in Settings → Agent. They come right after the built-in way of
+  working, under a heading that says they are your standing rules, where the
+  file is, that they apply in every chat, with or without tools, and that they
+  win over the built-in way of working. Clearing the context doesn't remove them: they aren't
   part of the history, and the file is read again on every message. Without
-  the file the default applies: after a commit the agent runs `git --no-pager
-  show --stat --oneline HEAD` and tells you which files went in. An empty
-  file means no extra rules, and "Reset to default" deletes the file. The file
+  the file, or with an empty one, there are no rules of your own, and "Reset to default" deletes the file. The file
   used to be called `instructions.md`: if there is no `rules.md` the server
   copies that one over, once, and leaves the old file alone (so a server
   still running the old code keeps working); "Reset to default" removes both.

@@ -4,7 +4,7 @@
 import os from "node:os";
 import { DISK_TOOLS, checkAttachments, checkWorkingDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
-import { RULE_TOOLS, governingRules, readRules, ruleTools } from "./rules.ts";
+import { RULE_TOOLS, governingRules, readRules, ruleTools, workingRules } from "./rules.ts";
 import { readRecentFolders, withFolder, writeRecentFolders } from "./recentFolders.ts";
 import { load, save } from "./store.ts";
 import {
@@ -180,21 +180,24 @@ const isOffered = (ctx: ToolContext, t: ToolSpec) => ctx.store.toolsEnabled && !
 // them would mean saving their text in the session. An edit therefore makes the
 // next message reprocess the start once, and the same for every session. Only
 // the working directory differs, so it must stay last: anything per-session
-// earlier would make each new session reprocess the rest. The rules come
-// first because they govern everything after them; an edit to them reprocesses
-// the tools' help too, which is a few hundred tokens. The home folder is
+// earlier would make each new session reprocess the rest. The built-in way of
+// working (workingRules) opens it, the same for every user; the user's rules
+// follow because they tune it and govern everything after them; an edit to
+// them reprocesses the tools' help too, which is a few hundred tokens. The home folder is
 // the same in every session; without it a model with nothing attached guessed
 // Linux paths like /home/user. The session's own address (sessionNote) is the
 // one line no other session shares, so it is last: the working directory is
 // shared by every session in a project, and a session reuses another's cache
 // up to the first line that differs.
-function toolsSystemPrompt(promptDir: string | null, rulesText: string, withTools: boolean, sessionLine: string | null = null): string | null {
-  // The user's rules govern the model and come first; the tools' help, the home
-  // folder and the working directory follow, and only when there are tools.
+function toolsSystemPrompt(promptDir: string | null, rulesText: string, withTools: boolean, sessionLine: string | null = null): string {
+  // The built-in way of working comes first (the same for everyone), then the
+  // user's rules, which tune it; the tools' help, the home folder and the
+  // working directory follow, and only when there are tools.
   const rules = governingRules(rulesText);
-  if (!withTools) return rules;
+  const start = [workingRules(withTools), ...(rules ? [rules] : [])];
+  if (!withTools) return start.join("\n\n");
   return [
-    ...(rules ? [rules] : []),
+    ...start,
     "You have tools. Use one when it helps answer the question; otherwise answer directly.",
     ...GROUPS.map((g) => g.instructions),
     `The user's home folder is ${os.homedir()}.`,

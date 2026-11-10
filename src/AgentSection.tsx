@@ -37,7 +37,8 @@ export default function AgentSection() {
       <Box>
         <Typography variant="h5">Agent</Typography>
         <Typography color="text.secondary">
-          The rules the model follows in every chat, ahead of anything about its tools. Plain text, kept in{" "}
+          Your own rules for the model, in every chat. They tune its built-in way of working and win where they
+          differ. Plain text, kept in{" "}
           <code>~/.llama-mui/rules.md</code>; empty means none. The model can propose a line to add, and you approve it.
         </Typography>
       </Box>
