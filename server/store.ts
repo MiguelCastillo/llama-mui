@@ -36,8 +36,6 @@ export type Api = "anthropic" | "openai";
 
 export interface Preferences {
   showContextMeter: boolean;
-  // Thoughts and tool calls inside replies.
-  showSteps: boolean;
   // Formatting in messages; off shows the raw text.
   renderMarkdown: boolean;
   // Each plan step starts with a fresh context (see runPlan in
@@ -96,7 +94,7 @@ const empty = (): Store => ({
   connectors: [],
   toolsEnabled: true,
   disabledTools: [],
-  preferences: { showContextMeter: true, showSteps: true, renderMarkdown: true, freshPlanSteps: true, showModelName: false },
+  preferences: { showContextMeter: true, renderMarkdown: true, freshPlanSteps: true, showModelName: false },
   models: {},
   checkCommands: {},
 });
@@ -147,6 +145,10 @@ async function loadNow(): Promise<Store> {
   // Older versions kept an "active" connection here; each chat picks its own now.
   delete raw.activeId;
   const connectors: any[] = Array.isArray(raw.connectors) ? raw.connectors : [];
+  // Merge preferences key by key so ones added later get their defaults. "Show
+  // steps" was a preference once; an old file may still hold it, so it's dropped.
+  const preferences: Preferences = { ...base.preferences, ...raw.preferences };
+  delete (preferences as any).showSteps;
   const { keys, locked: lockedIds } = await openKeys();
   // Keys an older version left in the file: moved into .keys, read back to
   // check, and only then taken out of the file. They win over what .keys holds,
@@ -158,14 +160,13 @@ async function loadNow(): Promise<Store> {
     const back = (await openKeys()).keys;
     if (legacy.some((c) => back[c.id] !== c.apiKey)) throw new Error("Couldn't check the API keys after encrypting them; settings.json was left as it was.");
     Object.assign(keys, merged);
-    await writeSettings({ ...base, ...raw, connectors, preferences: { ...base.preferences, ...raw.preferences } });
+    await writeSettings({ ...base, ...raw, connectors, preferences });
   }
-  // Merge preferences key by key so ones added later get their defaults.
   const store: Store = {
     ...base,
     ...raw,
     connectors: connectors.map((c) => ({ ...c, apiKey: keys[c.id] ?? "" })),
-    preferences: { ...base.preferences, ...raw.preferences },
+    preferences,
   };
   locked.set(store, lockedIds);
   return store;

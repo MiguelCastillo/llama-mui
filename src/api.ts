@@ -455,7 +455,6 @@ export const updateModelSettings = (
 // Chat display preferences, saved with the rest of the settings.
 export interface Preferences {
   showContextMeter: boolean;
-  showSteps: boolean;
   renderMarkdown: boolean;
   freshPlanSteps: boolean;
   showModelName: boolean;

@@ -7,7 +7,6 @@ import { type Preferences, load, save } from "./store.ts";
 // junk in settings.json.
 const VALIDATORS: Record<keyof Preferences, (v: unknown) => boolean> = {
   showContextMeter: (v) => typeof v === "boolean",
-  showSteps: (v) => typeof v === "boolean",
   renderMarkdown: (v) => typeof v === "boolean",
   freshPlanSteps: (v) => typeof v === "boolean",
   showModelName: (v) => typeof v === "boolean",

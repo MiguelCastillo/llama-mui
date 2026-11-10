@@ -37,10 +37,21 @@ describe("the model name preference", () => {
   it("is off for a settings file saved before it existed, and the other preferences are kept", async () => {
     const dir = path.join(home.dir, ".llama-mui");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ preferences: { showSteps: false, renderMarkdown: true } }));
+    writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ preferences: { renderMarkdown: false } }));
     const prefs = (await load()).preferences;
     expect(prefs.showModelName).toBe(false);
-    expect(prefs.showSteps).toBe(false);
+    expect(prefs.renderMarkdown).toBe(false);
+  });
+
+  it("loads a settings file that still holds the removed Show steps preference, and doesn't return it", async () => {
+    const dir = path.join(home.dir, ".llama-mui");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ preferences: { showSteps: false, renderMarkdown: false } }));
+    const prefs = (await load()).preferences;
+    expect(prefs).not.toHaveProperty("showSteps");
+    expect(prefs.renderMarkdown).toBe(false);
+    expect(await invoke("GET")).toMatchObject({ status: 200 });
+    expect((await invoke("GET")).body).not.toHaveProperty("showSteps");
   });
 
   it("can be turned on and off through the preferences route", async () => {

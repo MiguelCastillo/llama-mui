@@ -125,7 +125,7 @@ describe("settings and keys", () => {
     await rm(SECRET_KEY_FILE);
     const locked = await load();
     expect(locked.connectors[0].apiKey).toBe("");
-    locked.preferences.showSteps = false;
+    locked.preferences.showModelName = true;
     await save(locked);
     expect(JSON.parse(await readFile(KEYS_FILE, "utf8")).keys.c1).toBeDefined();
   });

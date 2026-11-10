@@ -13,11 +13,6 @@ const OPTIONS: { key: keyof Preferences; label: string; summary: string }[] = [
       "Show how much context is left under the Send button. Click it for token counts, speed and Clear context; turning this off hides Clear context too.",
   },
   {
-    key: "showSteps",
-    label: "Show steps",
-    summary: "Show the model's thinking and tool calls inside each reply, with how long each took. Off shows just the answer.",
-  },
-  {
     key: "renderMarkdown",
     label: "Render Markdown",
     summary:

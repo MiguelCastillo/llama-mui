@@ -1476,16 +1476,41 @@ step that was running when the page closed comes back as pending.
   the model is loaded, and sends nothing if it isn't: your message stays in the
   box, with a note to load it from the model menu. Opening an old chat picks
   its model, but doesn't load it.
-- Streaming replies with a Stop button (on a phone) or Esc (wide screens). Each step of a reply (thinking, tool
-  calls) shows how long it took; hover for token counts. Hide the steps in
-  **Settings → Chat** to see just the answers.
+- Streaming replies with a Stop button (on a phone) or Esc (wide screens).
+- A reply reads in the order the model worked. Each round (one trip to the
+  model) shows its short note first, and below it that round's steps (its
+  thinking and its tool calls) folded into one grey line, for example
+  "3 steps". Then comes the next round's note and line, ending with the
+  answer. The model sometimes skips the note and goes straight to more steps;
+  such a round joins the line above it, so two lines never sit side by side
+  with no note between them (the count adds up and the step rows inside stay
+  in order). Whether the model meant a new round or more steps of the same one
+  isn't shown. The last round has no tool calls, so its thinking line (if it
+  has any) sits above the answer, and it doesn't join the line above. Each
+  line starts closed; click it to open the
+  step rows (the **Thoughts** bar and the tool calls), each with how long it
+  took (hover for token counts). A line stays open only while the chat is on
+  screen. There is no setting for this. The reply's total time is in the small
+  print under the reply. A reply that is only steps (say, stopped in the
+  middle of a tool call) shows just the line.
+- While a reply runs, the notes and step lines above are folded into one
+  line at the bottom of the reply: a small spinner, the model's latest note
+  on a single line (cut off with "…" if it's long; hover for all of it), the
+  time since the task started, and an arrow. It says "Thinking…" when there is
+  no note yet. It starts closed; click it to see the history so far, laid out
+  exactly like a finished reply (each note with its steps line beneath). Once
+  the model starts writing the final answer, the line goes away and the
+  answer streams as normal text, so an answer is never hidden behind it. When
+  the reply ends, the line disappears and the finished layout shows. A reply
+  with no start time (one that isn't a live task) keeps the waiting dots and
+  shows its history as it comes.
 - The chat follows new output while you're at the bottom. Scroll up to read
   back, even while a reply streams, and it stays put; a down arrow at the
   bottom jumps to the latest and follows again, as does scrolling back down or
   sending a message.
-- While a reply runs, a counter next to the waiting dots shows how long it's
-  taken, with the speed it's streaming at; during a plan run it's on the plan
-  card. A finished reply keeps the total in small print, for example
+- While a reply runs, a counter shows how long it's taken: on the live line
+  (time only), or, while the answer is being written, next to the waiting dots
+  with the speed it's streaming at; during a plan run it's on the plan card. A finished reply keeps the total in small print, for example
   "2.8s · 52 tps (client) · 58 tps (server)": the client speed is what reached
   the browser, the server speed is llama.cpp's own figure for generating it. A
   big gap means the server was slow to deliver (say, while loading another

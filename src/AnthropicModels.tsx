@@ -81,9 +81,9 @@ export default function AnthropicModels({
           carefully. <b>Default</b> sends nothing, so the model's own default applies. Each
           message carries the effort set when it was sent, queued ones included. Models differ in what they take: one
           that takes no effort (Haiku 4.5) has no picker, and the others list only the levels they support. In
-          chat, Claude's message starts with a grey bar labelled <b>Thoughts</b>, above the answer; click it to read a
-          summary of what Claude thought; the time it spent shows at the bar's right end. (The bar needs{" "}
-          <b>Show steps</b> on in Settings → Chat.)
+          chat, each round of Claude's work has a grey line such as <b>2 steps</b>; click it to open the steps, where a
+          bar labelled <b>Thoughts</b> holds a summary of what Claude thought; the time it spent shows at the bar's
+          right end.
         </Typography>
       )}
     </Stack>

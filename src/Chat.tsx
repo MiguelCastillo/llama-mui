@@ -119,6 +119,13 @@ import { connectionForChat, pickModel } from "./modelChoice";
 import { getSavedModelsConnectorId, pickModelsConnector, setSavedModelsConnectorId } from "./modelsConnector";
 import { autoApproves } from "./autoApprove";
 import { copyText } from "./clipboard";
+import { flatAccordionSx, formatSeconds } from "./stepFormat";
+import StepsRow from "./StepsRow";
+import LiveLine from "./LiveLineRow";
+import { liveLine } from "./liveLine";
+import Elapsed, { type StreamRate } from "./Elapsed";
+import { stepSummary } from "./stepSummary";
+import { groupRounds } from "./stepGroups";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import { createMessageBox, type MessageBox, type PendingImage } from "./messageBox";
 import EditButton from "./EditButton";
@@ -1803,7 +1810,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         rate={streamRate}
         toolResults={t.results}
         forgotten={t.start < contextStart}
-        showSteps={prefs?.showSteps ?? true}
         renderMarkdown={prefs?.renderMarkdown ?? true}
         showModelName={prefs?.showModelName ?? false}
         failed={i === lastFailedTurnIndex ? failed : undefined}
@@ -2962,7 +2968,6 @@ const MessageBubble = memo(function MessageBubble({
   streaming,
   toolResults,
   forgotten,
-  showSteps,
   renderMarkdown,
   showModelName,
   failed,
@@ -2992,8 +2997,6 @@ const MessageBubble = memo(function MessageBubble({
   toolResults: Map<string, ChatMessage>;
   // Above a Clear context divider: shown dimmed since the model can't see it.
   forgotten: boolean;
-  // Off: only the answer text shows, no thinking or tool calls (Settings → Chat).
-  showSteps: boolean;
   // Off: messages show as typed, Markdown symbols and all (Settings → Chat).
   renderMarkdown: boolean;
   // Off: the line under a reply leaves out the model's name (Settings → Chat).
@@ -3032,7 +3035,7 @@ const MessageBubble = memo(function MessageBubble({
   onMakePlan?: (text: string) => void;
 }) {
   // This message's own choice of formatted or raw text; null follows
-  // Settings → Chat. Declared before the early return below, as hooks must be.
+  // Settings → Chat.
   const [override, setOverride] = useState<boolean | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   // A long message of yours: whether it is unfolded, and whether it is tall
@@ -3057,19 +3060,75 @@ const MessageBubble = memo(function MessageBubble({
   // The waiting dots: shown while the reply's newest turn has nothing yet,
   // which is from sending until the first text, thinking or tool call, and
   // again between rounds of tool calls (each round starts a new, empty turn).
-  // Once thinking streams, the thinking panel shows instead, with the same
-  // dots in its header until the thinking ends. A plan step's
-  // turns render under the step, so during a run its dots are inside the
+  // Once thinking streams, the steps row says "Thinking…" instead. A plan
+  // step's turns render under the step, so during a run its dots are inside the
   // collapsed details and the step's own spinner is what shows.
-  const waiting = showSteps
-    ? streaming && !last.content && !last.reasoning && !last.toolCalls?.length
-    : streaming && !last.content;
-  // With steps hidden, a finished reply that was all steps (e.g. stopped
-  // mid-tool) would be an empty box.
+  const waiting = streaming && !last.content && !last.reasoning && !last.toolCalls?.length;
+  // While a reply runs (and the task's start is known) its history folds into
+  // one live line at the bottom: the latest note, a spinner and the elapsed
+  // time, with the history inside. Once the newest round is writing the
+  // answer the line is left out and the answer streams as normal text.
+  const live = !isUser && streaming && since != null ? liveLine(parts) : null;
+  const showLiveLine = !!live && !live.writingAnswer;
+  // One round's steps (its thinking and shown tool calls) fold into one row
+  // of their own, put under that round's note, or above the answer when the
+  // round has no tool calls. Null for a round with no steps.
+  // Rounds with no note of their own (the model skipped it) join the row of
+  // the round before them, so two rows never sit side by side with no note
+  // between them (see stepGroups.ts). A round that joins draws no row; the
+  // first round of its group draws one for all of them.
+  const roundGroups = isUser ? [] : groupRounds(parts);
+  const groupOf = (m: ChatMessage): ChatMessage[] => {
+    const at = roundGroups.findIndex((g) => g.round === m);
+    if (at < 0) return [m];
+    const group = [m];
+    for (let i = at + 1; i < roundGroups.length && roundGroups[i].joinsPrevious; i++) group.push(roundGroups[i].round);
+    return group;
+  };
+  const stepsRowFor = (m: ChatMessage): ReactNode => {
+    if (isUser || m.role !== "assistant") return null;
+    if (roundGroups.find((g) => g.round === m)?.joinsPrevious) return null;
+    const group = groupOf(m);
+    const sum = stepSummary(group);
+    if (sum.count === 0) return null;
+    return (
+      <StepsRow summary={sum}>
+        {group.map((r, ri) => (
+          <Fragment key={ri}>
+            {r.reasoning && (
+              <Accordion disableGutters elevation={0} sx={flatAccordionSx}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  {/* While it's thinking, the same dots as waiting for a reply. */}
+                  {streaming && r === last && !r.content && !r.toolCalls ? (
+                    <TypingDots label="Thinking" />
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      Thoughts
+                    </Typography>
+                  )}
+                  <StepTime
+                    stats={r.stats}
+                    detail={(s) => `Thought for ${formatSeconds(s.ms)}${s.tokens ? `, ≈${s.tokens.toLocaleString()} tokens` : ""}`}
+                  />
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-wrap" }}>
+                    {r.reasoning}
+                  </Typography>
+                </AccordionDetails>
+              </Accordion>
+            )}
+            {shownCalls(r.toolCalls).map((c) => (
+              <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} stopped={!streaming} />
+            ))}
+          </Fragment>
+        ))}
+      </StepsRow>
+    );
+  };
 
   // Ideas and action items under a finished reply (never while it streams).
   const notes = !isUser && !streaming ? noteBoxes(parts) : [];
-  if (!isUser && !showSteps && !waiting && !parts.some((m) => m.content) && !notes.length) return null;
   const hasError = !!failed;
   const errorLine = failed && (
     <Stack spacing={0.5} sx={{ alignItems: isUser ? "flex-end" : "flex-start", mt: 0.5, flexShrink: 0 }}>
@@ -3185,31 +3244,12 @@ const MessageBubble = memo(function MessageBubble({
           {parts[0].replyTo.text}
         </Typography>
       )}
-      {parts.map((m, i) => (
+      {(() => {
+        const history = parts.map((m, i) => (
         <Fragment key={i}>
-          {showSteps && m.reasoning && (
-            <Accordion disableGutters elevation={0} sx={flatAccordionSx}>
-              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                {/* While it's thinking, the same dots as waiting for a reply. */}
-                {streaming && m === last && !m.content && !m.toolCalls ? (
-                  <TypingDots label="Thinking" />
-                ) : (
-                  <Typography variant="body2" color="text.secondary">
-                    Thoughts
-                  </Typography>
-                )}
-                <StepTime
-                  stats={m.stats}
-                  detail={(s) => `Thought for ${formatSeconds(s.ms)}${s.tokens ? `, ≈${s.tokens.toLocaleString()} tokens` : ""}`}
-                />
-              </AccordionSummary>
-              <AccordionDetails>
-                <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-wrap" }}>
-                  {m.reasoning}
-                </Typography>
-              </AccordionDetails>
-            </Accordion>
-          )}
+          {/* A round's steps row: under its note when the round calls tools,
+              above the answer when it doesn't. */}
+          {!shownCalls(m.toolCalls).length && stepsRowFor(m)}
           {m.content &&
             (() => {
               const body = !showMarkdown ? (
@@ -3251,12 +3291,20 @@ const MessageBubble = memo(function MessageBubble({
               ))}
             </Stack>
           )}
-          {showSteps &&
-            shownCalls(m.toolCalls).map((c) => (
-              <ToolCallView key={c.id} call={c} result={toolResults.get(c.id)} stopped={!streaming} />
-            ))}
+          {shownCalls(m.toolCalls).length > 0 && stepsRowFor(m)}
         </Fragment>
-      ))}
+        ));
+        // Live: the history sits inside the line's details, closed until
+        // opened, and the line comes last. Finished (or writing the answer):
+        // the history is the reply itself, as it always was.
+        return showLiveLine && live && since != null ? (
+          <LiveLine text={live.text} since={since}>
+            {history}
+          </LiveLine>
+        ) : (
+          history
+        );
+      })()}
       {notes.map((box, i) => (
         // The Panel is spaced by the reply card's rule for non-step
         // children; its look comes from the Panel's table of styles. The
@@ -3336,15 +3384,16 @@ const MessageBubble = memo(function MessageBubble({
           </Box>
         </Panel>
       ))}
-      {streaming && since != null ? (
+      {streaming && since != null && !showLiveLine ? (
         // The counter sits beside the waiting dots, and stays on this
-        // line once text streams in and the dots go.
+        // line once text streams in and the dots go. The live line has its
+        // own timer, so this is only for a reply writing its answer.
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: "1.5em" }}>
           {waiting && <TypingDots />}
           <Elapsed since={since} rate={rate} variant="caption" color="text.secondary" />
         </Box>
       ) : (
-        waiting && <TypingDots />
+        !showLiveLine && waiting && <TypingDots />
       )}
       {hidden && showHidden && (
         <Typography
@@ -3450,27 +3499,6 @@ const MessageBubble = memo(function MessageBubble({
 // width of a "0" and follows the font size; prose letters are narrower, so
 // 90ch holds about 98 characters of ordinary text.
 const CHAT_MAX_WIDTH = "calc(90ch + 3rem)";
-
-// Flat, compact look shared by the tool-call and reasoning accordions: no
-// fill, a hairline between rows, a short summary row.
-const flatAccordionSx = {
-  bgcolor: "transparent",
-  borderTop: 1,
-  borderColor: "divider",
-  // The reply's Stack puts a top margin on each sibling; the doubled selector
-  // wins over it so the rows sit flush, divided only by the hairline.
-  "&&": { mt: 0 },
-  "&:before": { display: "none" },
-  // The first row sits against the card's top, and needs no hairline above it:
-  // the card's own border is there.
-  "&:first-of-type": { borderTop: 0 },
-  "& .MuiAccordionSummary-root": { minHeight: "1.75rem", px: 1, py: 0 },
-  "& .MuiAccordionSummary-root.Mui-expanded": { minHeight: "1.75rem" },
-  "& .MuiAccordionSummary-content": { my: 0.25 },
-  "& .MuiAccordionSummary-content.Mui-expanded": { my: 0.25 },
-  "& .MuiAccordionSummary-expandIconWrapper .MuiSvgIcon-root": { fontSize: "1.25rem" },
-  "& .MuiAccordionDetails-root": { px: 1, pt: 0.5, pb: 1 },
-} as const;
 
 // One tool call: what was asked for, and the result once it's back.
 // `stopped`: the reply isn't running any more, so a call with no result
@@ -3946,41 +3974,6 @@ function DiffView({ diff }: { diff: string }) {
     </Box>
   );
 }
-
-interface StreamRate {
-  pieces: number;
-  // performance.now() of the round's first piece; 0 until it arrives.
-  first: number;
-}
-
-// Time since `since`, in whole seconds ("42s", "1m 05s"), updated every second,
-// and with `rate`, the current round's tokens per second once it has streamed
-// for a second (so the wait before the first token doesn't count). Other
-// props go to the Typography.
-function Elapsed({ since, rate, ...rest }: { since: number; rate?: { current: StreamRate } } & TypographyProps) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  const sec = Math.max(0, Math.floor((now - since) / 1000));
-  const r = rate?.current;
-  const streamedFor = r?.first ? (performance.now() - r.first) / 1000 : 0;
-  const speed = r && streamedFor >= 1 ? ` · ${Math.round(r.pieces / streamedFor)} tps (client)` : "";
-  return (
-    <Typography component="span" variant="inherit" {...rest} sx={{ fontVariantNumeric: "tabular-nums", ...rest.sx }}>
-      {sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`}
-      {speed}
-    </Typography>
-  );
-}
-
-const formatSeconds = (ms: number) => {
-  const sec = ms / 1000;
-  if (sec < 10) return `${sec.toFixed(1)}s`;
-  if (sec < 60) return `${Math.round(sec)}s`;
-  return `${Math.floor(sec / 60)}m ${String(Math.round(sec % 60)).padStart(2, "0")}s`;
-};
 
 // How tall your message may be before it folds: about five lines of the page's
 // text (body1 is 1.5rem a line).

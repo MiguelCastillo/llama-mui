@@ -394,9 +394,9 @@ export default function ModelsSection() {
           <Stack spacing={1}>
             <Typography variant="body2" color="text.secondary">
               <b>Think</b> (before answering) lets a reasoning model (like Qwen) work through the problem before it
-              writes its answer. In chat, the model's message then starts with a grey bar labelled <b>Thoughts</b>, above
-              the answer. Click the bar to read what the model worked out; the time it spent thinking shows at the bar's
-              right end. (The bar needs <b>Show steps</b> on in Settings → Chat.) Thinking helps with hard questions but
+              writes its answer. In chat, the model's message then starts with a grey line such as <b>2 steps</b>; click
+              it to open the steps, where a bar labelled <b>Thoughts</b> holds what the model worked out. Click that bar
+              to read it; the time it spent thinking shows at the bar's right end. Thinking helps with hard questions but
               is slower, and small models can spend minutes on simple ones. Models whose chat template has no thinking
               mode ignore the switch.
             </Typography>
