@@ -1,12 +1,10 @@
 import { useState, type ReactNode } from "react";
-import { Box, Button, CircularProgress, Collapse, Paper, Stack, Typography } from "@mui/material";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
-import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import { Box, Button, Collapse, Paper, Stack, Typography } from "@mui/material";
 import { reportParts, threadStatusWord, type NoteView } from "./planThread";
 import WorktreeLines from "./WorktreeLines";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { PanelAction } from "./Panel";
-import { DoneIcon } from "./DoneMark";
+import { StatusIcon } from "./StatusMark";
 
 // The status icons are as tall as the heading text, not MUI's fixed small size.
 const statusIconSx = { fontSize: "1.25em", flexShrink: 0 } as const;
@@ -71,12 +69,10 @@ export default function ThreadNote({
       <Stack spacing={1.5}>
         <Box>
           <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            {view.running && <CircularProgress size="1.25em" sx={{ flexShrink: 0 }} aria-label="Running" />}
-            {isDone && <DoneIcon aria-label="Done" sx={{ ...statusIconSx }} />}
-            {ended && status === "failed" && <ErrorOutlineIcon color="error" aria-label="Failed" sx={{ ...statusIconSx }} />}
-            {ended && status === "unfinished" && (
-              <WarningAmberIcon color="warning" aria-label="Not finished" sx={{ ...statusIconSx }} />
-            )}
+            {view.running && <StatusIcon kind="running" aria-label="Running" sx={statusIconSx} />}
+            {isDone && <StatusIcon kind="done" aria-label="Done" sx={statusIconSx} />}
+            {ended && status === "failed" && <StatusIcon kind="failed" aria-label="Failed" sx={statusIconSx} />}
+            {ended && status === "unfinished" && <StatusIcon kind="stopped" aria-label="Not finished" sx={statusIconSx} />}
             <Typography variant="subtitle1" component="h3" sx={{ fontWeight: 700 }}>
               {threadStatusWord(status)}
             </Typography>
@@ -92,6 +88,7 @@ export default function ThreadNote({
         {prompt && <Box>{prompt}</Box>}
         {needsYouLine && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <StatusIcon kind="needsYou" fontSize="small" sx={{ flexShrink: 0 }} />
             <Typography variant="body2" color="warning.main">
               Needs you
             </Typography>

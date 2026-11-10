@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Alert, Box, Button, Chip, CircularProgress, IconButton, Link, Stack, Tooltip, Typography } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import CheckIcon from "@mui/icons-material/Check";
 import {
   type Connector,
   type Model,
@@ -12,16 +11,18 @@ import {
   testConnector,
 } from "./api";
 import { modelReady, setWelcomeHidden, settingsHash, welcomeDone, welcomeSteps } from "./welcomeState";
+import { StatusIcon } from "./StatusMark";
 
 function Step({ done, title, children }: { done: boolean; title: string; children: React.ReactNode }) {
   return (
     <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
       {/* A mark, not a control: it turns green by itself when the app's state says the step is done. */}
-      <CheckIcon
+      <StatusIcon
+        kind={done ? "done" : "pending"}
+        fontSize="medium"
         role="img"
         aria-hidden={false}
         aria-label={`${title}: ${done ? "done" : "not done"}`}
-        color={done ? "success" : "disabled"}
         sx={{ mt: 0.25 }}
       />
       <Box sx={{ minWidth: 0 }}>
@@ -190,9 +191,12 @@ export default function Welcome() {
       )}
       {finished ? (
         <Stack spacing={1} sx={{ alignItems: "flex-start" }}>
-          <Typography role="status" color="success.main" sx={{ fontWeight: 500 }}>
-            You're all set.
-          </Typography>
+          <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+            <StatusIcon kind="done" fontSize="small" />
+            <Typography role="status" color="success.main" sx={{ fontWeight: 500 }}>
+              You're all set.
+            </Typography>
+          </Stack>
           <Button variant="contained" onClick={startChatting}>
             Start chatting
           </Button>
@@ -200,9 +204,12 @@ export default function Welcome() {
       ) : (
         <>
           {steps.connect && (
-            <Typography role="status" color="success.main">
-              Connected. Next: choose a model.
-            </Typography>
+            <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+              <StatusIcon kind="done" fontSize="small" />
+              <Typography role="status" color="success.main">
+                Connected. Next: choose a model.
+              </Typography>
+            </Stack>
           )}
           <Typography variant="body2" color="text.secondary">
             Then type a message in the chat.{" "}

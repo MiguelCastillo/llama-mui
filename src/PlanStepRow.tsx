@@ -4,30 +4,30 @@
 // passes it in.
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Box, Button, CircularProgress, Stack, TextField, Tooltip, Typography } from "@mui/material";
+import { Box, Button, Stack, TextField, Tooltip, Typography } from "@mui/material";
 import { PanelButton, PanelToolbar, revealToolbarSx } from "./Panel";
-import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
-import CancelIcon from "@mui/icons-material/Cancel";
 import ReplayOutlinedIcon from "@mui/icons-material/ReplayOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
-import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
 import MarkDoneIcon from "@mui/icons-material/Done";
-import { DoneIcon } from "./DoneMark";
+import { StatusIcon } from "./StatusMark";
 import { type PlanStep } from "./api";
 import { canMarkDone, stepLine } from "./agent/plan";
 
 export type StepEdit = { i: number; text: string; summary: string };
 
+// The looks come from StatusIcon. A disputed step and a waiting one both need
+// the user, so they share a look. The spinner is 1rem with a small margin, so
+// it takes the same room as an icon at fontSize small and rows don't shift.
 const STATUS_ICON: Record<PlanStep["status"], ReactNode> = {
-  pending: <RadioButtonUncheckedIcon fontSize="small" color="disabled" />,
-  running: <CircularProgress size="1rem" sx={{ m: "0.125rem" }} />,
-  done: <DoneIcon fontSize="small" />,
-  failed: <CancelIcon fontSize="small" color="error" />,
-  disputed: <HelpOutlineIcon fontSize="small" color="warning" />,
-  waiting: <HelpOutlineIcon fontSize="small" color="warning" />,
+  pending: <StatusIcon kind="pending" fontSize="small" />,
+  running: <StatusIcon kind="running" fontSize="small" sx={{ fontSize: "1rem", m: "0.125rem" }} />,
+  done: <StatusIcon kind="done" fontSize="small" />,
+  failed: <StatusIcon kind="failed" fontSize="small" />,
+  disputed: <StatusIcon kind="needsYou" fontSize="small" />,
+  waiting: <StatusIcon kind="needsYou" fontSize="small" />,
 };
 
 // A step put back to pending, keeping its id and its summary (the summary key

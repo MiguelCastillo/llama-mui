@@ -59,7 +59,6 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
 import SearchOffIcon from "@mui/icons-material/SearchOff";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
 import StickyNote2OutlinedIcon from "@mui/icons-material/StickyNote2Outlined";
 import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
@@ -185,7 +184,7 @@ import {
   uploadImage,
 } from "./runClient";
 import ThreadNote from "./ThreadNote";
-import { DoneIcon } from "./DoneMark";
+import { StatusIcon } from "./StatusMark";
 import {
   clearOnShow,
   clearSendRefusal,
@@ -2608,10 +2607,10 @@ const NOTE_STYLES: Record<NoteKindId, { icon?: ReactNode; label: SxProps<Theme>;
 };
 
 // A box the user marked done looks the same whatever its kind: the shared done
-// mark (DoneMark.tsx, the one "done" look in the UI), a bold label in the normal
+// mark (StatusMark.tsx, the one "done" look in the UI), a bold label in the normal
 // text colour, and muted text. The box itself stays the quiet grey of the Panel.
 const DONE_STYLE: { icon: ReactNode; label: SxProps<Theme>; text: SxProps<Theme> } = {
-  icon: <DoneIcon fontSize="small" sx={{ flexShrink: 0 }} />,
+  icon: <StatusIcon kind="done" fontSize="small" sx={{ flexShrink: 0 }} />,
   label: { fontWeight: 700 },
   text: { color: "text.secondary" },
 };
@@ -2732,7 +2731,7 @@ function MessageBubble({
   const errorLine = failed && (
     <Stack spacing={0.5} sx={{ alignItems: isUser ? "flex-end" : "flex-start", mt: 0.5, flexShrink: 0 }}>
       <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
-        <ErrorOutlineIcon fontSize="small" color="error" />
+        <StatusIcon kind="failed" fontSize="small" />
         {/* The raw error is for debugging, so it waits on hover. */}
         <Tooltip title={failed === INTERRUPTED ? "" : failed}>
           <Typography variant="caption" color="error.main">

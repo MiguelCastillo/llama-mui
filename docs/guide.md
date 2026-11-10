@@ -1131,10 +1131,9 @@ the step, not in the chat.
   the chat scrolled to the plan, and, on a done note with more than its
   follow-up to say, **Details**, which shows the rest of the report (then
   **Hide details**). The heading and summary are not a button.
-- "Done" looks the same everywhere: the outlined green check circle from the
-  shared done mark. A finished thread's note, a done plan step and a done
-  action box all use it, and any new "done" state should use it too, so the
-  look is changed in one place and doesn't drift.
+- Statuses look the same everywhere: a thread note's heading, a plan step, a
+  done action box and a failed reply all draw them from one shared table of
+  looks (see [How a status looks](#how-a-status-looks)).
 - Pressing Run does not open the thread: you stay in the chat. When the thread
   needs you, its note shows the question with the same buttons the thread shows:
   approve or deny a command or a file change (with the command or diff), or
@@ -1180,6 +1179,47 @@ the step, not in the chat.
 - A plan in a chat saved before plans had a place is pinned after the last
   message when the chat opens, so new messages go below it. A plan whose
   turn is compacted away moves to the top, where that turn was.
+
+### How a status looks
+
+Every status is drawn from one shared table of looks (`src/StatusMark.tsx`),
+all outlined icons. Change a look there, not where it is used, and give any new
+status one of these six rather than its own icon. Only the look is shared: the
+states themselves and their words (a step's pending, running, done, failed,
+disputed or waiting; a thread's done, failed or not finished) are unchanged.
+
+| Look | Icon | Used for |
+| --- | --- | --- |
+| Running | spinner | a step that is running; a thread note while its run goes |
+| Not started | grey empty circle | a pending step |
+| Done | green check circle | a done step; a thread that is done; an action marked done |
+| Failed | red circle with an exclamation | a failed step; a thread that failed; a reply that failed |
+| Needs you | amber circle with a question mark | a step that is waiting for an answer or disputed |
+| Stopped | amber warning triangle | a thread that is **Not finished** (stopped, interrupted or waiting) |
+
+A failed step used to show a filled red cross; it now shows the same outlined
+exclamation as a failed thread and a failed reply.
+
+A step and the thread that holds it are not drawn alike on purpose. A disputed
+step shows **Needs you**, because it is waiting for you to decide. But a thread
+with a failed or a disputed step is **Failed**, as a whole, since something went
+wrong in it and it can't go on by itself. A thread that merely stopped, with no
+step failed or disputed (you paused it, the server restarted, or a step is
+waiting for an answer), is **Not finished** and shows **Stopped**.
+
+Besides plan steps and thread notes' headings, the same icons are used in these
+places, so nothing draws done or needs-you its own way:
+
+- The **Welcome** checklist: a small **Done** check on a finished step,
+  **Not started** on one that isn't, and a small **Done** check before
+  "Connected. Next: choose a model." and "You're all set."
+- The key row in **Settings**: **Done** beside "key saved", **Not started**
+  beside "no key".
+- **Needs you** on a thread note (before the words) and in the sessions list
+  (where the amber dot was).
+
+Chips (such as Online / Offline or a model being loaded) and MUI alerts are
+deliberately not part of this: they keep their own looks.
 
 ### Pausing and discarding a plan
 

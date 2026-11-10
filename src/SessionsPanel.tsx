@@ -31,6 +31,7 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SearchIcon from "@mui/icons-material/Search";
 import SubdirectoryArrowRightIcon from "@mui/icons-material/SubdirectoryArrowRight";
 import type { SessionSummary } from "./api";
+import { StatusIcon } from "./StatusMark";
 import { buildSessionTree, deleteLockedIds, filterTree, groupNames, groupTree, type SessionNode } from "./sessionTree";
 import { useMemo, useState } from "react";
 
@@ -207,11 +208,12 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
               <ListItemText primary={title} slotProps={{ primary: { noWrap: true, variant: "body1" } }} />
               {/* A plan here is waiting on you; the open session shows its own prompt. */}
               {s.id !== currentId && attention.has(s.id) && (
-                <Box
+                <StatusIcon
+                  kind="needsYou"
                   role="img"
                   aria-label="Needs you"
-                  title="Needs you"
-                  sx={{ width: "0.5rem", height: "0.5rem", ml: 1, borderRadius: "50%", bgcolor: "warning.main", flexShrink: 0 }}
+                  titleAccess="Needs you"
+                  sx={{ fontSize: "1rem", ml: 1, flexShrink: 0 }}
                 />
               )}
             </>

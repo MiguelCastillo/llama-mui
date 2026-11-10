@@ -33,7 +33,6 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import DnsOutlinedIcon from "@mui/icons-material/DnsOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
-import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
 import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
 import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
 import ChatOutlinedIcon from "@mui/icons-material/ChatOutlined";
@@ -56,6 +55,7 @@ import AgentSection from "./AgentSection";
 import ChatSection from "./ChatSection";
 import ModelsSection from "./ModelsSection";
 import PhoneSection from "./PhoneSection";
+import { StatusIcon } from "./StatusMark";
 import ToolsSection from "./ToolsSection";
 import { hasWelcomeMarker, WELCOME_HASH, afterSave, setWelcomeHidden, settingsHash, welcomeBannerStep } from "./welcomeState";
 
@@ -252,7 +252,7 @@ function ConnectorsSection() {
                   {c.url}
                 </Typography>
                 <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", color: "text.secondary" }}>
-                  <KeyOutlinedIcon sx={{ fontSize: "0.875rem" }} color={c.hasKey ? "success" : "disabled"} />
+                  <StatusIcon kind={c.hasKey ? "done" : "pending"} sx={{ fontSize: "0.875rem" }} />
                   <Typography variant="caption" sx={{ whiteSpace: "nowrap" }}>
                     {c.hasKey ? "key saved" : "no key"}
                   </Typography>
