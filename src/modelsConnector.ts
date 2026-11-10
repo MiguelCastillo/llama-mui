@@ -1,21 +1,12 @@
-// Which connection the Models page shows. It is its own pick, kept in this
-// browser, so changing the active connection in Settings doesn't move it.
+// The connection last used, kept in this browser. The Models page opens on it
+// and keeps its own pick there; no connection is "active" for the whole app.
 
 const KEY = "llama-mui:models-connector";
 
-// The connection to show: the saved one if it still exists, else the active
-// one, else the first, else none.
-export function pickModelsConnector<T extends { id: string }>(
-  connectors: T[],
-  activeId: string | null,
-  savedId: string | null,
-): T | null {
-  return (
-    connectors.find((c) => c.id === savedId) ??
-    connectors.find((c) => c.id === activeId) ??
-    connectors[0] ??
-    null
-  );
+// The connection to use: the remembered one if it still exists, else the
+// first, else none.
+export function pickModelsConnector<T extends { id: string }>(connectors: T[], savedId: string | null): T | null {
+  return connectors.find((c) => c.id === savedId) ?? connectors[0] ?? null;
 }
 
 export function getSavedModelsConnectorId(): string | null {

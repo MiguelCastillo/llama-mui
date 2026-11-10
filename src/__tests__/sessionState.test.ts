@@ -97,6 +97,19 @@ describe("sessionState", () => {
     expect(s.model).toBe("big");
   });
 
+  it("saves the connection it is given, and leaves it out without one", () => {
+    expect(toSession(emptySessionState(), { id: "x", model: "m", connectorId: "c-1" }).connectorId).toBe("c-1");
+    expect("connectorId" in toSession(emptySessionState(), { id: "x", model: "m" })).toBe(false);
+    expect("connectorId" in toSession(emptySessionState(), { id: "x", model: "m", connectorId: null })).toBe(false);
+  });
+
+  it("tells two sessions on different connections apart", () => {
+    const a = toSession(emptySessionState(), { id: "x", model: "m", connectorId: "c-1" });
+    const b = toSession(emptySessionState(), { id: "x", model: "m", connectorId: "c-2" });
+    expect(stateKey(a)).not.toBe(stateKey(b));
+    expect(stateKey(a)).toBe(stateKey({ ...a }));
+  });
+
   it("saves autoApprove only when something is approved", () => {
     const none = toSession(emptySessionState(), { id: "x", model: "m" });
     expect("autoApprove" in none).toBe(false);
@@ -107,7 +120,7 @@ describe("sessionState", () => {
   it("saves every field of the state, and nothing else besides id, title and model", () => {
     const state = { ...emptySessionState(), autoApprove: { commands: true } };
     const saved = toSession(state, { id: "x", model: "m" });
-    const savedKeys = Object.keys(saved).filter((k) => !["id", "title", "model"].includes(k));
+    const savedKeys = Object.keys(saved).filter((k) => !["id", "title", "model", "connectorId"].includes(k));
     expect(savedKeys.sort()).toEqual(Object.keys(state).sort());
   });
 
@@ -174,7 +187,7 @@ describe("sessionState", () => {
     const serverOwned = ["userName", "group", "revision", "run"];
     // Typed as a record of every key, so a field added to Session fails to compile here until it is placed.
     const all: Record<keyof Session, true> = {
-      id: true, title: true, model: true, messages: true, contextStart: true, attachments: true,
+      id: true, title: true, model: true, connectorId: true, messages: true, contextStart: true, attachments: true,
       workingDir: true, usage: true, failed: true, plan: true, planProposal: true, planContext: true,
       planSummary: true, planAnchor: true, planId: true, pastPlans: true, promptDir: true, modelName: true,
       userName: true, group: true, todos: true, parentId: true, threads: true, autoApprove: true,
@@ -183,7 +196,7 @@ describe("sessionState", () => {
     const everySessionKey = Object.keys(all) as (keyof Session)[];
     const stateKeys = Object.keys(emptySessionState());
     for (const key of everySessionKey) {
-      if (["id", "title", "model", ...serverOwned].includes(key)) continue;
+      if (["id", "title", "model", "connectorId", ...serverOwned].includes(key)) continue;
       expect(stateKeys, key).toContain(key);
     }
   });

@@ -112,7 +112,10 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
         const userName = old ? (old.userName ?? null) : (body.userName ?? null);
         const group = old ? (old.group ?? null) : (body.group ?? null); // a PATCH's too
         const title = String(userName ?? modelName ?? body.title ?? "New session").slice(0, 100);
-        return { ...body, id, title, modelName, userName, group, createdAt: old?.createdAt ?? now, updatedAt: now };
+        // The chat's connection is kept when it is text and dropped otherwise.
+        const { connectorId, ...rest } = body;
+        const connection = typeof connectorId === "string" && connectorId ? { connectorId } : {};
+        return { ...rest, ...connection, id, title, modelName, userName, group, createdAt: old?.createdAt ?? now, updatedAt: now };
       },
       sent,
     );

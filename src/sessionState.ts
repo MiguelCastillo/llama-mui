@@ -89,7 +89,7 @@ export function emptySessionState(): SessionState {
 // What a session is compared by, to tell whether the server already holds it
 // (see savedKey in Chat). It is built from the state's own fields, so a field
 // added to the state is compared without being listed anywhere else, and
-// the model. Not the id or the title: the title comes from the names and the
+// the model and the connection. Not the id or the title: the title comes from the names and the
 // first message, and a saved one holds the user's name, which saves never send.
 // A field a session lacks counts as its empty value, so a session that left a
 // field out and one that holds it empty are the same.
@@ -97,11 +97,14 @@ export function stateKey(session: Session): string {
   const empty = emptySessionState();
   const held = session as unknown as Record<string, unknown>;
   const keys = Object.keys(empty) as (keyof SessionState)[];
-  return JSON.stringify([session.model, ...keys.map((k) => held[k] ?? empty[k])]);
+  return JSON.stringify([session.model, session.connectorId ?? null, ...keys.map((k) => held[k] ?? empty[k])]);
 }
 
 // The session as it is saved, built from the state.
-export function toSession(state: SessionState, { id, model }: { id: string; model: string }): Session {
+export function toSession(
+  state: SessionState,
+  { id, model, connectorId }: { id: string; model: string; connectorId?: string | null },
+): Session {
   const { autoApprove, ...rest } = state;
   const firstUser = state.messages.find((m) => m.role === "user")?.content ?? "New session";
   // The server puts the user's name, when there is one, ahead of this.
@@ -109,6 +112,8 @@ export function toSession(state: SessionState, { id, model }: { id: string; mode
     id,
     title: state.modelName ?? state.titleHint ?? firstUser.slice(0, 80),
     model,
+    // Left out when the chat has no connection, so such a session is saved as before.
+    ...(connectorId ? { connectorId } : {}),
     ...rest,
     // Left out when nothing is approved, so a session without approvals is saved as before.
     ...(Object.keys(autoApprove).length ? { autoApprove } : {}),

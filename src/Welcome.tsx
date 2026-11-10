@@ -12,6 +12,7 @@ import {
 } from "./api";
 import { modelReady, setWelcomeHidden, settingsHash, welcomeDone, welcomeSteps } from "./welcomeState";
 import { StatusIcon } from "./StatusMark";
+import { getSavedModelsConnectorId, pickModelsConnector } from "./modelsConnector";
 
 function Step({ done, title, children }: { done: boolean; title: string; children: React.ReactNode }) {
   return (
@@ -41,11 +42,11 @@ interface Snapshot {
   models: Model[];
 }
 
-// Reads the app's state from the server: the active connector, its test and,
-// when that passes, its models. Nothing is stored here.
+// Reads the app's state from the server: the connection last used (else the
+// first), its test and, when that passes, its models. Nothing is stored here.
 async function read(): Promise<Snapshot> {
   const l = await getConnectors();
-  const connector = l.connectors.find((c) => c.id === l.activeId) ?? null;
+  const connector = pickModelsConnector(l.connectors, getSavedModelsConnectorId());
   if (!connector) return { connector, connection: "failed", models: [] };
   const test = await testConnector({ id: connector.id }).catch(() => ({ ok: false as const }));
   const models = test.ok ? await listModels(connector.id).catch(() => []) : [];

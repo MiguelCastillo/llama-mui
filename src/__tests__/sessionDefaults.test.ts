@@ -65,6 +65,14 @@ describe("withSessionDefaults", () => {
     expect(withSessionDefaults({ id: "x", title: "t", model: "m", parentId: 5 } as unknown as Session).parentId).toBeNull();
   });
 
+  it("gives an old session no connection and keeps a saved one", () => {
+    const old = withSessionDefaults({ id: "x", title: "t", model: "m" } as Session);
+    expect(old.connectorId).toBeUndefined();
+    expect("connectorId" in old).toBe(false);
+    expect(withSessionDefaults({ id: "x", title: "t", model: "m", connectorId: 5 } as unknown as Session).connectorId).toBeUndefined();
+    expect(withSessionDefaults({ id: "x", title: "t", model: "m", connectorId: "c-1" } as Session).connectorId).toBe("c-1");
+  });
+
   it("keeps the parent a session is nested under", () => {
     expect(withSessionDefaults({ id: "x", title: "t", model: "m", parentId: "p" } as Session).parentId).toBe("p");
   });

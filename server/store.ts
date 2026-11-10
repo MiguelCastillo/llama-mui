@@ -54,7 +54,6 @@ export interface ModelSettings {
 }
 
 export interface Store {
-  activeId: string | null;
   connectors: Connector[];
   // The master switch in Settings → Tools: off, no tool is offered, and each
   // tool's own setting below is kept for when it goes back on.
@@ -89,7 +88,6 @@ async function moveOldSettings(): Promise<boolean> {
 
 // A function, not a constant, so callers never share (and mutate) its arrays.
 const empty = (): Store => ({
-  activeId: null,
   connectors: [],
   toolsEnabled: true,
   disabledTools: [],
@@ -141,6 +139,8 @@ async function loadNow(): Promise<Store> {
   const base = empty();
   // The recent working directories were briefly kept here; they have their own file now.
   delete raw.recentFolders;
+  // Older versions kept an "active" connection here; each chat picks its own now.
+  delete raw.activeId;
   const connectors: any[] = Array.isArray(raw.connectors) ? raw.connectors : [];
   const { keys, locked: lockedIds } = await openKeys();
   // Keys an older version left in the file: moved into .keys, read back to

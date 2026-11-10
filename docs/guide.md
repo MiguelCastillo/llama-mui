@@ -103,9 +103,17 @@ by its provider; `toMessages` and `toWire` turn the chat into each API's
 shape, so everything that calls `streamChat` (`src/agent/agent.ts`,
 `src/agent/plan.ts`, `src/agent/sessionNaming.ts`) works the same with any.
 
-Chat uses the selected connector. The plugin proxies chat requests at
-`/api/c/<id>/v1/...` to that server with its key, so keys never reach the
-browser (the SDK in the browser has a placeholder the proxy replaces).
+Connectors are configuration only: **Settings → Connectors** adds, edits and
+deletes them, and nothing there is "selected" or "active". Adding or editing
+one doesn't switch anything. Each chat picks its own connection with the
+**Connection** drop-down at the top of the chat (next to **Model**), and the
+**Models** page has its own **Connection** drop-down for the server whose
+models it shows. A new chat starts on the last-used connection (the last one
+picked in a chat or on the Models page, else the first in the list). Nested
+chats and plan threads start on their parent's connection. The plugin proxies
+chat requests at `/api/c/<id>/v1/...` to that chat's server with its key, so
+keys never reach the browser (the SDK in the browser has a placeholder the
+proxy replaces).
 
 **Tools** are things the model can do while answering, grouped by what they
 reach and switched on or off one by one (`server/tools.ts`), in **Settings →
@@ -870,7 +878,7 @@ nothing starts again by itself: see
 [After a restart](#after-a-restart).
 
 - **Run** saves the session first, then sends a `run` command with what the
-  page has chosen: the server (connector), the model, and whether Think
+  page has chosen for that chat: the server (connector), the model, and whether Think
   is on. The server looks up the connector, its models and the tools
   itself. The API key never goes to the page and never into the run: the run
   talks to the server's own `/api`, whose proxy adds the key to the request.
@@ -1370,7 +1378,16 @@ step that was running when the page closed comes back as pending.
   reloaded or the server restarted while it waited) gets a result saying it
   didn't run, when the session loads and before each request, so Resend works.
 
-- Model picker from the active server's `/v1/models`, laid out like the Models
+- Connection and model are chosen per chat. The **Connection** drop-down lists
+  the connectors by name, with **Manage connections** at the bottom to open
+  Settings → Connectors. The choice is saved with the chat, so reopening it
+  brings back its connection and model. An old chat saved before this takes the
+  last-used connection. If the chat's connection has since been deleted, the
+  drop-down is left empty and the chat says to pick another: it never switches
+  by itself. Changing the connection reloads its models and keeps the current
+  model if the new server has it, else uses that server's default model. Both
+  drop-downs are disabled while a run is going.
+- Model picker from the chat's connection's `/v1/models`, laid out like the Models
   page: each model's status, context and source, with ▶ / ■ to load or unload
   it. **Manage models** at the bottom opens Settings → Models, where models
   are also deleted.

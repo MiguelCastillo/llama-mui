@@ -59,6 +59,12 @@ describe("planToThread: the child", () => {
     expect(child.planMovedIn).toBe(true);
   });
 
+  it("inherits the parent's connection, and the parent keeps it", () => {
+    const { parent, child } = planToThread(parentSession({ connectorId: "c-1" }), "child")!;
+    expect(child.connectorId).toBe("c-1");
+    expect(parent.connectorId).toBe("c-1");
+  });
+
   it("is nested under the parent and inherits its model and folders", () => {
     const { child } = planToThread(parentSession(), "child")!;
     expect(child.id).toBe("child");

@@ -103,7 +103,6 @@ beforeEach(async () => {
   await save({
     ...(await load()),
     connectors: [{ id: "c1", name: "Studio", url: "http://127.0.0.1:1", apiKey: KEY, kind: "llama", api: "openai" }],
-    activeId: "c1",
   });
   setApiOrigin("http://self.test");
   vi.stubGlobal("fetch", (url: string, init?: RequestInit) => ownApi(url, init));

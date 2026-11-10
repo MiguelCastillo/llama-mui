@@ -246,7 +246,6 @@ export interface Connector {
 }
 
 export interface ConnectorList {
-  activeId: string | null;
   connectors: Connector[];
 }
 
@@ -306,15 +305,13 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 
 export const getConnectors = () => call<ConnectorList>("GET", "/api/connectors");
-export const getActiveConnectorId = () => call<{ activeId: string | null }>("GET", "/api/connectors").then((r) => r.activeId);
 export const createConnector = (input: ConnectorInput) => call<Connector>("POST", "/api/connectors", input);
 export const updateConnector = (id: string, input: ConnectorInput) => call<Connector>("PUT", `/api/connectors/${id}`, input);
 // Sets (or, with "", clears) a connector's default model. The update route
 // wants the name and address, so it's sent the connector's own.
 export const setDefaultModel = (c: Connector, defaultModel: string) =>
   updateConnector(c.id, { name: c.name, url: c.url, defaultModel });
-export const deleteConnector = (id: string) => call<{ activeId: string | null }>("DELETE", `/api/connectors/${id}`);
-export const setActiveConnector = (id: string) => call<{ activeId: string }>("PUT", "/api/active", { id });
+export const deleteConnector = (id: string) => call<{ ok: true }>("DELETE", `/api/connectors/${id}`);
 export const testConnector = (input: { id?: string; url?: string; apiKey?: string; clearKey?: boolean; kind?: Kind }) =>
   call<TestResult>("POST", "/api/connectors/test", input);
 
@@ -617,6 +614,10 @@ export interface Session {
   id: string;
   title: string;
   model: string;
+  // The connection this chat talks to (a Connector's id). Chats saved before
+  // connections were chosen per chat don't have it; chat then uses the
+  // last-used connection. A saved id may name a connection since deleted.
+  connectorId?: string;
   messages: ChatMessage[];
   contextStart: number;
   // The extra files and folders the model may read. The working directory is

@@ -92,7 +92,6 @@ beforeAll(async () => {
       { id: "up", name: "Studio", url: llamaUrl, apiKey: KEY, kind: "llama", api: "openai" },
       { id: "gone", name: "Nowhere", url: `http://127.0.0.1:${closedPort}`, apiKey: "", kind: "llama", api: "openai" },
     ],
-    activeId: "up",
   });
 });
 

@@ -5,8 +5,11 @@ import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 // A session as chat opens it, with a default for every field it reads: shared
 // or imported session.json files may lack some, and chat showed a blank page.
 export function withSessionDefaults(s: Session): Session {
+  const { connectorId, ...rest } = s;
   return {
-    ...s,
+    ...rest,
+    // Left out when missing or not text, so an old chat has none.
+    ...(typeof connectorId === "string" && connectorId ? { connectorId } : {}),
     messages: Array.isArray(s.messages) ? closeOpenToolCalls(s.messages) : [],
     contextStart: typeof s.contextStart === "number" ? s.contextStart : 0,
     attachments: Array.isArray(s.attachments) ? s.attachments : [],

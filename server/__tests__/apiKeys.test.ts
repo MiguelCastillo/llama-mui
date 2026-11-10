@@ -43,7 +43,6 @@ beforeAll(async () => {
   await save({
     ...(await load()),
     connectors: [{ id: "c1", name: "t", url: "http://127.0.0.1:1", apiKey: KEY, kind: "llama", api: "openai" }],
-    activeId: "c1",
   });
 });
 

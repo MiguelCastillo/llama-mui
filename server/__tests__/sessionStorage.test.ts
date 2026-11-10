@@ -86,6 +86,23 @@ describe("session routes", () => {
     expect(ids).not.toContain("only-worktrees");
   });
 
+  it("stores a chat's connectorId, returns it, and keeps it through a rename", async () => {
+    await call("PUT", ["conn-1"], saved("conn-1", { model: "m", connectorId: "c-1" }));
+    expect(JSON.parse(await readFile(sessionFile("conn-1"), "utf8")).connectorId).toBe("c-1");
+    expect((await call("GET", ["conn-1"])).body.connectorId).toBe("c-1");
+    await call("PATCH", ["conn-1"], { userName: "Renamed" });
+    expect((await call("GET", ["conn-1"])).body.connectorId).toBe("c-1");
+  });
+
+  it("ignores a connectorId that is not text, and a chat without one has none", async () => {
+    for (const [id, value] of [["conn-num", 5], ["conn-obj", { id: "x" }], ["conn-null", null], ["conn-empty", ""]] as const) {
+      await call("PUT", [id], saved(id, { connectorId: value }));
+      expect("connectorId" in JSON.parse(await readFile(sessionFile(id), "utf8"))).toBe(false);
+    }
+    await call("PUT", ["conn-none"], saved("conn-none"));
+    expect((await call("GET", ["conn-none"])).body.connectorId).toBeUndefined();
+  });
+
   it("carries parentId in the list and in the PUT and PATCH answers, and null without one", async () => {
     const put = await call("PUT", ["child-1"], saved("child-1", { parentId: "abc" }));
     expect(put.body.parentId).toBe("abc");

@@ -34,7 +34,6 @@ beforeAll(async () => {
   await save({
     ...(await load()),
     connectors: [{ id: "c1", name: "t", url: "http://127.0.0.1:1", apiKey: "sk-x", kind: "llama" }],
-    activeId: "c1",
   });
 });
 

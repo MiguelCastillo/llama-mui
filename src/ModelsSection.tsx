@@ -53,7 +53,7 @@ import {
 // so they apply on any server that has the same model.
 export default function ModelsSection() {
   // Every configured connection, and the one this page shows. The pick is this
-  // page's own: the active connection in Settings only decides the first one.
+  // page's own; the first one is the last-used connection.
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // undefined while loading, null when there is no connection to show.
@@ -82,7 +82,7 @@ export default function ModelsSection() {
     getConnectors()
       .then((l) => {
         setConnectors(l.connectors);
-        setSelectedId(pickModelsConnector(l.connectors, l.activeId, getSavedModelsConnectorId())?.id ?? null);
+        setSelectedId(pickModelsConnector(l.connectors, getSavedModelsConnectorId())?.id ?? null);
       })
       .catch((e) => setError(e.message));
   }, []);

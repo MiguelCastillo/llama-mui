@@ -64,6 +64,7 @@ import StickyNote2OutlinedIcon from "@mui/icons-material/StickyNote2Outlined";
 import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
+import DnsOutlinedIcon from "@mui/icons-material/DnsOutlined";
 import CloseIcon from "@mui/icons-material/Close";
 import ReplyOutlinedIcon from "@mui/icons-material/ReplyOutlined";
 import { keyframes } from "@mui/material/styles";
@@ -112,7 +113,8 @@ import {
   MAX_REPLY_QUOTE,
 } from "./api";
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
-import { pickModel } from "./modelChoice";
+import { connectionForChat, pickModel } from "./modelChoice";
+import { getSavedModelsConnectorId, pickModelsConnector, setSavedModelsConnectorId } from "./modelsConnector";
 import { autoApproves } from "./autoApprove";
 import { copyText } from "./clipboard";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
@@ -263,13 +265,61 @@ type Answer = boolean | "plan" | Picked[];
 // The model menu's "Manage models" item: its value opens Settings → Models
 // instead of picking a model.
 const MANAGE_MODELS = "__manage_models__";
+// The same for the connection menu's "Manage connections" item.
+const MANAGE_CONNECTIONS = "__manage_connections__";
+
+// How the connection and model menus open: a long list scrolls inside the menu
+// instead of running down the window. No padding under the list: the last item's
+// hover highlight then runs to the menu's edge, and its text is centered in all
+// the space below its line (the padding read as part of it, so the text looked high).
+const MENU_PROPS = { slotProps: { paper: { sx: { maxHeight: "min(26rem, 60vh)" } }, list: { sx: { pb: 0 } } } };
+
+// The last item of each menu ("Manage models", "Manage connections"). It stays
+// at the bottom while the list scrolls, under a thin line with a small gap above.
+// The line is a border, not a Divider: Select makes every child an option. The gap
+// is margin, outside the hover highlight, and the padding is even, so the text
+// stays centered. Anything scrolling under it must not show through: the item,
+// the gap (the ::before) and its hover and focus colours are all opaque, painted
+// over the menu's own background (and its dark-mode lightening).
+const manageItemSx: SxProps<Theme> = (t) => {
+  const p = (t.vars ?? t).palette;
+  const opaque = { backgroundColor: p.background.paper, backgroundImage: "var(--Paper-overlay)" };
+  const over = (c: string) => ({
+    backgroundColor: p.background.paper,
+    backgroundImage: `linear-gradient(${c}, ${c}), var(--Paper-overlay)`,
+  });
+  return {
+    position: "sticky",
+    bottom: 0,
+    zIndex: 1,
+    borderTop: 1,
+    borderColor: "divider",
+    mt: 1,
+    py: 1.25,
+    ...opaque,
+    // Positioned from the padding edge, which is under the 1px line: the strip
+    // ends at the line's top edge so it doesn't paint over the line.
+    "&::before": { content: '""', position: "absolute", left: 0, right: 0, top: "calc(-0.5rem - 1px)", height: "0.5rem", ...opaque },
+    "&:hover": over(p.action.hover),
+    "&.Mui-focusVisible": over(p.action.focus),
+  };
+};
 
 // What happened to a failed reply, in the user's terms. Our server answers 502
 // when it can't reach the llama server; a TypeError means the request never
 // got an answer at all.
 export default function Chat({ visible, onOpenSettings }: { visible: boolean; onOpenSettings: () => void }) {
-  // undefined until the first load, null when no server is configured.
-  const [connector, setConnector] = useState<Connector | null | undefined>(undefined);
+  // Every connection set up in Settings (undefined until the first load), and
+  // the one this chat saved (null: none yet, so it follows the last used one
+  // until its first run). `connector` is the chat's own connection: undefined
+  // until the list has loaded, null when there is none or the one this chat
+  // saved has been deleted.
+  const [connectors, setConnectors] = useState<Connector[] | undefined>(undefined);
+  const [connectorId, setConnectorId] = useState<string | null>(null);
+  const connector =
+    connectors === undefined ? undefined : connectionForChat(connectors, connectorId, getSavedModelsConnectorId());
+  // Bumped each time the list is read again, so the models are too.
+  const [connectorsRead, setConnectorsRead] = useState(0);
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   // Everything about the open chat that is saved with it, in one object (see
@@ -554,6 +604,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     savedKey.current = stateKey({ ...s, planAnchor: state.planAnchor, pastPlans: state.pastPlans });
     updateSession(state);
     if (s.model && !live) setModel(s.model);
+    // A chat saved without a connection (older than this) has none yet and
+    // follows the last used one; a run's own copy that lacks it leaves it be.
+    if (!live || s.connectorId) setConnectorId(s.connectorId ?? null);
   };
 
   // Set below, once refreshModels exists; the latest one, for the listener.
@@ -665,8 +718,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   }, []);
 
   // The session as it is now, built from the current state.
-  const snapshot = (): Session => {
-    return toSession(session, { id: sessionId, model });
+  // The chat's connection is saved with it once it has one of its own: a chat
+  // still following the last used connection is saved without, so opening an
+  // old chat doesn't count as a change. A run adopts the connection it runs on
+  // (`adopt`).
+  const snapshot = (adopt?: string): Session => {
+    return toSession(session, { id: sessionId, model, connectorId: connectorId ?? adopt });
   };
 
   // The server refused a save because the session is no longer what this page
@@ -715,7 +772,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return () => clearTimeout(timer);
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
-  }, [loaded, session, model]);
+  }, [loaded, session, model, connectorId]);
 
   // Set by openSession: once that session has loaded, the chat box scrolls to
   // its plan card instead of the end.
@@ -753,6 +810,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     savedKey.current = "";
     setRunnerView(null);
     updateSession(emptySessionState());
+    // The session's own connection comes with it (applySession); a session that
+    // can't be read opens as a new chat, on the last used connection.
+    setConnectorId(null);
     setDrawerOpen(false);
     loadSession(id);
   };
@@ -765,7 +825,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     try {
       const parent =
         parentId === sessionId
-          ? { id: sessionId, model, attachments, workingDir }
+          ? { id: sessionId, model, connectorId: connectorId ?? connector?.id, attachments, workingDir }
           : withSessionDefaults(await getSession(parentId));
       const child = nestedSessionFrom(parent, newId());
       const summary = await saveSession(child);
@@ -775,12 +835,21 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       showSessionError(from, e instanceof Error ? e.message : String(e));
     }
   };
-  // A new session starts on the connector's default model (see pickModel),
-  // not on whatever this tab last used; opening a saved one keeps its own.
+  // A new session starts on the last used connection and that connection's
+  // default model (see pickModel), not on whatever this chat last used; opening
+  // a saved one keeps its own.
   const newChat = () => {
     openSession(newId());
-    const start = pickModel({ current: "", defaultModel: connector?.defaultModel, models });
-    if (start) setModel(start);
+    const next = connectors ? pickModelsConnector(connectors, getSavedModelsConnectorId()) : null;
+    setConnectorId(next?.id ?? null);
+    if (next && next.id === connector?.id) {
+      // Its models are the ones listed already.
+      const start = pickModel({ current: "", defaultModel: next.defaultModel, models });
+      if (start) setModel(start);
+    } else {
+      // Another connection's models load next, and the model is picked from them.
+      setModel("");
+    }
   };
   // Discarding a plan (the card offers it only while nothing runs) asks first,
   // and removes the plan. If a run started meanwhile, it is stopped first. The steps' messages stay in the chat, and
@@ -912,37 +981,48 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Picking another model answers the note.
   useEffect(() => setNotLoaded(null), [model]);
 
-  // The active connector's default model, for refreshModels.
-  const defaultModelRef = useRef<string | undefined>(undefined);
-  const refreshModels = (connectorId: string) =>
-    listModels(connectorId)
+  // The chat's connection as of the latest render: a model list that arrives
+  // after the chat moved to another connection is not for it, and is dropped.
+  const connectorNow = useRef<string | null>(null);
+  connectorNow.current = connector?.id ?? null;
+  // Loads the connection's models and picks the one to use (see pickModel for
+  // the order, with the connection's own default model).
+  const refreshModels = (c: Connector) =>
+    listModels(c.id)
       .then((ms) => {
+        if (connectorNow.current !== c.id) return;
         setModels(ms);
-        // See pickModel for the order.
-        setModel((cur) => pickModel({ current: cur, defaultModel: defaultModelRef.current, models: ms }));
+        setModel((cur) => pickModel({ current: cur, defaultModel: c.defaultModel, models: ms }));
       })
       .catch((e) => {
+        if (connectorNow.current !== c.id) return;
         // Don't offer models from a server we can't reach.
         setModels([]);
         showGlobalError(e.message);
       });
 
   refreshModelsAfterTurn.current = () => {
-    if (connector) refreshModels(connector.id);
+    if (connector) refreshModels(connector);
   };
 
+  // The models follow the chat's connection: loaded when it is first known and
+  // whenever the chat moves to another one, and again each time the list of
+  // connections is read (below). A chat with no connection has no models.
+  useEffect(() => {
+    if (connector === undefined) return;
+    if (connector) refreshModels(connector);
+    else setModels([]);
+  }, [connector?.id, connectorsRead]);
+
   // Reload everything each time chat shows: Settings may have changed the
-  // server, its key or the folders, and a server that was down may be back.
+  // connections, their keys or the folders, and a server that was down may be back.
   useEffect(() => {
     if (!visible) return;
     setErrors((s) => clearOnShow(s, openId.current));
     getConnectors()
       .then((l) => {
-        const active = l.connectors.find((c) => c.id === l.activeId) ?? null;
-        setConnector(active);
-        defaultModelRef.current = active?.defaultModel;
-        if (active) refreshModels(active.id);
-        else setModels([]);
+        setConnectors(l.connectors);
+        setConnectorsRead((n) => n + 1);
       })
       .catch((e) => showGlobalError(e.message));
     getPreferences()
@@ -1177,7 +1257,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const options = runOptions();
     if (!options) return false;
     const id = sessionId;
-    const toSend = { ...snapshot(), messages: before };
+    // The chat is on the connection it runs on from now on.
+    setConnectorId(options.connectorId);
+    const toSend = { ...snapshot(options.connectorId), messages: before };
     const key = stateKey(toSend);
     // A first message saves the session just so the server has it to read; if
     // the message doesn't go, that empty session is removed again.
@@ -1257,7 +1339,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const options = runOptions();
     if (!options) return;
     const id = sessionId;
-    const toRun = { ...snapshot(), plan: planRef.current };
+    // The chat is on the connection it runs on from now on.
+    setConnectorId(options.connectorId);
+    const toRun = { ...snapshot(options.connectorId), plan: planRef.current };
     const key = stateKey(toRun);
     // Not sent again if the server already holds exactly this (see chatTurn).
     const inSync = sessions.some((x) => x.id === id) && savedKey.current === key;
@@ -1767,16 +1851,63 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               <Typography variant="h6" sx={{ lineHeight: 1.2 }} noWrap>
                 Llama MUI
               </Typography>
-              {connector && (
-                <Typography variant="caption" color="text.secondary" noWrap component="div">
-                  {connector.name}
-                </Typography>
-              )}
             </Box>
             <TextField
               select
               size="small"
-              label="Model"
+              // No visible label: the value says what it is. The name is for screen readers and hover.
+              // Empty until the connections load, and when this chat's connection
+              // was deleted: the user picks another, nothing is switched for them.
+              value={connector?.id ?? ""}
+              onChange={(e) => {
+                if (e.target.value === MANAGE_CONNECTIONS) {
+                  location.hash = "#/settings/connectors";
+                  return;
+                }
+                if (e.target.value === connector?.id) return;
+                // Kept as the last used one, so a new chat starts on it, and saved
+                // with this chat. The models of the new connection are loaded by
+                // the effect that follows the chat's connection, which picks the
+                // model again (see pickModel).
+                setSavedModelsConnectorId(e.target.value);
+                setModels([]);
+                setConnectorId(e.target.value);
+              }}
+              disabled={runActive}
+              sx={{ width: narrow ? "100%" : 200 }}
+              slotProps={{
+                select: {
+                  displayEmpty: true,
+                  renderValue: () =>
+                    connector ? (
+                      connector.name || connector.kind
+                    ) : (
+                      <Typography component="span" color="text.secondary">
+                        Choose a connection
+                      </Typography>
+                    ),
+                  SelectDisplayProps: { "aria-label": "Connection", title: "Connection" },
+                  MenuProps: MENU_PROPS,
+                },
+              }}
+            >
+              {(connectors ?? []).map((c) => (
+                <MenuItem key={c.id} value={c.id}>
+                  {c.name || c.kind}
+                </MenuItem>
+              ))}
+              {/* Its own value, since a Select item picks one (see onChange). */}
+              <MenuItem value={MANAGE_CONNECTIONS} sx={manageItemSx}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", color: "text.secondary" }}>
+                  <DnsOutlinedIcon fontSize="small" />
+                  <span>Manage connections</span>
+                </Stack>
+              </MenuItem>
+            </TextField>
+            <TextField
+              select
+              size="small"
+              // No visible label: the value says what it is. The name is for screen readers and hover.
               // While the list is still loading, or the server can't be reached, the
               // chosen model isn't among the options: the menu then has no value (MUI
               // warns about one that isn't an option) and still shows the name.
@@ -1791,8 +1922,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               // to the menu's edge, and its text is centered in all the space below
               // its line (the padding read as part of it, so the text looked high).
               slotProps={{
-                select: { displayEmpty: true, renderValue: () => model, MenuProps: { slotProps: { list: { sx: { pb: 0 } } } } },
-                inputLabel: { shrink: true },
+                select: {
+                  displayEmpty: true,
+                  renderValue: () =>
+                    model || (
+                      <Typography component="span" color="text.secondary">
+                        Choose a model
+                      </Typography>
+                    ),
+                  SelectDisplayProps: { "aria-label": "Model", title: "Model" },
+                  MenuProps: MENU_PROPS,
+                },
               }}
             >
               {models.map((m) => (
@@ -1846,10 +1986,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               ))}
               {/* A Select item picks a value, so this one has its own (see onChange).
                   The icon is the Models page's, from Settings. */}
-              {/* A border, not a Divider: Select makes every child an option. */}
-              {/* The space above the line is margin, outside the hover highlight;
-                  the padding is even, so the text stays centered in it. */}
-              <MenuItem value={MANAGE_MODELS} sx={{ borderTop: 1, borderColor: "divider", mt: 1, py: 1.25 }}>
+              <MenuItem value={MANAGE_MODELS} sx={manageItemSx}>
                 <Stack direction="row" spacing={1} sx={{ alignItems: "center", color: "text.secondary" }}>
                   <ViewInArOutlinedIcon fontSize="small" />
                   <span>Manage models</span>
@@ -1951,10 +2088,20 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           <Stack spacing={2}>
             {connector === null ? (
               <Stack spacing={2} sx={{ alignItems: "center", mt: 8 }}>
-                <Typography color="text.secondary">No llama server is set up yet.</Typography>
-                <Button variant="contained" onClick={onOpenSettings}>
-                  Add one in Settings
-                </Button>
+                {(connectors ?? []).length === 0 ? (
+                  <>
+                    <Typography color="text.secondary">No llama server is set up yet.</Typography>
+                    <Button variant="contained" onClick={onOpenSettings}>
+                      Add one in Settings
+                    </Button>
+                  </>
+                ) : (
+                  // This chat's saved connection was deleted: nothing is switched
+                  // for the user; they pick another in the Connection menu.
+                  <Typography color="text.secondary" sx={{ textAlign: "center" }}>
+                    This chat's connection no longer exists. Pick another one in the Connection menu.
+                  </Typography>
+                )}
               </Stack>
             ) : (
               // The session is still being read until `loaded`, so without it the

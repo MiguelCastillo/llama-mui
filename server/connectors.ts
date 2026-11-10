@@ -141,21 +141,10 @@ async function proxy(req: IncomingMessage, res: ServerResponse, id: string, rest
   );
 }
 
-// Handles /api/c/*, /api/active and /api/connectors/*; returns false for
-// anything else.
+// Handles /api/c/* and /api/connectors/*; returns false for anything else.
 export async function connectorRoutes({ req, res, parts, method, search }: Route): Promise<boolean> {
   if (parts[0] === "c" && parts[1] && parts[2] === "v1") {
     await proxy(req, res, parts[1], `/${parts.slice(2).join("/")}${search}`);
-    return true;
-  }
-
-  if (parts[0] === "active" && method === "PUT") {
-    const { id } = await readJson(req);
-    const store = await load();
-    find(store, id);
-    store.activeId = id;
-    await save(store);
-    sendJson(res, 200, { activeId: id });
     return true;
   }
 
@@ -163,7 +152,7 @@ export async function connectorRoutes({ req, res, parts, method, search }: Route
 
   if (parts.length === 1 && method === "GET") {
     const store = await load();
-    sendJson(res, 200, { activeId: store.activeId, connectors: store.connectors.map(publicView) });
+    sendJson(res, 200, { connectors: store.connectors.map(publicView) });
     return true;
   }
 
@@ -183,7 +172,6 @@ export async function connectorRoutes({ req, res, parts, method, search }: Route
     };
     const store = await load();
     store.connectors.push(c);
-    store.activeId ??= c.id;
     await save(store);
     sendJson(res, 201, publicView(c));
     return true;
@@ -232,9 +220,8 @@ export async function connectorRoutes({ req, res, parts, method, search }: Route
     const store = await load();
     find(store, parts[1]);
     store.connectors = store.connectors.filter((c) => c.id !== parts[1]);
-    if (store.activeId === parts[1]) store.activeId = store.connectors[0]?.id ?? null;
     await save(store);
-    sendJson(res, 200, { activeId: store.activeId });
+    sendJson(res, 200, { ok: true });
     return true;
   }
 

@@ -164,6 +164,11 @@ describe("nestedSessionFrom", () => {
     });
   });
 
+  it("starts on the parent's connection, and has none when the parent has none", () => {
+    expect(nestedSessionFrom({ ...parent, connectorId: "c-1" }, "child").connectorId).toBe("c-1");
+    expect("connectorId" in nestedSessionFrom(parent, "child")).toBe(false);
+  });
+
   it("does not share the attachments array with the parent", () => {
     const s = nestedSessionFrom(parent, "child");
     expect(s.attachments).not.toBe(attachments);

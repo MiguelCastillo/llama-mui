@@ -9,7 +9,7 @@ export interface WelcomeInput {
   connector: (Pick<Connector, "kind"> & { defaultModel?: string }) | null;
   // The latest connection test of that connector; undefined while it's running.
   connection: "ok" | "failed" | undefined;
-  // The active server's models.
+  // That connection's models.
   models: Pick<Model, "id" | "status">[];
 }
 

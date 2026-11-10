@@ -20,7 +20,6 @@ import {
   ListItemText,
   MenuItem,
   Paper,
-  Radio,
   Stack,
   TextField,
   Toolbar,
@@ -47,7 +46,6 @@ import {
   createConnector,
   deleteConnector,
   getConnectors,
-  setActiveConnector,
   testConnector,
   updateConnector,
 } from "./api";
@@ -192,7 +190,7 @@ function ConnectorsSection() {
         <Box sx={{ flexGrow: 1 }}>
           <Typography variant="h5">Connectors</Typography>
           <Typography color="text.secondary">
-            llama.cpp servers and Anthropic's API, which this app can talk to. Chat uses the selected one.
+            llama.cpp servers and Anthropic's API, which this app can talk to. Each chat picks its own connection.
           </Typography>
         </Box>
         <Button
@@ -225,19 +223,13 @@ function ConnectorsSection() {
             variant="outlined"
             sx={{
               py: 1,
-              pl: 0.5,
+              pl: 2,
               pr: 1,
               display: "flex",
               alignItems: "center",
               gap: 1,
-              borderColor: c.id === list.activeId ? "primary.main" : undefined,
             }}
           >
-            <Radio
-              checked={c.id === list.activeId}
-              onChange={() => run(setActiveConnector(c.id))}
-              slotProps={{ input: { "aria-label": `Use ${c.name}` } }}
-            />
             <Box sx={{ flexGrow: 1, minWidth: 0 }}>
               <Typography sx={{ fontWeight: 500 }} noWrap>
                 {c.name}
@@ -369,7 +361,7 @@ function ConnectorDialog({
       .then((r) => {
         setTest(r);
         // From the getting-started checklist, a good test is the finish line
-        // for step 1: save it, make it the one in use and go back to the checklist.
+        // for step 1: save it and go back to the checklist.
         if (r.ok && hasWelcomeMarker(location.hash)) save(r);
       });
   };
@@ -379,8 +371,8 @@ function ConnectorDialog({
   const [savedId, setSavedId] = useState(connector?.id);
 
   // From the getting-started checklist, saving also finishes step 1: make it
-  // the one in use and test it (unless a good test was just seen); a good test
-  // goes back to the checklist, a bad one stays here with the connector saved.
+  // test it (unless a good test was just seen); a good test goes back to the
+  // checklist, a bad one stays here with the connector saved.
   const save = async (passed?: TestResult) => {
     setSaving(true);
     setError(null);
@@ -391,7 +383,6 @@ function ConnectorDialog({
       const marker = hasWelcomeMarker(location.hash);
       let result = passed;
       if (marker) {
-        await setActiveConnector(saved.id);
         result ??= await testConnector({ id: saved.id }).catch((e): TestResult => ({ ok: false, error: e.message }));
       }
       const next = afterSave({ marker, test: result });
