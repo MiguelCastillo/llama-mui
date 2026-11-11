@@ -1488,8 +1488,14 @@ step that was running when the page closed comes back as pending.
   isn't shown. The last round has no tool calls, so its thinking line (if it
   has any) sits above the answer, and it doesn't join the line above. Each
   line starts closed; click it to open the
-  step rows (the **Thoughts** bar and the tool calls), each with how long it
-  took (hover for token counts). A row draws its contents only when it is
+  step rows (the **Thoughts** and the tool calls), each with how long it
+  took (hover for token counts). The line itself reads like "3 steps · 12s",
+  the time those steps took. What Thoughts looks like depends on the
+  connection (`reasoningIsSummary` in `src/connections/`): Claude's reasoning
+  is a short summary written to be read, so it shows open, as text, above the
+  tool calls; llama.cpp's is the model's raw thoughts, which are long, so
+  they stay in a closed **Thoughts** bar you click to read, with its time
+  and token count. A row draws its contents only when it is
   opened, which keeps a long chat light; closing it removes them again. A line
   stays open only while the chat is on screen. There is no setting for this. The reply's total time is in the small
   print under the reply. A reply that is only steps (say, stopped in the
@@ -1498,7 +1504,8 @@ step that was running when the page closed comes back as pending.
   line at the bottom of the reply: a small spinner, the model's latest note
   on a single line (cut off with "…" if it's long; hover for all of it), the
   time since the task started, and an arrow. It says "Thinking…" when there is
-  no note yet. It starts closed; click it to see the history so far, laid out
+  no note yet; on a Claude connection, once its thinking summary has started
+  it shows the summary's last line instead, until a note arrives. It starts closed; click it to see the history so far, laid out
   exactly like a finished reply (each note with its steps line beneath). Once
   the model starts writing the final answer, the line goes away and the
   answer streams as normal text, so an answer is never hidden behind it. When

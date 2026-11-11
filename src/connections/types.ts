@@ -46,6 +46,11 @@ export type Knob =
 export class InvalidOptions extends Error {}
 
 export interface Connection {
+  // What the `reasoning` this connection streams is. True: a short summary
+  // written to be read (Claude's), so the chat shows it open in the steps and
+  // its last line on the live line. False: the model's raw thoughts (Qwen's),
+  // which are long, so they stay in a closed Thoughts row.
+  reasoningIsSummary: boolean;
   // Whether knobs, validate and fields need the model's capabilities.
   needsCapabilities: boolean;
   // The settings this model has, with their allowed values.

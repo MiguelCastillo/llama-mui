@@ -29,6 +29,7 @@ export function readCapabilities(model: any): Capabilities {
 }
 
 export const anthropic: Connection = {
+  reasoningIsSummary: true,
   needsCapabilities: true,
 
   knobs(caps) {

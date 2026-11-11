@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, memo, useCallback, type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import { isImageFile, prepareImage, revokePreview } from "./images";
 import {
@@ -113,7 +113,7 @@ import {
   ApiError,
   MAX_REPLY_QUOTE,
 } from "./api";
-import { optionsFor } from "./connections/index";
+import { connection, optionsFor } from "./connections/index";
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { connectionForChat, pickModel } from "./modelChoice";
 import { getSavedModelsConnectorId, pickModelsConnector, setSavedModelsConnectorId } from "./modelsConnector";
@@ -1812,6 +1812,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         forgotten={t.start < contextStart}
         renderMarkdown={prefs?.renderMarkdown ?? true}
         showModelName={prefs?.showModelName ?? false}
+        reasoningIsSummary={connection(connector?.kind).reasoningIsSummary}
         failed={i === lastFailedTurnIndex ? failed : undefined}
         connectorName={connector ? connector.name || connector.kind : undefined}
         onResend={i === lastFailedTurnIndex ? bubbleActions.retry : undefined}
@@ -2970,6 +2971,7 @@ const MessageBubble = memo(function MessageBubble({
   forgotten,
   renderMarkdown,
   showModelName,
+  reasoningIsSummary,
   failed,
   connectorName,
   onResend,
@@ -3001,6 +3003,9 @@ const MessageBubble = memo(function MessageBubble({
   renderMarkdown: boolean;
   // Off: the line under a reply leaves out the model's name (Settings → Chat).
   showModelName: boolean;
+  // The chat's connection streams a readable summary as its reasoning (Claude)
+  // and not raw thoughts: shown open in the steps and on the live line.
+  reasoningIsSummary: boolean;
   // Error message for the last user message in this turn.
   failed?: string | null;
   // Who answered the failed request, named in its error line.
@@ -3068,7 +3073,7 @@ const MessageBubble = memo(function MessageBubble({
   // one live line at the bottom: the latest note, a spinner and the elapsed
   // time, with the history inside. Once the newest round is writing the
   // answer the line is left out and the answer streams as normal text.
-  const live = !isUser && streaming && since != null ? liveLine(parts) : null;
+  const live = !isUser && streaming && since != null ? liveLine(parts, reasoningIsSummary) : null;
   const showLiveLine = !!live && !live.writingAnswer;
   // One round's steps (its thinking and shown tool calls) fold into one row
   // of their own, put under that round's note, or above the answer when the
@@ -3077,7 +3082,7 @@ const MessageBubble = memo(function MessageBubble({
   // the round before them, so two rows never sit side by side with no note
   // between them (see stepGroups.ts). A round that joins draws no row; the
   // first round of its group draws one for all of them.
-  const roundGroups = isUser ? [] : groupRounds(parts);
+  const roundGroups = useMemo(() => (isUser ? [] : groupRounds(parts)), [isUser, parts]);
   const groupOf = (m: ChatMessage): ChatMessage[] => {
     const at = roundGroups.findIndex((g) => g.round === m);
     if (at < 0) return [m];
@@ -3098,7 +3103,12 @@ const MessageBubble = memo(function MessageBubble({
       <StepsRow summary={sum} label={label}>
         {group.map((r, ri) => (
           <Fragment key={ri}>
-            {r.reasoning && (
+            {r.reasoning && reasoningIsSummary && (
+              <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-wrap", px: 1, py: 0.5 }}>
+                {r.reasoning}
+              </Typography>
+            )}
+            {r.reasoning && !reasoningIsSummary && (
               <Accordion
                 disableGutters
                 elevation={0}

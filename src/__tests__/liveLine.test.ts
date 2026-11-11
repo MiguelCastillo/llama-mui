@@ -51,4 +51,16 @@ describe("liveLine", () => {
   it("handles an empty reply", () => {
     expect(liveLine([])).toEqual({ text: "Thinking…", writingAnswer: false });
   });
+
+  it("shows the last line of a thinking summary when its connection says reasoning is a summary, and no note exists", () => {
+    const parts = [assistant({ reasoning: "**Plan**\nCheck the config first.\n" })];
+    expect(liveLine(parts, true)).toEqual({ text: "Check the config first.", writingAnswer: false });
+  });
+
+  it("never shows raw thoughts, and prefers a note over a summary", () => {
+    const raw = [assistant({ reasoning: "Let me think about this..." })];
+    expect(liveLine(raw, false).text).toBe("Thinking…");
+    const noted = [assistant({ content: "Reading the config", reasoning: "summary", toolCalls: [call("1")] })];
+    expect(liveLine(noted, true).text).toBe("Reading the config");
+  });
 });

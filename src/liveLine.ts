@@ -21,13 +21,20 @@ export interface LiveLine {
 // The note is searched from the newest round backwards, so a newest round that
 // has no note yet (it is only thinking, or has just started its calls) keeps
 // showing the note before it.
-export function liveLine(parts: ChatMessage[]): LiveLine {
+// `reasoningIsSummary` (the connection's, see connections/types.ts): with no
+// note yet, the line shows the last line of the newest round's thinking summary
+// instead of "Thinking…". Raw thoughts are never shown there.
+export function liveLine(parts: ChatMessage[], reasoningIsSummary = false): LiveLine {
   const rounds = parts.filter((m) => m.role === "assistant");
   const newest = rounds[rounds.length - 1];
   const writingAnswer = !!newest && !!newest.content.trim() && shownCalls(newest.toolCalls).length === 0;
   for (let i = rounds.length - 1; i >= 0; i--) {
     const text = rounds[i].content.trim();
     if (text && shownCalls(rounds[i].toolCalls).length > 0) return { text, writingAnswer };
+  }
+  if (reasoningIsSummary && newest?.reasoning) {
+    const last = newest.reasoning.trim().split("\n").filter((l) => l.trim()).pop();
+    if (last) return { text: last.replace(/^[*#\s]+|[*\s]+$/g, ""), writingAnswer };
   }
   return { text: THINKING_TEXT, writingAnswer };
 }

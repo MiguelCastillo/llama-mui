@@ -13,6 +13,7 @@ export function thinks(options: ModelOptions | undefined, purpose: Purpose): boo
 }
 
 export const llama: Connection = {
+  reasoningIsSummary: false,
   needsCapabilities: false,
 
   knobs: () => [{ key: "think", label: "Think", help: "Think before answering. With it off, small models usually skip the tools." }],
