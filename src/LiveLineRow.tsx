@@ -47,9 +47,10 @@ export default function LiveLineRow({
           sx={{ alignItems: "center", minWidth: 0, flex: 1 }}
         >
           <CircularProgress size="0.875rem" sx={{ flexShrink: 0 }} />
+          {/* The model's note is text for you to read, so it is the normal message
+              size and colour, not the small grey of a label. Only the time is small. */}
           <Typography
-            variant="body2"
-            color="text.secondary"
+            variant="body1"
             noWrap
             title={text}
             sx={{ minWidth: 0, flex: 1 }}
