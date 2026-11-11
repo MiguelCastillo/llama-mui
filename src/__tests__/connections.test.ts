@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { MODELS } from "./capabilityFixtures";
-import { InvalidOptions, type Purpose, connection, optionsFor, readCapabilities, readModelOptions, validateShape } from "../connections/index";
+import { LIST_ENTRY, MODELS, PLAIN_PROPS, QWEN_PROPS } from "./capabilityFixtures";
+import { InvalidOptions, type Purpose, capabilitiesFromList, connection, optionsFor, readCapabilities, readList, readModelOptions, readProps, validateShape } from "../connections/index";
 
 // Each connection kind's module: the settings a model has, whether a settings
 // object is valid, and the request fields it turns into, by purpose. The
@@ -29,17 +29,79 @@ const ADAPTIVE = { type: "adaptive", display: "summarized" };
 
 describe("reading a model's capabilities", () => {
   it("reads Haiku 4.5: no adaptive thinking, no effort", () => {
-    expect(haiku).toEqual({ adaptiveThinking: false, efforts: [] });
+    expect(haiku).toMatchObject({ adaptiveThinking: false, efforts: [] });
   });
   it("reads Sonnet 5.5 and Opus 5.5: adaptive thinking, every effort level", () => {
-    expect(sonnet).toEqual({ adaptiveThinking: true, efforts: ["low", "medium", "high", "xhigh", "max"] });
-    expect(opus).toEqual(sonnet);
+    expect(sonnet).toMatchObject({ adaptiveThinking: true, efforts: ["low", "medium", "high", "xhigh", "max"] });
+    expect(opus).toMatchObject({ adaptiveThinking: true, efforts: sonnet.efforts });
   });
   it("reads each level's own flag, and counts anything missing as unsupported", () => {
     const some = { capabilities: { effort: { supported: true, low: { supported: true }, medium: { supported: false }, high: { supported: true } } } };
     expect(readCapabilities(some).efforts).toEqual(["low", "high"]);
     expect(readCapabilities({})).toEqual({ adaptiveThinking: false, efforts: [] });
     expect(readCapabilities(null)).toEqual({ adaptiveThinking: false, efforts: [] });
+  });
+});
+
+describe("the common facts", () => {
+  it("reads Claude's images, PDFs, thinking, context size, most output and lifecycle", () => {
+    expect(sonnet).toMatchObject({ images: true, pdf: true, thinking: true, contextSize: 1000000, maxOutput: 128000 });
+    expect(sonnet.deprecated).toBeUndefined();
+    expect(haiku).toMatchObject({ images: true, thinking: true, deprecated: true, retiresAt: "2027-02-01T00:00:00Z" });
+    expect(opus).toMatchObject({ images: false, pdf: false });
+  });
+  it("leaves what the API doesn't say unknown, not false", () => {
+    const bare = readCapabilities({ capabilities: { effort: { supported: false } } });
+    expect(bare.images).toBeUndefined();
+    expect(bare.pdf).toBeUndefined();
+    expect(bare.thinking).toBeUndefined();
+    expect(bare.contextSize).toBeUndefined();
+    expect(readCapabilities(null)).toEqual({ adaptiveThinking: false, efforts: [] });
+  });
+  it("reads llama.cpp's list: images from input_modalities, nothing when it says none", () => {
+    expect(readList(LIST_ENTRY)).toMatchObject({ images: true });
+    expect(readList({ architecture: { input_modalities: ["text"] } })).toMatchObject({ images: false });
+    expect(readList({ architecture: {} })).toBeUndefined();
+    expect(readList({ id: "x" })).toBeUndefined();
+    expect(capabilitiesFromList(LIST_ENTRY)?.images).toBe(true);
+    expect(capabilitiesFromList(MODELS["claude-sonnet-5-5"])?.contextSize).toBe(1000000);
+  });
+  it("reads llama.cpp's /props: vision, a thinking template, the template's effort levels", () => {
+    expect(readProps(QWEN_PROPS)).toMatchObject({ images: true, thinking: true, reasoningEffortLevels: [] });
+    expect(readProps(PLAIN_PROPS)).toMatchObject({ images: false, thinking: false });
+  });
+  it("lets /props win over the list, and keeps the list's word when /props is silent", () => {
+    const fromList = { adaptiveThinking: false, efforts: [], images: true };
+    expect(readProps({ modalities: { vision: false } }, fromList).images).toBe(false);
+    const silent = readProps({}, fromList);
+    expect(silent.images).toBe(true);
+    expect(silent.thinking).toBeUndefined();
+    expect(silent.reasoningEffortLevels).toBeUndefined();
+  });
+  it("asks Claude at /v1/models/<id> and llama.cpp at /props, without loading the model", () => {
+    expect(claude.capabilitiesPath("claude-sonnet-5-5")).toBe("/v1/models/claude-sonnet-5-5");
+    expect(llama.capabilitiesPath("a/b:Q4")).toBe("/props?model=a%2Fb%3AQ4&autoload=false");
+  });
+});
+
+describe("llama.cpp's Think", () => {
+  it("is offered unless the template is known to have no thinking switch", () => {
+    expect(llama.knobs(undefined).map((k) => k.key)).toEqual(["think"]);
+    expect(llama.knobs(readProps(QWEN_PROPS)).map((k) => k.key)).toEqual(["think"]);
+    expect(llama.knobs(readProps({ modalities: { vision: true } })).map((k) => k.key)).toEqual(["think"]);
+    expect(llama.knobs(readProps(PLAIN_PROPS))).toEqual([]);
+  });
+  it("is left out of what a message carries for a model with no switch", () => {
+    expect(optionsFor("llama", { think: true }, readProps(PLAIN_PROPS))).toEqual({});
+    expect(optionsFor("llama", { think: true }, readProps(QWEN_PROPS))).toEqual({ think: true });
+  });
+  it("keeps its rule: first request of a reply only, not planning, not background", () => {
+    const on = { think: true };
+    const t = (purpose: Purpose) => (llama.fields(on, purpose, readProps(QWEN_PROPS)) as any).chat_template_kwargs.enable_thinking;
+    expect(t({ kind: "reply", round: 0 })).toBe(true);
+    expect(t({ kind: "reply", round: 1 })).toBe(false);
+    expect(t({ kind: "planning", round: 0 })).toBe(false);
+    expect(t({ kind: "background" })).toBe(false);
   });
 });
 

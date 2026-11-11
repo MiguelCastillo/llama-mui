@@ -359,7 +359,12 @@ approvals marker (only while an auto-approve switch is on), the context ring
 reply runs and into the side question's Stop while that runs. On a wide screen
 Enter sends (Shift+Enter makes a new line); on a phone Enter makes a new line
 and the button sends. Esc stops a reply or cancels an edit, and the up arrow in
-an empty box edits your last message. Images can be dropped or pasted.
+an empty box edits your last message. Images can be dropped or pasted, when
+the chosen model can read them (see [What a model can do](#what-a-model-can-do)):
+for a model whose server says it can't, the paperclip is off with a tooltip
+saying so, a pasted or dropped image is refused with a note, and images already
+in the box when you switch to such a model stay there under a line saying they
+won't be sent (the text goes alone).
 
 - **Working directory** is the folder relative paths and `run_command` start
   in, and the system prompt names it. It's a setting of the chat, separate
@@ -1626,6 +1631,43 @@ the kind; they ask:
   calls too: one-shot and short, and a name with reasoning in it would be
   worse than the few tokens), and `output_config.effort` when a supported
   level is set.
+
+### What a model can do
+
+Each connection also says what a model can take, from what its server reports
+(`Capabilities` in `types.ts`; each module has `capabilitiesPath`, `fromList`
+and `fromAnswer`, and `getCapabilities` in `src/api.ts` asks once per model and
+keeps the answer). The common facts are `images`, `pdf`, `thinking` and
+`contextSize`, and for Claude `maxOutput` and `deprecated` / `retiresAt`. A fact
+the server doesn't give is **unknown, which is not "no"**: only an explicit
+"no" takes a feature away, so a model whose server says nothing still gets
+images and Think.
+
+- **Claude**: the Models API (`GET /v1/models`, and `/v1/models/<id>` for one):
+  `capabilities.image_input`, `pdf_input`, `thinking`, `effort`, plus
+  `max_input_tokens` (the context size the ring uses), `max_tokens`,
+  `lifecycle` and `retires_at`.
+- **llama.cpp**: the model list's `architecture.input_modalities` (images,
+  known for every model) and `GET /props?model=<id>` (`modalities.vision`, the
+  `chat_template`, and `chat_template_caps.reasoning_effort_levels`). The proxy
+  passes `GET /api/c/<id>/props` through (read-only, with the key added as for
+  any call). Only a **loaded** model answers: the page sends `autoload=false`,
+  because a router would otherwise load the model just to be asked. An unloaded
+  model keeps what the list said, and is asked again a few seconds later or when
+  the list is read with the model loaded. The server has no "thinks" flag, so
+  Think is shown unless the model's template has no `enable_thinking` (the
+  variable llama-mui sends); a template that always thinks has no switch to turn.
+  `reasoning_effort_levels` is read but not used yet (Qwen's is empty, and it
+  has no effort control); llama's thinking rule is unchanged.
+- **Where it shows**: the paperclip (above), the model picker (small image, PDF
+  and thinking icons for what the model can do, the context size on its second
+  line, and "Deprecated, retires <date>" for a Claude model Anthropic is
+  retiring), the context ring (Claude's real `max_input_tokens`), and Think in
+  Settings → Models.
+- **Never an image to a model that takes none**: `streamChat` checks the
+  capabilities before every request, and for a model that says it reads no
+  images takes the images out of the request, with a line in their place telling
+  the model they weren't sent. The saved chat keeps them.
 
 A new setting is added to `ModelOptions` and to the modules; the run options,
 the queue (`QueuedMessage.options.modelOptions`) and the turn loop carry the

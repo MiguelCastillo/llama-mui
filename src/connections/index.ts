@@ -5,6 +5,7 @@ import type { Capabilities, Connection, ModelOptions } from "./types.ts";
 
 export * from "./types.ts";
 export { readCapabilities } from "./anthropic.ts";
+export { readList, readProps } from "./llama.ts";
 
 // The module for a connection kind; "llama" when left out, as everywhere.
 export const connection = (kind: Kind | undefined): Connection => (kind === "anthropic" ? anthropic : llama);
@@ -26,3 +27,7 @@ export function optionsFor(kind: Kind | undefined, settings: ModelOptions | unde
   }
   return out;
 }
+
+// What a model list entry says about the model, whichever kind sent it: Claude's
+// entries carry `capabilities`, llama.cpp's an architecture.
+export const capabilitiesFromList = (entry: any): Capabilities | undefined => anthropic.fromList(entry) ?? llama.fromList(entry);

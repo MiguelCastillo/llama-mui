@@ -8,7 +8,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 export { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
-import { type Capabilities, type Effort, type ModelOptions, type Purpose, connection, readCapabilities } from "./connections/index.ts";
+import { type Capabilities, type Effort, type ModelOptions, type Purpose, capabilitiesFromList, connection } from "./connections/index.ts";
 export { EFFORTS, type Effort, isEffort, type ModelOptions, type Purpose, type Capabilities } from "./connections/index.ts";
 
 export type ModelStatus = "loaded" | "loading" | "unloaded" | string;
@@ -30,8 +30,9 @@ export interface Model {
   sidecars?: string[];
   // File size in bytes
   size?: number;
-  // What the model can do, for Claude models (the Models API says); see
-  // src/connections.
+  // What the model can do as far as the list says (Claude's list says all of
+  // it; llama.cpp's only the images); see src/connections. getCapabilities has
+  // the rest, once asked.
   capabilities?: Capabilities;
 }
 
@@ -323,11 +324,18 @@ export const testConnector = (input: { id?: string; url?: string; apiKey?: strin
 export async function listModels(connectorId: string): Promise<Model[]> {
   // Anthropic's API pages by 20 unless asked; llama.cpp ignores the limit.
   const body = await call<{ data: any[] }>("GET", `/api/c/${connectorId}/v1/models?limit=1000`);
-  return body.data.map((m) => {
-    // Anthropic's list says what each model can do; keep it, so a request
-    // doesn't have to ask again.
-    const capabilities = m.capabilities ? readCapabilities(m) : undefined;
-    if (capabilities) known.set(`${connectorId}\n${m.id}`, capabilities);
+  return readModels(connectorId, body.data);
+}
+
+// The model entries of a list (the OpenAI-style one, or the admin one), as
+// Models with what each says it can do.
+async function readModels(connectorId: string, data: any[]): Promise<Model[]> {
+  const models = data.map((m) => {
+    // The list says what each model can do (all of it for Claude, the images
+    // for llama.cpp); keep it, so a request doesn't have to ask again.
+    const capabilities = capabilitiesFromList(m);
+    // Claude's list is the whole answer; llama.cpp's is the start of one.
+    if (capabilities) (m.capabilities ? known : listed).set(`${connectorId}\n${m.id}`, capabilities);
     return {
       id: m.id,
       name: m.display_name,
@@ -341,26 +349,49 @@ export async function listModels(connectorId: string): Promise<Model[]> {
       ...(capabilities ? { capabilities } : {}),
     };
   });
+  // A llama.cpp model that is loaded can say more (does its template think),
+  // asked once and kept; the others can't answer without being loaded.
+  await Promise.all(
+    models.map(async (m, i) => {
+      if (m.status !== "loaded" || m.capabilities?.thinking !== undefined || data[i].capabilities) return;
+      const caps = await getCapabilities(connectorId, m.id);
+      if (caps) m.capabilities = caps;
+    }),
+  );
+  return models;
 }
 
-// What a Claude model can do (Anthropic's Models API, through the connector),
-// by connector and model. A fact about the model, not a setting, so it is
-// asked once and kept in memory; a failed ask isn't kept, and gives undefined.
+// What a model can do, by connector and model: the connection's own ask (the
+// Models API for Claude, /props for llama.cpp, through the connector). A fact
+// about the model, not a setting, so it is asked once and kept in memory; a
+// failed ask isn't kept, and gives undefined (for llama.cpp, what the list said). A llama.cpp
+// model that isn't loaded can't answer, so that is remembered for a few
+// seconds only: asking again then doesn't hit the server on every request.
 const known = new Map<string, Capabilities>();
+const listed = new Map<string, Capabilities>();
 const asking = new Map<string, Promise<Capabilities | undefined>>();
-export function getCapabilities(connectorId: string, model: string): Promise<Capabilities | undefined> {
+const missed = new Map<string, number>();
+const MISS_MS = 15000;
+export function getCapabilities(connectorId: string, model: string, kind?: Kind): Promise<Capabilities | undefined> {
   const key = `${connectorId}\n${model}`;
   const have = known.get(key);
   if (have) return Promise.resolve(have);
+  const conn = connection(kind);
+  const path = conn.capabilitiesPath(model);
+  if (!path) return Promise.resolve(listed.get(key));
+  if (Date.now() - (missed.get(key) ?? -Infinity) < MISS_MS) return Promise.resolve(listed.get(key));
   let pending = asking.get(key);
   if (!pending) {
-    pending = call<unknown>("GET", `/api/c/${connectorId}/v1/models/${encodeURIComponent(model)}`)
-      .then((m) => {
-        const caps = readCapabilities(m);
+    pending = call<unknown>("GET", `/api/c/${connectorId}${path}`)
+      .then((answer) => {
+        const caps = conn.fromAnswer(answer, listed.get(key));
         known.set(key, caps);
         return caps;
       })
-      .catch(() => undefined)
+      .catch(() => {
+        missed.set(key, Date.now());
+        return listed.get(key);
+      })
       .finally(() => asking.delete(key));
     asking.set(key, pending);
   }
@@ -369,23 +400,14 @@ export function getCapabilities(connectorId: string, model: string): Promise<Cap
 // For tests: forget what was learned.
 export function forgetCapabilities() {
   known.clear();
+  listed.clear();
   asking.clear();
+  missed.clear();
 }
 
 // Model management endpoints (per-connector, at /api/c/<id>/models)
 export function listModelsAdmin(connectorId: string): Promise<Model[]> {
-  return call<{ data: any[] }>("GET", `/api/c/${connectorId}/models`).then((r) =>
-    r.data.map((m) => ({
-      id: m.id,
-      status: m.status?.value ?? "unknown",
-      inputs: m.architecture?.input_modalities ?? [],
-      contextSize: contextSize(m),
-      canRemove: m.can_remove,
-      source: m.source,
-      sidecars: m.sidecars,
-      size: m.size_in_bytes,
-    })),
-  );
+  return call<{ data: any[] }>("GET", `/api/c/${connectorId}/models`).then((r) => readModels(connectorId, r.data));
 }
 
 export function downloadModel(connectorId: string, model: string, sidecars?: string[]): Promise<void> {
@@ -993,9 +1015,26 @@ export interface ChatReply {
 // Streams one reply, calling onDelta for each piece of text or thinking, in
 // the connector's API. A tool call without a result would make the server
 // reject the request, so those are closed first.
-export function streamChat(req: ChatRequest, onDelta: (d: StreamDelta) => void, signal: AbortSignal): Promise<ChatReply> {
-  const repaired = { ...req, messages: closeOpenToolCalls(req.messages) };
+export async function streamChat(req: ChatRequest, onDelta: (d: StreamDelta) => void, signal: AbortSignal): Promise<ChatReply> {
+  let repaired = { ...req, messages: closeOpenToolCalls(req.messages) };
+  // A model that says it can't read images is never sent one, whatever the
+  // chat holds (it was picked after the image went in, or is a plan's model).
+  if (req.messages.some((m) => m.images?.length) && (await getCapabilities(req.connectorId, req.model, req.kind))?.images === false) {
+    repaired = { ...repaired, messages: withoutImages(repaired.messages), images: undefined };
+  }
   return repaired.api === "openai" ? streamCompletions(repaired, onDelta, signal) : streamMessages(repaired, onDelta, signal);
+}
+
+// The chat with each message's images taken out and a line saying so put in
+// their place, for a model that can't read them. The saved chat keeps them.
+export function withoutImages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) => {
+    const n = m.images?.length ?? 0;
+    if (!n) return m;
+    const note = `[${n === 1 ? "An image was" : `${n} images were`} attached here but not sent: this model can't read images.]`;
+    const { images: _dropped, ...rest } = m;
+    return { ...rest, content: [m.content, note].filter(Boolean).join("\n\n") };
+  });
 }
 
 // The Messages API requires a cap. Big enough for a step that writes a whole
@@ -1015,7 +1054,7 @@ function apiErrorMessage(e: InstanceType<typeof Anthropic.APIError>): string {
 // optional, so it can't be refused for a setting the model lacks.
 async function requestFields(connectorId: string, kind: Kind | undefined, model: string, options: ModelOptions | undefined, purpose: Purpose) {
   const conn = connection(kind);
-  const caps = conn.needsCapabilities ? await getCapabilities(connectorId, model) : undefined;
+  const caps = conn.needsCapabilities ? await getCapabilities(connectorId, model, kind) : undefined;
   return conn.fields(options, purpose, caps);
 }
 

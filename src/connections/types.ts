@@ -19,12 +19,28 @@ export interface ModelOptions {
 }
 
 // What a model can do, as its connection says (a fact about the model, not a
-// setting). Only Claude's is fetched (see getCapabilities in api.ts).
+// setting). Fetched once per model and kept (see getCapabilities in api.ts).
+// Each connection fills what its server reports. An optional fact left out is
+// unknown, which is not the same as false: unknown means the server said
+// nothing, so the app offers the thing as if it were allowed (images, Think);
+// only an explicit false takes it away.
 export interface Capabilities {
-  // Adaptive thinking is supported (Haiku 4.5 and Sonnet 4.5 can't).
+  // Claude's: adaptive thinking is supported (Haiku 4.5 and Sonnet 4.5 can't).
   adaptiveThinking: boolean;
-  // The effort levels it takes; none when it takes no effort at all.
+  // Claude's: the effort levels it takes; none when it takes no effort at all.
   efforts: Effort[];
+  // Common facts, filled where the connection knows them.
+  images?: boolean; // reads images
+  pdf?: boolean; // reads PDFs
+  thinking?: boolean; // thinks (Claude: any thinking; llama.cpp: its template has a thinking switch)
+  contextSize?: number; // tokens of context it can take
+  // Claude's: the most it writes in one reply, and the end of its life.
+  maxOutput?: number;
+  deprecated?: boolean; // Anthropic has marked it deprecated
+  retiresAt?: string; // when it stops answering, as the API gives it
+  // llama.cpp's: the reasoning_effort values its template renders distinctly,
+  // lowest first. Not used for anything yet; empty for Qwen.
+  reasoningEffortLevels?: string[];
 }
 
 // Why a request is made. The same settings turn into different fields by it.
@@ -51,8 +67,17 @@ export interface Connection {
   // its last line on the live line. False: the model's raw thoughts (Qwen's),
   // which are long, so they stay in a closed Thoughts row.
   reasoningIsSummary: boolean;
-  // Whether knobs, validate and fields need the model's capabilities.
+  // Whether knobs, validate and fields need the model's capabilities, so they
+  // are asked for before a request (a failed ask leaves them unknown).
   needsCapabilities: boolean;
+  // Where this connection asks for one model's capabilities, relative to the
+  // connector's proxy (/api/c/<id>), or undefined when there is nowhere to ask.
+  capabilitiesPath(model: string): string | undefined;
+  // What the model list says about a model, before anything is asked (a list
+  // entry as the server sent it).
+  fromList(entry: any): Capabilities | undefined;
+  // What the answer at capabilitiesPath says, on top of what the list said.
+  fromAnswer(answer: any, fromList?: Capabilities): Capabilities;
   // The settings this model has, with their allowed values.
   knobs(caps?: Capabilities): Knob[];
   // Checks a settings object (any shape) and returns it clean, with only the

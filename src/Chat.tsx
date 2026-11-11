@@ -1,6 +1,9 @@
 import { Fragment, memo, useCallback, type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import { isImageFile, prepareImage, revokePreview } from "./images";
+import { attachButton, refusedImages, unsentImages } from "./imageRule";
+import { lifecycleNote } from "./modelBadges";
+import ModelBadgeIcons from "./ModelBadgeIcons";
 import {
   Accordion,
   AccordionDetails,
@@ -1102,11 +1105,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // message: only the ones its connection gives this model (Think for
   // llama.cpp; effort for a Claude model that takes it, from what the model
   // says it can do).
-  const modelOptions = optionsFor(
-    connector?.kind,
-    { ...modelSettings?.defaults, ...modelSettings?.models[model] },
-    models.find((m) => m.id === model)?.capabilities,
-  );
+  const modelCapabilities = models.find((m) => m.id === model)?.capabilities;
+  const modelOptions = optionsFor(connector?.kind, { ...modelSettings?.defaults, ...modelSettings?.models[model] }, modelCapabilities);
 
   // A prompt from a plan step shows in the plan card, under the step (see
   // PlanView); others show at the bottom of the chat.
@@ -2175,7 +2175,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                       <Typography variant="body2" color="text.secondary">
                         {m.contextSize ? `${m.contextSize.toLocaleString()}-token context` : "Context n/a"}
                         {m.source ? ` · ${m.source}` : ""}
+                        {/* What it can do, as its server says: quiet icons, only for what it can. */}
+                        <ModelBadgeIcons capabilities={m.capabilities} />
                       </Typography>
+                      {lifecycleNote(m.capabilities) && (
+                        <Typography variant="caption" color="warning.main">
+                          {lifecycleNote(m.capabilities)}
+                        </Typography>
+                      )}
                     </Box>
                     {/* Load / Unload, like the Models page (deleting is only there).
                         Clicking it doesn't pick the model, and an empty space keeps
@@ -2439,6 +2446,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             onCancelEdit={() => setEditing(null)}
             reply={pendingReply}
             onCancelReply={() => setReplyTarget(null)}
+            noImages={modelCapabilities?.images === false ? model : undefined}
             // Stop here is for a reply that is streaming. A plan run is paused
             // from its card, and the box keeps Send for messages to it.
             onStop={turnRunning ? () => showFailure(stopRunner(sessionId)) : undefined}
@@ -2513,7 +2521,12 @@ function Composer({
   onStopAside,
   reply,
   onCancelReply,
+  noImages,
 }: {
+  // The chosen model's name when it says it can't read images, else undefined.
+  // The paperclip is off then, pasted and dropped images are refused with a
+  // note, and images already in the box say they won't be sent.
+  noImages?: string;
   // The response the message replies to: a card above the box shows its first
   // lines, and a new `n` focuses the box. Closing the card calls onCancelReply.
   reply?: { text: string; n: number } | null;
@@ -2574,10 +2587,23 @@ function Composer({
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   // Drop/paste helpers: validate, resize, store; revoke on remove.
+  const [refused, setRefused] = useState(false);
+  useEffect(() => {
+    if (!refused) return;
+    const t = setTimeout(() => setRefused(false), 6000);
+    return () => clearTimeout(t);
+  }, [refused]);
+  const noImagesRef = useRef(noImages);
+  noImagesRef.current = noImages;
   const addImages = useCallback(async (files: FileList) => {
     const images: PendingImage[] = [];
     for (const file of Array.from(files)) {
       if (!isImageFile(file)) continue;
+      // Not for a model that can't read them: say so instead of adding it.
+      if (noImagesRef.current !== undefined) {
+        setRefused(true);
+        return;
+      }
       try {
         const { blob, preview } = await prepareImage(file);
         images.push({ blob, preview, name: file.name });
@@ -2620,12 +2646,14 @@ function Composer({
   );
   const send = async () => {
     const t = text.trim();
-    if (!t && !pendingImages.length) return;
+    // Images in the box stay there when the model can't read them: the text
+    // goes alone, and the box said so (see unsentImages).
+    const sentImages = noImages !== undefined ? [] : pendingImages;
+    if (!t && !sentImages.length) return;
     if (sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
     const sentFrom = box.sessionId();
-    const sentImages = pendingImages;
     try {
       // The box empties as soon as the send is accepted, without waiting for
       // the server. Previews stay alive until the outcome is known, so a
@@ -2639,17 +2667,17 @@ function Composer({
         // meanwhile, so that chat's box is left alone.
         clear: () => {
           box.setTextFor(sentFrom, "");
-          box.setImages([]);
+          if (sentImages.length) box.setImages([]);
         },
         restore: () => {
           box.setTextFor(sentFrom, text);
-          box.setImages(sentImages);
+          if (sentImages.length) box.setImages(sentImages);
         },
         // It went: that chat's draft is gone, the previews are revoked, and the
         // box is cleared unless another chat was opened meanwhile.
         done: () => {
           sentImages.forEach((img) => revokePreview(img.preview));
-          box.setImages([]);
+          if (sentImages.length) box.setImages([]);
           box.setTextFor(sentFrom, "");
         },
       });
@@ -2665,7 +2693,8 @@ function Composer({
     pendingImages.forEach((img) => revokePreview(img.preview));
     box.setImages([]);
   };
-  const canSend = (!!text.trim() || pendingImages.length > 0) && !disabled && !sending;
+  const canSend = (!!text.trim() || (pendingImages.length > 0 && noImages === undefined)) && !disabled && !sending;
+  const attach = attachButton({ images: noImages === undefined ? undefined : false, model: noImages, planRunning });
   return (
     <Box
       sx={{
@@ -2779,6 +2808,17 @@ function Composer({
           ))}
         </Stack>
       )}
+      {/* Images added before the model changed to one that can't read them, or one just refused. */}
+      {noImages !== undefined && pendingImages.length > 0 && (
+        <Typography variant="caption" color="warning.main" role="status">
+          {unsentImages(pendingImages.length, noImages)}
+        </Typography>
+      )}
+      {refused && noImages !== undefined && (
+        <Typography variant="caption" color="warning.main" role="status">
+          {refusedImages(noImages)}
+        </Typography>
+      )}
       {/* Hidden file picker, triggered by the attach button. */}
       <input
         ref={fileInputRef}
@@ -2849,14 +2889,14 @@ function Composer({
       />
       {/* Bottom row: image button and folder at the left; approvals, context and Send at the right. */}
       <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
-        {/* Attach images. Not while a plan runs: a message to it is text only. */}
-        <Tooltip title={planRunning ? "Images can't be attached while a plan is running" : "Attach images"}>
+        {/* Attach images. Not while a plan runs (a message to it is text only), nor for a model that can't read them. */}
+        <Tooltip title={attach.title}>
           <span>
             <IconButton
               aria-label="Attach images"
               size="small"
               onClick={() => fileInputRef.current?.click()}
-              disabled={planRunning || disabled || sending}
+              disabled={attach.disabled || disabled || sending}
               // The button's padding (5px) and the glyph's own gap (3px) are pulled back so the icon's left edge lines up with the text above.
               sx={{ color: "text.secondary", ml: -1 }}
             >

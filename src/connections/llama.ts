@@ -1,4 +1,4 @@
-import { type Connection, InvalidOptions, type ModelOptions, type Purpose } from "./types.ts";
+import { type Capabilities, type Connection, InvalidOptions, type ModelOptions, type Purpose } from "./types.ts";
 
 // llama.cpp. Think asks the chat template for a reasoning phase before the
 // answer (llama.cpp ignores `thinking: {type: "disabled"}`; its template takes
@@ -12,11 +12,42 @@ export function thinks(options: ModelOptions | undefined, purpose: Purpose): boo
   return purpose.round === 0;
 }
 
+// llama.cpp reports what a model takes in two places. The model list
+// (GET /v1/models) has architecture.input_modalities for every model, loaded
+// or not. GET /props?model=<id>, which only a loaded model answers (a router
+// would load the model otherwise, so the page adds autoload=false), has
+// modalities and the chat template. The server has no flag for "thinks", so it
+// is read from the template: a template with enable_thinking has the switch
+// Think turns (a template that thinks always has none to turn). reasoning_effort_levels is
+// the template's own list (Qwen's is empty). A server that says nothing
+// leaves the fact unknown.
+export function readList(entry: any): Capabilities | undefined {
+  const modalities = entry?.architecture?.input_modalities;
+  if (!Array.isArray(modalities) || !modalities.length) return undefined;
+  return { adaptiveThinking: false, efforts: [], images: modalities.includes("image") };
+}
+
+export function readProps(props: any, fromList?: Capabilities): Capabilities {
+  const out: Capabilities = { adaptiveThinking: false, efforts: [], ...fromList };
+  if (typeof props?.modalities?.vision === "boolean") out.images = props.modalities.vision;
+  if (typeof props?.chat_template === "string" && props.chat_template) out.thinking = props.chat_template.includes("enable_thinking");
+  const levels = props?.chat_template_caps?.reasoning_effort_levels;
+  if (Array.isArray(levels)) out.reasoningEffortLevels = levels.filter((l: unknown) => typeof l === "string");
+  return out;
+}
+
 export const llama: Connection = {
   reasoningIsSummary: false,
-  needsCapabilities: false,
+  needsCapabilities: true,
+  capabilitiesPath: (model) => `/props?model=${encodeURIComponent(model)}&autoload=false`,
+  fromList: readList,
+  fromAnswer: readProps,
 
-  knobs: () => [{ key: "think", label: "Think", help: "Think before answering. With it off, small models usually skip the tools." }],
+  // Think is offered unless the model's template is known to have no thinking switch.
+  knobs: (caps) =>
+    caps?.thinking === false
+      ? []
+      : [{ key: "think", label: "Think", help: "Think before answering. With it off, small models usually skip the tools." }],
 
   validate(raw) {
     const o: any = raw ?? {};

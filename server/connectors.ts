@@ -148,6 +148,15 @@ export async function connectorRoutes({ req, res, parts, method, search }: Route
     return true;
   }
 
+  // A llama server's /props: what a model takes and whether its template
+  // thinks (src/connections/llama.ts). Read-only, so only GET goes through;
+  // the key is added as for any proxied call. In router mode ?model= picks the
+  // model, and the page adds autoload=false so asking never loads one.
+  if (parts[0] === "c" && parts[1] && parts[2] === "props" && parts.length === 3 && method === "GET") {
+    await proxy(req, res, parts[1], `/props${search}`);
+    return true;
+  }
+
   if (parts[0] !== "connectors") return false;
 
   if (parts.length === 1 && method === "GET") {

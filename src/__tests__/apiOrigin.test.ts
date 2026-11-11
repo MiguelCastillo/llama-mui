@@ -41,6 +41,8 @@ describe("setApiOrigin", () => {
       "fetch",
       vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         urls.push(String(url instanceof Request ? url.url : url));
+        // llama.cpp's /props, asked before the reply: not loaded here.
+        if (String(url).includes("/props?")) return new Response("{}", { status: 400 });
         headers.push(Object.fromEntries(new Headers(init?.headers)));
         return new Response(sse, { headers: { "content-type": "text/event-stream" } });
       }),
@@ -51,7 +53,8 @@ describe("setApiOrigin", () => {
       () => {},
       new AbortController().signal,
     );
-    expect(urls).toEqual(["http://127.0.0.1:4173/api/c/c1/v1/chat/completions"]);
+    expect(urls.filter((u) => !u.includes("/props?"))).toEqual(["http://127.0.0.1:4173/api/c/c1/v1/chat/completions"]);
+    expect(urls.some((u) => u.startsWith("http://127.0.0.1:4173/api/c/c1/props?"))).toBe(true);
     expect(headers[0].authorization).toBe("Bearer set-by-the-server");
   });
 });

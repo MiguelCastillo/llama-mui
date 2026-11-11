@@ -17,7 +17,7 @@ export async function checkOptions(connectorId: string | undefined, model: strin
     const connector = connectorId ? (await load()).connectors.find((c) => c.id === connectorId) : undefined;
     if (!connector) return validateShape(raw);
     const conn = connection(connector.kind);
-    return conn.validate(raw, conn.needsCapabilities ? await getCapabilities(connector.id, model) : undefined);
+    return conn.validate(raw, conn.needsCapabilities ? await getCapabilities(connector.id, model, connector.kind) : undefined);
   } catch (e) {
     if (e instanceof InvalidOptions) throw new HttpError(400, e.message);
     throw e;

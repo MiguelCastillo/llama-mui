@@ -13,6 +13,8 @@ import {
 import DefaultButton from "./DefaultButton";
 import { type Connector, type Effort, type Model, type ModelSettings, listModels } from "./api";
 import ModelKnobs from "./ModelKnobs";
+import ModelBadgeIcons from "./ModelBadgeIcons";
+import { lifecycleNote } from "./modelBadges";
 
 // Anthropic's API: the Claude models the key can use, to pick from in chat.
 // There's nothing to download, load or delete; Effort is the one option.
@@ -61,6 +63,12 @@ export default function AnthropicModels({
                         {m.id}
                       </Typography>
                       {m.contextSize ? ` · ${m.contextSize.toLocaleString()}-token context` : ""}
+                      <ModelBadgeIcons capabilities={m.capabilities} />
+                      {lifecycleNote(m.capabilities) && (
+                        <Typography component="span" variant="body2" color="warning.main" sx={{ ml: 1 }}>
+                          {lifecycleNote(m.capabilities)}
+                        </Typography>
+                      )}
                     </>
                   }
                 />

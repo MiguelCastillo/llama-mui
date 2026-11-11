@@ -17,20 +17,42 @@ import { EFFORTS, type Capabilities, type Connection, type Effort, InvalidOption
 // Effort: output_config.effort, only when a level is set and the model
 // supports that level.
 
+// A "supported" flag the API reports, or undefined when it doesn't say.
+const flag = (x: any): boolean | undefined => (typeof x?.supported === "boolean" ? x.supported : undefined);
+const count = (n: unknown): number | undefined => (typeof n === "number" && n > 0 ? n : undefined);
+
 // Reads capabilities from a model object of the Models API (a list entry or
-// one model). Anything missing counts as not supported.
+// one model). A thing the API leaves out counts as not supported for
+// adaptive thinking and effort (so a request never carries what the model
+// might refuse); for images, PDFs and thinking it is unknown, so nothing is
+// taken away on a guess.
 export function readCapabilities(model: any): Capabilities {
   const c = model?.capabilities ?? {};
   const effort = c.effort ?? {};
-  return {
+  const out: Capabilities = {
     adaptiveThinking: c.thinking?.types?.adaptive?.supported === true,
     efforts: effort.supported === true ? EFFORTS.filter((level) => effort[level]?.supported === true) : [],
   };
+  const set = <K extends keyof Capabilities>(key: K, value: Capabilities[K] | undefined) => {
+    if (value !== undefined) out[key] = value;
+  };
+  set("images", flag(c.image_input));
+  set("pdf", flag(c.pdf_input));
+  set("thinking", flag(c.thinking));
+  set("contextSize", count(model?.max_input_tokens));
+  set("maxOutput", count(model?.max_tokens));
+  if (model?.lifecycle === "deprecated" || model?.lifecycle === "retired") out.deprecated = true;
+  set("retiresAt", typeof model?.retires_at === "string" ? model.retires_at : undefined);
+  return out;
 }
 
 export const anthropic: Connection = {
   reasoningIsSummary: true,
   needsCapabilities: true,
+  capabilitiesPath: (model) => `/v1/models/${encodeURIComponent(model)}`,
+  // The list entries carry the same capabilities as one model's answer.
+  fromList: (entry) => (entry?.capabilities ? readCapabilities(entry) : undefined),
+  fromAnswer: (answer) => readCapabilities(answer),
 
   knobs(caps) {
     if (!caps?.efforts.length) return [];

@@ -29,6 +29,7 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import AnthropicModels from "./AnthropicModels";
 import ModelKnobs from "./ModelKnobs";
+import ModelBadgeIcons from "./ModelBadgeIcons";
 import DefaultButton from "./DefaultButton";
 import { getSavedModelsConnectorId, pickModelsConnector, setSavedModelsConnectorId } from "./modelsConnector";
 import {
@@ -314,9 +315,12 @@ export default function ModelsSection() {
                     // n/a: unloaded and started without --ctx-size, so the
                     // server doesn't say until it's loaded (see contextSize).
                     secondary={
-                      (m.contextSize ? `${m.contextSize.toLocaleString()}-token context` : "Context n/a") +
-                      // "preset": defined in the server's preset file; "cache": downloaded.
-                      (m.source ? ` · ${m.source}` : "")
+                      <>
+                        {(m.contextSize ? `${m.contextSize.toLocaleString()}-token context` : "Context n/a") +
+                          // "preset": defined in the server's preset file; "cache": downloaded.
+                          (m.source ? ` · ${m.source}` : "")}
+                        <ModelBadgeIcons capabilities={m.capabilities} />
+                      </>
                     }
                   />
                   {/* Delete, then Load / Unload, then Think. Grey like the app's other
@@ -359,7 +363,7 @@ export default function ModelsSection() {
                       <Box sx={{ width: "2.125rem" }} />
                     )}
                   </Stack>
-                  <ModelKnobs kind={connector?.kind} id={m.id} settings={settingsFor(m.id)!} change={changeSetting} />
+                  <ModelKnobs kind={connector?.kind} id={m.id} capabilities={m.capabilities} settings={settingsFor(m.id)!} change={changeSetting} />
                 </ListItem>
               ))}
 
