@@ -13,6 +13,7 @@ import {
   List,
   ListItem,
   ListItemButton,
+  ListItemIcon,
   ListItemText,
   Menu,
   MenuItem,
@@ -28,6 +29,7 @@ import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DriveFileMoveOutlinedIcon from "@mui/icons-material/DriveFileMoveOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import SearchIcon from "@mui/icons-material/Search";
 import SubdirectoryArrowRightIcon from "@mui/icons-material/SubdirectoryArrowRight";
 import type { SessionSummary } from "./api";
@@ -108,6 +110,8 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
   const { currentId, narrow, busy, attention, editing, setEditing, saveEdit, collapsed } = ctx;
   const s = node.session;
   const isEditing = editing?.id === s.id;
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const closeMenu = () => setMenuAnchor(null);
   const title = displayTitle(s);
   const hasChildren = node.children.length > 0;
   const isCollapsed = collapsed.has(s.id);
@@ -138,7 +142,7 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
               borderColor: "divider",
             },
           }),
-          "& .row-actions": { display: narrow ? "flex" : "none" },
+          "& .row-actions": { display: narrow || menuAnchor ? "flex" : "none" },
           "&:hover .row-actions, &:focus-within .row-actions": { display: "flex" },
         }}
       >
@@ -220,55 +224,78 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
           )}
         </ListItemButton>
         <Box className="row-actions" sx={{ gap: 0.5, flexShrink: 0, alignItems: "center" }}>
-          <Tooltip title="New nested session: an empty session under this one, with the same folder and model">
-            <span>
-              <IconButton
-                size="small"
-                aria-label={`New nested session under ${title}`}
-                disabled={busy}
-                onClick={() => ctx.onNewNested(s.id)}
-              >
+          <IconButton
+            size="small"
+            aria-label={`Actions for ${title}`}
+            aria-haspopup="menu"
+            aria-expanded={menuAnchor ? true : undefined}
+            onClick={(e) => setMenuAnchor(e.currentTarget)}
+          >
+            <MoreHorizIcon fontSize="small" />
+          </IconButton>
+          <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
+            <MenuItem
+              disabled={busy}
+              onClick={() => {
+                closeMenu();
+                ctx.onNewNested(s.id);
+              }}
+            >
+              <ListItemIcon>
                 <SubdirectoryArrowRightIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          {depth === 0 && (
-            <Tooltip title="Move to a group">
-              <span>
-                <IconButton
-                  size="small"
-                  aria-label={`Move ${title} to a group`}
-                  onClick={(e) => ctx.onMove(s.id, e.currentTarget)}
-                >
+              </ListItemIcon>
+              <ListItemText>New nested session</ListItemText>
+            </MenuItem>
+            {depth === 0 && (
+              <MenuItem
+                onClick={() => {
+                  const anchor = menuAnchor;
+                  closeMenu();
+                  if (anchor) ctx.onMove(s.id, anchor);
+                }}
+              >
+                <ListItemIcon>
                   <DriveFileMoveOutlinedIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
-          <Tooltip title="Rename session">
-            <span>
-              <IconButton
-                size="small"
-                aria-label={`Rename ${title}`}
-                disabled={busy}
-                onClick={() => setEditing({ id: s.id, value: title })}
-              >
+                </ListItemIcon>
+                <ListItemText>Move to a group</ListItemText>
+              </MenuItem>
+            )}
+            <MenuItem
+              disabled={busy}
+              onClick={() => {
+                closeMenu();
+                setEditing({ id: s.id, value: title });
+              }}
+            >
+              <ListItemIcon>
                 <EditOutlinedIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title={ctx.deleteLocked.has(s.id) ? "Can't delete while a plan is running in this session or one nested with it" : "Delete session"}>
-            <span>
-              <IconButton
-                size="small"
-                aria-label={`Delete ${title}`}
-                disabled={(busy && s.id === currentId) || ctx.deleteLocked.has(s.id)}
-                onClick={() => ctx.onDelete(s.id)}
-              >
+              </ListItemIcon>
+              <ListItemText>Rename</ListItemText>
+            </MenuItem>
+            <Divider />
+            <MenuItem
+              disabled={(busy && s.id === currentId) || ctx.deleteLocked.has(s.id)}
+              onClick={() => {
+                closeMenu();
+                ctx.onDelete(s.id);
+              }}
+              sx={{ color: "error.main" }}
+            >
+              <ListItemIcon sx={{ color: "inherit" }}>
                 <DeleteOutlinedIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
+              </ListItemIcon>
+              <ListItemText
+                secondary={
+                  ctx.deleteLocked.has(s.id)
+                    ? "Can't delete while a plan is running in this session or one nested with it"
+                    : undefined
+                }
+                slotProps={{ secondary: { sx: { whiteSpace: "normal", maxWidth: 240 } } }}
+              >
+                Delete
+              </ListItemText>
+            </MenuItem>
+          </Menu>
         </Box>
       </ListItem>
       {hasChildren &&
