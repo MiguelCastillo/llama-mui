@@ -1,4 +1,4 @@
-import { Fragment, useCallback, type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, memo, useCallback, type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import { isImageFile, prepareImage, revokePreview } from "./images";
 import {
@@ -302,6 +302,21 @@ const manageItemSx: SxProps<Theme> = (t) => {
     "&.Mui-focusVisible": over(p.action.focus),
   };
 };
+
+// One bubble's turn (see `turns` in Chat).
+type Turn = { parts: ChatMessage[]; start: number; results: Map<string, ChatMessage>; hasNotes: boolean };
+// What a bubble's buttons call (see bubbleActions in Chat).
+type BubbleActions = {
+  edit: (start: number) => void;
+  retry: () => void;
+  doIt: (parts: ChatMessage[], box: NoteBox) => void;
+  noteDone: (parts: ChatMessage[], box: NoteBox, done: boolean) => void;
+  addTodo: (text: string) => void;
+  makePlan: (text: string) => void;
+  reply: (text: string) => void;
+};
+const sameItems = <T,>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+const sameEntries = <K, V>(a: Map<K, V>, b: Map<K, V>) => a.size === b.size && [...b].every(([k, v]) => a.get(k) === v);
 
 // What happened to a failed reply, in the user's terms. Our server answers 502
 // when it can't reach the llama server; a TypeError means the request never
@@ -1114,6 +1129,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     box.fill(target.text);
     return true;
   };
+  // Last render's turns by start index, so an unchanged turn keeps its arrays
+  // (see `turns`), and the bubbles' buttons (see bubbleLatest below).
+  const turnCache = useRef(new Map<number, Turn>());
+  const bubbleLatest = useRef<BubbleActions>(null!);
+  const [bubbleActions] = useState<BubbleActions>(() => ({
+    edit: (start) => bubbleLatest.current.edit(start),
+    retry: () => bubbleLatest.current.retry(),
+    doIt: (parts, box) => bubbleLatest.current.doIt(parts, box),
+    noteDone: (parts, box, done) => bubbleLatest.current.noteDone(parts, box, done),
+    addTodo: (text) => bubbleLatest.current.addTodo(text),
+    makePlan: (text) => bubbleLatest.current.makePlan(text),
+    reply: (text) => bubbleLatest.current.reply(text),
+  }));
   // The Edit button on a message you sent, at `index` in the messages. The
   // last one is replaced when sent, like the up arrow; an older one only has
   // its text copied into the box, to be sent as a new message (nothing is cut).
@@ -1551,14 +1579,67 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // steps of one reply share a bubble.
   const toolResults = new Map(messages.filter((m) => m.role === "tool").map((m) => [m.toolCallId!, m]));
   // `start` is each turn's first message index, to place the divider.
-  const turns: { parts: ChatMessage[]; start: number }[] = [];
+  const grouped: { parts: ChatMessage[]; start: number }[] = [];
   messages.forEach((m, i) => {
     if (m.role === "tool") return;
-    const prev = turns[turns.length - 1];
+    const prev = grouped[grouped.length - 1];
     // A side question's answer is a bubble of its own, never part of the plan's reply.
     if (m.role === "assistant" && prev?.parts[0].role === "assistant" && !prev.parts[0].aside === !m.aside && i !== contextStart) prev.parts.push(m);
-    else turns.push({ parts: [m], start: i });
+    else grouped.push({ parts: [m], start: i });
   });
+  // Each turn as its bubble gets it: its messages, the results of its own
+  // tool calls, and whether it has note boxes. A turn whose messages and
+  // results are the same objects as last render keeps last render's arrays,
+  // so its (memoized) bubble isn't drawn again; a message is only replaced
+  // when it changes. Without this every update of Chat redraws every bubble,
+  // which in a long chat freezes the page for most of a second.
+  const turns = grouped.map((t) => {
+    const old = turnCache.current.get(t.start);
+    const parts = old && sameItems(old.parts, t.parts) ? old.parts : t.parts;
+    const results = new Map<string, ChatMessage>();
+    for (const m of parts) for (const c of m.toolCalls ?? []) {
+      const r = toolResults.get(c.id);
+      if (r) results.set(c.id, r);
+    }
+    if (old && parts === old.parts && sameEntries(old.results, results)) return old;
+    const hasNotes = old && parts === old.parts ? old.hasNotes : parts[0].role !== "user" && noteBoxes(parts).length > 0;
+    return { parts, start: t.start, results, hasNotes };
+  });
+  turnCache.current = new Map(turns.map((t) => [t.start, t]));
+  // What the bubbles' buttons do, through functions that never change (so a
+  // bubble isn't drawn again because Chat made new ones); each call runs what
+  // the latest render defined. A bubble says which turn it is by its start
+  // index or its messages.
+  bubbleLatest.current = {
+    edit: editMessage,
+    retry,
+    // Do it marks its box done at once and the mark is saved with the message;
+    // if the message is refused the box goes back to open. Pressed again, the
+    // box is done and nothing is sent. The message is found by identity in the
+    // latest list (see noteDone).
+    doIt: (parts, box) => {
+      const id = sessionId;
+      const now = sessionRef.current.messages;
+      const at = now.indexOf(parts[box.part]);
+      const press = doItPress(now, at, box.note);
+      if (!press.send) return;
+      updateSession({ messages: press.messages });
+      void send(DO_IT_MESSAGE, undefined, () => {}, press.messages).then((went) => {
+        if (!went && openId.current === id) updateSession((s) => ({ messages: setNoteDone(s.messages, at, box.note, false) }));
+      });
+    },
+    // The box knows its message only as a place among the turn's assistant
+    // messages (tool results sit between them in the session), so the
+    // message is found by identity in the current list.
+    noteDone: (parts, box, done) =>
+      updateSession((s) => {
+        const at = s.messages.indexOf(parts[box.part]);
+        return { messages: setNoteDone(s.messages, at, box.note, done) };
+      }),
+    addTodo: (text) => updateSession((s) => ({ todos: [...s.todos, ideaTodo(text, newId().slice(0, 8), Date.now())] })),
+    makePlan: (text) => void send(planMessage(text), undefined, () => {}),
+    reply: (text) => setReplyTarget({ id: sessionId, text, n: Date.now() }),
+  };
   // The last turn that's a user message (not a side question: it has no Resend);
   // only its reply can fail.
   const lastUserTurn = turns.map((t) => t.parts[0].role === "user" && !t.parts[0].aside).lastIndexOf(true);
@@ -1567,56 +1648,41 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const lastPlainTurn = turns.map((t) => !t.parts[0].aside).lastIndexOf(true);
   const lastAsideTurn = turns.map((t) => !!t.parts[0].aside).lastIndexOf(true);
   // One turn drawn as a bubble; `i` is its place among all turns.
-  const bubble = (t: (typeof turns)[number], i: number) => (
-    <MessageBubble
-      key={t.start}
-      parts={t.parts}
-      streaming={t.parts[0].aside ? asideRunning && i === lastAsideTurn : !!runnerView?.streaming && i === lastPlainTurn}
-      since={t.parts[0].aside ? null : taskSince}
-      rate={streamRate}
-      toolResults={toolResults}
-      forgotten={t.start < contextStart}
-      showSteps={prefs?.showSteps ?? true}
-      renderMarkdown={prefs?.renderMarkdown ?? true}
-      showModelName={prefs?.showModelName ?? false}
-      failed={i === lastFailedTurnIndex ? failed : undefined}
-      connectorName={connector ? connector.name || connector.kind : undefined}
-      onResend={i === lastFailedTurnIndex ? retry : undefined}
-      resendDisabled={i === lastFailedTurnIndex ? runActive : undefined}
-      onEdit={t.parts[0].role === "user" && !t.parts[0].aside && !t.parts[0].planStep ? () => editMessage(t.start) : undefined}
-      box={box}
-      sessionId={sessionId}
-      replyRunning={runActive || turnRunning}
-      // Do it marks its box done at once and the mark is saved with the message;
-      // if the message is refused the box goes back to open. Pressed again, the
-      // box is done and nothing is sent. The message is found by identity in the
-      // latest list (see onNoteDone).
-      onDoIt={(box) => {
-        const id = sessionId;
-        const now = sessionRef.current.messages;
-        const at = now.indexOf(t.parts[box.part]);
-        const press = doItPress(now, at, box.note);
-        if (!press.send) return;
-        updateSession({ messages: press.messages });
-        void send(DO_IT_MESSAGE, undefined, () => {}, press.messages).then((went) => {
-          if (!went && openId.current === id) updateSession((s) => ({ messages: setNoteDone(s.messages, at, box.note, false) }));
-        });
-      }}
-      // The box knows its message only as a place among the turn's assistant
-      // messages (tool results sit between them in the session), so the
-      // message is found by identity in the current list.
-      onNoteDone={(box, done) =>
-        updateSession((s) => {
-          const at = s.messages.indexOf(t.parts[box.part]);
-          return { messages: setNoteDone(s.messages, at, box.note, done) };
-        })
-      }
-      todos={todos}
-      onAddTodo={(text) => updateSession((s) => ({ todos: [...s.todos, ideaTodo(text, newId().slice(0, 8), Date.now())] }))}
-      onMakePlan={(text) => send(planMessage(text), undefined, () => {})}
-      onReply={planRunning ? undefined : (text) => setReplyTarget({ id: sessionId, text, n: Date.now() })}
-    />
-  );
+  // Values that change often (the task's start, whether a reply runs, the
+  // error) go only to the bubbles that show them; the others get a constant.
+  const bubble = (t: (typeof turns)[number], i: number) => {
+    const streaming = t.parts[0].aside ? asideRunning && i === lastAsideTurn : !!runnerView?.streaming && i === lastPlainTurn;
+    return (
+      <MessageBubble
+        key={t.start}
+        start={t.start}
+        parts={t.parts}
+        streaming={streaming}
+        since={streaming && !t.parts[0].aside ? taskSince : null}
+        rate={streamRate}
+        toolResults={t.results}
+        forgotten={t.start < contextStart}
+        showSteps={prefs?.showSteps ?? true}
+        renderMarkdown={prefs?.renderMarkdown ?? true}
+        showModelName={prefs?.showModelName ?? false}
+        failed={i === lastFailedTurnIndex ? failed : undefined}
+        connectorName={connector ? connector.name || connector.kind : undefined}
+        onResend={i === lastFailedTurnIndex ? bubbleActions.retry : undefined}
+        resendDisabled={i === lastFailedTurnIndex ? runActive : undefined}
+        onEdit={t.parts[0].role === "user" && !t.parts[0].aside && !t.parts[0].planStep ? bubbleActions.edit : undefined}
+        box={box}
+        sessionId={sessionId}
+        // Only the note boxes' buttons use these.
+        replyRunning={t.hasNotes && (runActive || turnRunning)}
+        todos={t.hasNotes ? todos : undefined}
+        onDoIt={bubbleActions.doIt}
+        onNoteDone={bubbleActions.noteDone}
+        onAddTodo={bubbleActions.addTodo}
+        onMakePlan={bubbleActions.makePlan}
+        onReply={planRunning ? undefined : bubbleActions.reply}
+      />
+    );
+  };
   // Each update_plan call's turn, to show the plan it wrote after that turn.
   const callTurn = new Map(turns.flatMap((t) => t.parts.flatMap((m) => (m.toolCalls ?? []).map((c) => [c.id, t.start] as const))));
   // Where a plan shows. A call's plan: after that call's turn. "at:N": before
@@ -2751,7 +2817,8 @@ function EditButton({ onEdit, box }: { onEdit: () => void; box: MessageBox }) {
 
 // One bubble per turn: a user message, or every assistant step of one reply
 // (thinking, tool calls, text) in the order they happened.
-function MessageBubble({
+const MessageBubble = memo(function MessageBubble({
+  start,
   parts,
   streaming,
   toolResults,
@@ -2778,8 +2845,11 @@ function MessageBubble({
 }: {
   // Reply to this response: its text becomes the quote above the next message.
   onReply?: (text: string) => void;
+  // The turn's first message index, passed back to onEdit.
+  start: number;
   parts: ChatMessage[];
   streaming: boolean;
+  // The results of this turn's own tool calls, by call id.
   toolResults: Map<string, ChatMessage>;
   // Above a Clear context divider: shown dimmed since the model can't see it.
   forgotten: boolean;
@@ -2799,7 +2869,7 @@ function MessageBubble({
   resendDisabled?: boolean;
   // Edit button on a message you sent (not a side question): takes its text
   // back into the message box. Disabled while the box has something in it.
-  onEdit?: () => void;
+  onEdit?: (start: number) => void;
   box: MessageBox;
   // While this reply streams: when the task started, for the counter beside
   // the waiting dots, and how fast the current round is streaming.
@@ -2810,10 +2880,10 @@ function MessageBubble({
   // Whether any reply is streaming (the Do it button waits), and what the
   // button does: send "yes, go ahead" as the next message.
   replyRunning?: boolean;
-  onDoIt?: (box: NoteBox) => void;
+  onDoIt?: (parts: ChatMessage[], box: NoteBox) => void;
   // Mark a box done, or open again (Mark done / Reopen). Waits while a reply
   // runs, like the buttons above.
-  onNoteDone?: (box: NoteBox, done: boolean) => void;
+  onNoteDone?: (parts: ChatMessage[], box: NoteBox, done: boolean) => void;
   // The session's todos (an idea already added shows "Added"), and what the
   // idea buttons do: add the idea as a todo, or send "Make a plan for this: …".
   // Both wait while a reply runs, since the server owns the session then and
@@ -2903,7 +2973,7 @@ function MessageBubble({
             )
           }
         />
-        {onEdit && !isAside && <EditButton onEdit={onEdit} box={box} />}
+        {onEdit && !isAside && <EditButton onEdit={() => onEdit(start)} box={box} />}
         {hidden && (
           <PanelButton
             label={showHidden ? "Hide what was sent with this message" : "Show what was sent with this message, unseen"}
@@ -3064,7 +3134,7 @@ function MessageBubble({
                 label="Reopen"
                 variant="outlined"
                 color="inherit"
-                onClick={() => onNoteDone?.(box, false)}
+                onClick={() => onNoteDone?.(parts, box, false)}
                 disabled={doItDisabled(!!replyRunning)}
               />
             ) : offersOf(box).length > 0 || hasDoIt(box) || hasDone(box.kind) ? (
@@ -3095,7 +3165,7 @@ function MessageBubble({
                     label="Do it"
                     variant="contained"
                     color="warning"
-                    onClick={() => onDoIt?.(box)}
+                    onClick={() => onDoIt?.(parts, box)}
                     disabled={doItDisabled(!!replyRunning)}
                   />
                 )}
@@ -3104,7 +3174,7 @@ function MessageBubble({
                     label="Mark done"
                     variant="outlined"
                     color="inherit"
-                    onClick={() => onNoteDone?.(box, true)}
+                    onClick={() => onNoteDone?.(parts, box, true)}
                     disabled={doItDisabled(!!replyRunning)}
                   />
                 )}
@@ -3231,7 +3301,7 @@ function MessageBubble({
       </Dialog>
     </Box>
   );
-}
+});
 
 // The one control for how wide the chat reads: the widest the messages and the
 // input box get; on a wider screen they stay centered at this width. Text,
@@ -3266,7 +3336,7 @@ const flatAccordionSx = {
 // One tool call: what was asked for, and the result once it's back.
 // `stopped`: the reply isn't running any more, so a call with no result
 // won't get one (it was stopped, or the page reloaded mid-call).
-function ToolCallView({
+const ToolCallView = memo(function ToolCallView({
   call,
   result: resultMessage,
   stopped,
@@ -3344,7 +3414,7 @@ function ToolCallView({
       </AccordionDetails>
     </Accordion>
   );
-}
+});
 
 // The prompt for whatever a reply is waiting on.
 function PendingPrompt({ ask, onDecide, onAlways, runKind }: { ask: Ask; onDecide: (answer: Answer) => void; onAlways?: (kind: AutoKind) => void; runKind?: string | null }) {

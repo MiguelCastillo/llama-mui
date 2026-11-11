@@ -1,4 +1,4 @@
-import { type ReactNode, useRef, useState } from "react";
+import { memo, type ReactNode, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
@@ -78,7 +78,9 @@ const headingSx = { lineHeight: 1.3 } as const;
 // breaks: a single line break stays a line break, as in what the user typed.
 // The text fills whatever width it is given: how long a line gets is decided by
 // the width of the chat's container (CHAT_MAX_WIDTH in Chat.tsx), not here.
-export default function MarkdownRenderer({
+// Memoized: a message's text only parses again when it changes, not each time
+// the chat around it draws.
+export default memo(function MarkdownRenderer({
   content,
   breaks = false,
 }: {
@@ -181,4 +183,4 @@ export default function MarkdownRenderer({
       </ReactMarkdown>
     </Box>
   );
-}
+});
