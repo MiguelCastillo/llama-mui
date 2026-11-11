@@ -65,7 +65,7 @@ export async function buildEnv(session: any, options: RunOptions): Promise<Runne
     models,
     toolContext,
     toolsOn: options.toolsOn,
-    thinkOn: options.thinkOn,
+    modelOptions: options.modelOptions,
     freshSteps: options.freshSteps,
   };
 }
@@ -148,7 +148,7 @@ export async function startTurnFromOptions(
           connectorId: item.options.connectorId ?? "",
           model: item.options.model,
           toolsOn: item.options.toolsOn,
-          thinkOn: item.options.thinkOn,
+          modelOptions: item.options.modelOptions,
           planning: item.options.planning === true,
           images: item.images,
           replyTo: item.replyTo,

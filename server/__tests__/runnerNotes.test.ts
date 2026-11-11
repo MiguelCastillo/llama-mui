@@ -30,7 +30,7 @@ const env = {
   models: [],
   toolContext: { definitions: [], checkCommands: {} } as any,
   toolsOn: false,
-  thinkOn: false,
+  modelOptions: {},
 } as RunnerEnv;
 
 async function start(id: string, steps = 3) {

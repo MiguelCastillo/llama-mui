@@ -9,6 +9,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { openKeys, sealKeys } from "./secrets.ts";
+import type { Effort } from "../src/api.ts";
 
 export interface Connector {
   id: string;
@@ -49,8 +50,12 @@ export interface Preferences {
 // Options for one model, keyed by its id (e.g. "unsloth/Qwen3.5-9B-GGUF:Q4_K_M"),
 // so they follow the model to any server that has it.
 export interface ModelSettings {
-  // Ask the chat template for a reasoning phase before the answer.
+  // Ask the chat template for a reasoning phase before the answer. llama.cpp
+  // only: Claude always thinks, and effort sets how much.
   think: boolean;
+  // Claude only: how much effort it puts into a reply (output_config.effort).
+  // Left out, nothing is sent and the model's own default applies.
+  effort?: Effort;
 }
 
 export interface Store {

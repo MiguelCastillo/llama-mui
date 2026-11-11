@@ -91,7 +91,7 @@ function setup(steps: PlanStep[], reply: RunPlanCallbacks["reply"], overrides?: 
     checkCommands: {},
     attachedPaths: () => [],
     sessionId: "test-session",
-    thinkOn: false,
+    modelOptions: {},
     toolDefinitions: [],
     ...overrides,
   };

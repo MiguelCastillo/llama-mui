@@ -47,7 +47,7 @@ describe("setApiOrigin", () => {
     );
     setApiOrigin("http://127.0.0.1:4173");
     await streamChat(
-      { connectorId: "c1", model: "m", api: "openai", kind: "llama", think: false, messages: [{ role: "user", content: "hi" }] },
+      { connectorId: "c1", model: "m", api: "openai", kind: "llama", purpose: { kind: "background" }, messages: [{ role: "user", content: "hi" }] },
       () => {},
       new AbortController().signal,
     );

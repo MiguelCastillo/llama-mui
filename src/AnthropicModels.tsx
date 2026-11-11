@@ -3,30 +3,28 @@ import {
   Alert,
   Box,
   CircularProgress,
-  FormControlLabel,
   List,
   ListItem,
   ListItemText,
   Paper,
   Stack,
-  Switch,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import DefaultButton from "./DefaultButton";
-import { type Connector, type Model, listModels } from "./api";
+import { type Connector, type Effort, type Model, type ModelSettings, listModels } from "./api";
+import ModelKnobs from "./ModelKnobs";
 
 // Anthropic's API: the Claude models the key can use, to pick from in chat.
-// There's nothing to download, load or delete; Think is the one option.
+// There's nothing to download, load or delete; Effort is the one option.
 export default function AnthropicModels({
   connector,
-  think,
-  setThink,
+  settingsFor,
+  changeSetting,
   changeDefault,
 }: {
   connector: Connector;
-  think: (id: string) => boolean;
-  setThink: (id: string, think: boolean) => void;
+  settingsFor: (id: string) => ModelSettings;
+  changeSetting: (id: string, changes: { think?: boolean; effort?: Effort | undefined }) => void;
   changeDefault: (id: string) => void;
 }) {
   const [models, setModels] = useState<Model[] | null>(null);
@@ -67,35 +65,25 @@ export default function AnthropicModels({
                   }
                 />
                 <DefaultButton id={m.id} current={connector.defaultModel} change={changeDefault} />
-                {/* On: Claude thinks as it sees fit and shows a summary. */}
-                <Tooltip title="Think before answering. Claude's message in chat gets a Thoughts bar with a summary of its thinking.">
-                  <FormControlLabel
-                    label="Think"
-                    labelPlacement="start"
-                    control={
-                      <Switch
-                        checked={think(m.id)}
-                        onChange={(e) => setThink(m.id, e.target.checked)}
-                        slotProps={{ input: { "aria-label": `Think before answering with ${m.id}` } }}
-                      />
-                    }
-                    sx={{ mr: 0, flexShrink: 0 }}
-                  />
-                </Tooltip>
+                {/* Effort, when this model takes it (its own capabilities say). */}
+                <ModelKnobs kind="anthropic" id={m.id} capabilities={m.capabilities} settings={settingsFor(m.id)} change={changeSetting} />
               </ListItem>
             ))}
           </List>
         </Paper>
       )}
 
-      {/* Explains the Think switch on each model's row, so it sits right under them. */}
+      {/* Explains the Effort picker on each model's row, so it sits right under them. */}
       {models && (
         <Typography variant="body2" color="text.secondary">
-          <b>Think</b> (before answering) lets Claude think as it sees fit before it writes its answer. In chat,
-          Claude's message then starts with a grey bar labelled <b>Thoughts</b>, above the answer; click the bar to read
-          a summary of what Claude thought; the time it spent thinking shows at the bar's right end. (The bar needs{" "}
-          <b>Show steps</b> on in Settings → Chat.) Thinking can help with hard questions but is slower. Off, Claude isn't asked to think,
-          though some models may still think briefly, and you won't see it.
+          Claude thinks before every answer and between tool calls, as much as it sees fit. <b>Effort</b> sets how
+          much: <b>low</b> is quicker and cheaper, <b>high</b>, <b>xhigh</b> and <b>max</b> think longer and more
+          carefully. <b>Default</b> sends nothing, so the model's own default applies. Each
+          message carries the effort set when it was sent, queued ones included. Models differ in what they take: one
+          that takes no effort (Haiku 4.5) has no picker, and the others list only the levels they support. In
+          chat, Claude's message starts with a grey bar labelled <b>Thoughts</b>, above the answer; click it to read a
+          summary of what Claude thought; the time it spent shows at the bar's right end. (The bar needs{" "}
+          <b>Show steps</b> on in Settings → Chat.)
         </Typography>
       )}
     </Stack>

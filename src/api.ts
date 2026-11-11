@@ -8,6 +8,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 export { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
+import { type Capabilities, type Effort, type ModelOptions, type Purpose, connection, readCapabilities } from "./connections/index.ts";
+export { EFFORTS, type Effort, isEffort, type ModelOptions, type Purpose, type Capabilities } from "./connections/index.ts";
 
 export type ModelStatus = "loaded" | "loading" | "unloaded" | string;
 
@@ -28,6 +30,9 @@ export interface Model {
   sidecars?: string[];
   // File size in bytes
   size?: number;
+  // What the model can do, for Claude models (the Models API says); see
+  // src/connections.
+  capabilities?: Capabilities;
 }
 
 export interface SearchResult {
@@ -318,17 +323,53 @@ export const testConnector = (input: { id?: string; url?: string; apiKey?: strin
 export async function listModels(connectorId: string): Promise<Model[]> {
   // Anthropic's API pages by 20 unless asked; llama.cpp ignores the limit.
   const body = await call<{ data: any[] }>("GET", `/api/c/${connectorId}/v1/models?limit=1000`);
-  return body.data.map((m) => ({
-    id: m.id,
-    name: m.display_name,
-    status: m.status?.value ?? "unknown",
-    inputs: m.architecture?.input_modalities ?? [],
-    contextSize: contextSize(m),
-    canRemove: m.can_remove,
-    source: m.source,
-    sidecars: m.sidecars,
-    size: m.size_in_bytes,
-  }));
+  return body.data.map((m) => {
+    // Anthropic's list says what each model can do; keep it, so a request
+    // doesn't have to ask again.
+    const capabilities = m.capabilities ? readCapabilities(m) : undefined;
+    if (capabilities) known.set(`${connectorId}\n${m.id}`, capabilities);
+    return {
+      id: m.id,
+      name: m.display_name,
+      status: m.status?.value ?? "unknown",
+      inputs: m.architecture?.input_modalities ?? [],
+      contextSize: contextSize(m),
+      canRemove: m.can_remove,
+      source: m.source,
+      sidecars: m.sidecars,
+      size: m.size_in_bytes,
+      ...(capabilities ? { capabilities } : {}),
+    };
+  });
+}
+
+// What a Claude model can do (Anthropic's Models API, through the connector),
+// by connector and model. A fact about the model, not a setting, so it is
+// asked once and kept in memory; a failed ask isn't kept, and gives undefined.
+const known = new Map<string, Capabilities>();
+const asking = new Map<string, Promise<Capabilities | undefined>>();
+export function getCapabilities(connectorId: string, model: string): Promise<Capabilities | undefined> {
+  const key = `${connectorId}\n${model}`;
+  const have = known.get(key);
+  if (have) return Promise.resolve(have);
+  let pending = asking.get(key);
+  if (!pending) {
+    pending = call<unknown>("GET", `/api/c/${connectorId}/v1/models/${encodeURIComponent(model)}`)
+      .then((m) => {
+        const caps = readCapabilities(m);
+        known.set(key, caps);
+        return caps;
+      })
+      .catch(() => undefined)
+      .finally(() => asking.delete(key));
+    asking.set(key, pending);
+  }
+  return pending;
+}
+// For tests: forget what was learned.
+export function forgetCapabilities() {
+  known.clear();
+  asking.clear();
 }
 
 // Model management endpoints (per-connector, at /api/c/<id>/models)
@@ -395,13 +436,21 @@ export function searchModels(connectorId: string, query: string): Promise<Search
 }
 
 // Per-model options, keyed by model id. Models nobody changed use defaults.
-export interface ModelSettings {
+// think is llama.cpp's; effort is Claude's, left out for the model's default.
+// Each connection kind decides which a model has (src/connections).
+export interface ModelSettings extends ModelOptions {
   think: boolean;
 }
 export const getModelSettings = () =>
   call<{ defaults: ModelSettings; models: Record<string, ModelSettings> }>("GET", "/api/model-settings");
-export const updateModelSettings = (model: string, changes: Partial<ModelSettings>) =>
-  call<ModelSettings>("PATCH", "/api/model-settings", { model, ...changes });
+// effort: null clears it, back to the model's default.
+// connectorId says which connection the model is on, so the server checks the
+// change against what that kind (and that model) takes.
+export const updateModelSettings = (
+  model: string,
+  changes: Partial<Omit<ModelSettings, "effort">> & { effort?: Effort | null },
+  connectorId?: string,
+) => call<ModelSettings>("PATCH", "/api/model-settings", { model, ...(connectorId ? { connectorId } : {}), ...changes });
 
 // Chat display preferences, saved with the rest of the settings.
 export interface Preferences {
@@ -709,7 +758,8 @@ export interface QueuedMessage {
     connectorId?: string;
     model: string;
     toolsOn: boolean;
-    thinkOn: boolean;
+    // The model's settings when it was typed (see src/connections).
+    modelOptions: ModelOptions;
     planning?: boolean;
   };
   images?: ImageRef[];
@@ -918,9 +968,11 @@ export interface ChatRequest {
   connectorId: string;
   model: string;
   messages: ChatMessage[];
-  // false asks the chat template to skip the reasoning phase, which small
-  // Qwen models can otherwise drag out for minutes on trivial prompts.
-  think: boolean;
+  // The model's settings the message carries, and why this request is made:
+  // the connection kind's module turns them into request fields (see
+  // src/connections). A background call has no settings.
+  options?: ModelOptions;
+  purpose: Purpose;
   tools?: unknown[];
   // The connector's kind and API; "llama" and "anthropic" when left out.
   kind?: Kind;
@@ -951,27 +1003,27 @@ export function streamChat(req: ChatRequest, onDelta: (d: StreamDelta) => void, 
 // file; llama.cpp stops sooner when the context fills.
 const MAX_TOKENS = 32768;
 
-// What a request carries beyond the chat, by what's on the other end.
-function messagesOptions(kind: Kind | undefined, think: boolean) {
-  if (kind === "anthropic") {
-    return {
-      // Asked for, Claude shows a summary of its thinking; not asked for, it
-      // may still think a little (Opus 5.5 can't be stopped), unseen.
-      ...(think ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
-      // Caches the conversation so far: each tool round resends it all, and
-      // cached tokens cost a tenth.
-      cache_control: { type: "ephemeral" },
-    };
-  }
-  // llama.cpp ignores `thinking: {type: "disabled"}`; its chat template
-  // takes this instead. Not in the SDK's types, but it sends the field.
-  return { chat_template_kwargs: { enable_thinking: think } };
+// The message inside an API error. llama.cpp's errors are {error: {message}},
+// Anthropic's {type, error: {message}}.
+function apiErrorMessage(e: InstanceType<typeof Anthropic.APIError>): string {
+  const body = e.error as any;
+  return body?.error?.message ?? body?.message ?? e.message;
+}
+
+// What a request carries beyond the chat: the connection kind's module
+// decides, from the settings, the purpose and (for Claude) what the model can
+// do. Without capabilities (the ask failed) a Claude request carries nothing
+// optional, so it can't be refused for a setting the model lacks.
+async function requestFields(connectorId: string, kind: Kind | undefined, model: string, options: ModelOptions | undefined, purpose: Purpose) {
+  const conn = connection(kind);
+  const caps = conn.needsCapabilities ? await getCapabilities(connectorId, model) : undefined;
+  return conn.fields(options, purpose, caps);
 }
 
 // The SDK's key is a placeholder: the dev server's proxy replaces it with the
 // connector's, which is why it's safe in a browser.
 async function streamMessages(
-  { connectorId, kind, model, messages, think, tools, images }: ChatRequest,
+  { connectorId, kind, model, messages, options, purpose, tools, images }: ChatRequest,
   onDelta: (d: StreamDelta) => void,
   signal: AbortSignal,
 ): Promise<ChatReply> {
@@ -990,7 +1042,7 @@ async function streamMessages(
     messages: wire,
     ...(system ? { system } : {}),
     ...(tools?.length ? { tools: tools.map(toTool) } : {}),
-    ...messagesOptions(kind, think),
+    ...(await requestFields(connectorId, kind, model, options, purpose)),
   };
 
   const calls = new Map<number, ToolCall>();
@@ -999,7 +1051,18 @@ async function streamMessages(
   let cached = 0;
   let output = 0;
   try {
-    const stream = client.messages.stream(params as Anthropic.MessageStreamParams, { signal });
+    final = await readStream(params);
+  } catch (e) {
+    // fetch's own TypeError, which failureLine reads as "couldn't reach".
+    if (e instanceof Anthropic.APIConnectionError && e.cause instanceof TypeError) throw e.cause;
+    if (e instanceof Anthropic.APIError && e.status) {
+      throw new Error(`POST /v1/messages: ${e.status} ${apiErrorMessage(e)}`);
+    }
+    throw e;
+  }
+
+  async function readStream(body: object): Promise<Anthropic.Message> {
+    const stream = client.messages.stream(body as Anthropic.MessageStreamParams, { signal });
     for await (const event of stream) {
       if (event.type === "message_start") {
         input = event.message.usage.input_tokens ?? 0;
@@ -1018,16 +1081,7 @@ async function streamMessages(
         }
       }
     }
-    final = await stream.finalMessage();
-  } catch (e) {
-    // fetch's own TypeError, which failureLine reads as "couldn't reach".
-    if (e instanceof Anthropic.APIConnectionError && e.cause instanceof TypeError) throw e.cause;
-    if (e instanceof Anthropic.APIError && e.status) {
-      // llama.cpp's errors are {error: {message}}, Anthropic's {type, error: {message}}.
-      const body = e.error as any;
-      throw new Error(`POST /v1/messages: ${e.status} ${body?.error?.message ?? body?.message ?? e.message}`);
-    }
-    throw e;
+    return stream.finalMessage();
   }
   // Claude's safety checks can stop a reply partway; without this it would
   // just end, maybe empty.
@@ -1099,7 +1153,7 @@ function readUsage(chunk: any): Usage | undefined {
 // chunks over as parsed JSON, so llama.cpp's own fields (reasoning_content,
 // timings) are there, just not in its types.
 async function streamCompletions(
-  { connectorId, model, messages, think, tools, images }: ChatRequest,
+  { connectorId, kind, model, messages, options, purpose, tools, images }: ChatRequest,
   onDelta: (d: StreamDelta) => void,
   signal: AbortSignal,
 ): Promise<ChatReply> {
@@ -1113,7 +1167,7 @@ async function streamCompletions(
     model,
     stream: true,
     messages: messages.map((m) => toWire(m, images)),
-    chat_template_kwargs: { enable_thinking: think },
+    ...(await requestFields(connectorId, kind, model, options, purpose)),
     ...(tools?.length ? { tools } : {}),
   };
 

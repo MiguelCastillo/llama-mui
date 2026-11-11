@@ -86,9 +86,24 @@ what else it offers:
 - **Anthropic API** (`https://api.anthropic.com`): a key (required) and a
   name. Its models are the Claude models the key can use, listed on the
   **Models** page and picked in chat; there's nothing to download or load. The
-  key goes as `x-api-key`. With **Think** on, Claude thinks adaptively and
-  shows a summary; off, it isn't asked to (Opus 5.5 may still think briefly,
-  unseen). Each request asks for prompt caching, since a tool loop resends the
+  key goes as `x-api-key`. Claude has no Think switch: every request asks it
+  to think (`thinking: {type: "adaptive", display: "summarized"}`), the first
+  one and every tool round, in chat, plan steps, step checks, side questions
+  and the background calls (naming a chat, a thread's report), and its summary
+  shows in the Thoughts bar. Without thinking, Claude tends to write its
+  reasoning into the reply, and once that is quoted back in a chat Anthropic
+  refuses later requests (`reasoning_extraction`). How much it thinks is the
+  model's **Effort** (Settings → Models), sent as `output_config: {effort}`;
+  on **Default** nothing is sent and the model's own default applies. What a
+  model takes comes from its own capabilities, which Anthropic's Models API
+  gives (`GET /v1/models/<id>`, through the connector's proxy; the model list
+  carries them too). The app asks once per connection and model and keeps the
+  answer in memory. A model that can't think adaptively (Haiku 4.5, Sonnet
+  4.5) gets no `thinking` field and runs without thinking; a model that takes
+  no effort (Haiku 4.5) has no Effort picker and is sent none, and the others
+  list only the levels they support (each level has its own flag). If the
+  capabilities can't be read, a request carries neither field, so it can't be
+  refused for one. Each request asks for prompt caching, since a tool loop resends the
   whole conversation every round. A reply Claude declines (`refusal`) ends with
   a message saying so. It costs money per token, and the chat goes to Anthropic.
 
@@ -605,7 +620,8 @@ vitest (`npm test`).
   you approve each change or command; work that needs several steps, touches
   several files or needs checking along the way becomes a plan. If the model
   starts and finds the work bigger than it looked, it stops and makes a plan.
-  Questions need no plan. A main-chat reply still skips thinking, as before.
+  Questions need no plan. On llama.cpp a main-chat reply still skips
+  thinking, as before; Claude thinks whenever its model supports it.
 - **How "size" is judged.** It is the model's judgment, not a count: the
   rule's "a command or two" is an example, not a threshold. The model weighs
   four things. What it can foresee: does it know the whole job up front, or
@@ -810,8 +826,10 @@ vitest (`npm test`).
     never the settings file), under a chat id of its own (`<chat>:check`), so
     they don't count as read by the model for the read-before-edit rule. It
     answers
-  `DONE` or `MISSING: …`. The check uses the chat's **Think** setting, and
-  works much better with it on.
+  `DONE` or `MISSING: …`. On llama.cpp the check uses the chat's **Think**
+  setting (first request only), and works much better with it on; Claude
+  thinks on each of its requests, with the message's effort when its model
+  takes one.
 - **Not done**: the model gets one retry, which starts by asking whether the
   check is right. The check is a model too, and it gets things wrong: seeing
   only diff hunks, it once called a function parameter "undefined". A small
@@ -890,8 +908,14 @@ nothing starts again by itself: see
 [After a restart](#after-a-restart).
 
 - **Run** saves the session first, then sends a `run` command with what the
-  page has chosen for that chat: the server (connector), the model, and whether Think
-  is on. The server looks up the connector, its models and the tools
+  page has chosen for that chat: the server (connector), the model, whether tools
+  are on and the model's settings as one object, `modelOptions` (Think for
+  llama.cpp, effort for a Claude model that takes it; see
+  [Connection kinds](#connection-kinds)). Anything set in the page travels
+  with the message this way; the server never looks a setting up itself, and
+  checks the object against the connection (a level the model doesn't take is
+  a 400). A page that hasn't reloaded still sends `thinkOn` and `effort`
+  beside each other; they are read as the same object. The server looks up the connector, its models and the tools
   itself. The API key never goes to the page and never into the run: the run
   talks to the server's own `/api`, whose proxy adds the key to the request.
 - The page is a view. It listens to the server's events (`src/runClient.ts`)
@@ -974,8 +998,8 @@ order, in a lighter style, with a line saying how many are waiting. This is a
 first version of the rules; they are meant to be tuned after trying them.
 
 - **Sent in order.** When a reply ends normally, the server sends the first
-  queued message as an ordinary reply, with the server, model, tools, Think
-  and planning choices it had when you sent it (and its pictures and quoted
+  queued message as an ordinary reply, with the server, model, tools,
+  model settings (`modelOptions`) and planning choices it had when you sent it (and its pictures and quoted
   text). Then the next one, and so on. This happens on the server, so it
   carries on with the page closed.
 - **Pause on Stop or failure.** If you press **Stop**, or the reply fails, the
@@ -1477,8 +1501,9 @@ step that was running when the page closed comes back as pending.
   **Clear context**: the model forgets everything so far, but the transcript
   stays on screen, dimmed, under a divider. **New chat** clears both. Turn the
   indicator off in **Settings → Chat**.
-- **Think before answering**, per model in **Settings → Models** (off by
-  default): off sends `chat_template_kwargs: {enable_thinking: false}`; on
+- **Think before answering**, per llama.cpp model in **Settings → Models** (off by
+  default; Claude models have **Effort** instead, if they take it, see the
+  Anthropic connector above): off sends `chat_template_kwargs: {enable_thinking: false}`; on
   shows the model's reasoning in a collapsible panel. Saved by model id, so it
   follows the model to any server, and it's what chat uses. With it off,
   small models like Qwen 9B rarely call tools, so the note under the models in
@@ -1505,8 +1530,46 @@ Each model row displays:
   has to be unloaded first.
 - ▶ / ■ to load or unload it. The server does it in the background, so the
   page asks again each second until the status changes.
-- A **Think** switch to enable reasoning mode for that model, explained right
-  under the list (for the local models and for Claude, each in its own words)
+- The model's settings, as the connection kind gives that model (see
+  [Connection kinds](#connection-kinds)): a **Think** switch for a llama.cpp
+  model, explained right under the list. A Claude connection's models have an
+  **Effort** picker instead (Default, then only the levels that model
+  supports), also explained under its list; a model that takes no effort has
+  none. Saved by model id in `settings.json`'s `models` (`think`, and `effort`
+  only when one is set); the page reads them and sends them with each message as
+  one object, cut down to the settings that model has now.
+
+## Connection kinds
+
+Everything about a model's settings and the request fields they turn into is
+decided in one module per connection kind, `src/connections/llama.ts` and
+`src/connections/anthropic.ts`, behind one interface (`types.ts`; `index.ts`
+picks the module by kind). The turn loop, the page and the server don't check
+the kind; they ask:
+
+- **Knobs**: the settings a model has and their allowed values. llama.cpp:
+  Think. Claude: Effort with the supported levels, or nothing, from the
+  model's capabilities. Settings → Models shows exactly these.
+- **Validation**: checks a settings object for that model. The settings route
+  (`PATCH /api/model-settings`, with the `connectorId`) uses it for saved
+  settings, and the commands (`run`, `message`, `ask`) for the settings a
+  message carries. A connection the server doesn't know is checked by shape only.
+- **Request fields**: the settings plus the request's **purpose** (a reply's
+  first request or a later tool round, a planning reply, a plan step, a step
+  check, a side question, a background call) become fields of the request.
+  `src/api.ts` asks for them; `runTurn` and `reviewStep` only say why they
+  ask. llama.cpp: `chat_template_kwargs.enable_thinking` is true only on the
+  first request of a reply, plan step, side question or step check, and only
+  when Think is on; never while planning, nor in the background. Claude:
+  adaptive thinking on every purpose if the model supports it (background
+  calls too: one-shot and short, and a name with reasoning in it would be
+  worse than the few tokens), and `output_config.effort` when a supported
+  level is set.
+
+A new setting is added to `ModelOptions` and to the modules; the run options,
+the queue (`QueuedMessage.options.modelOptions`) and the turn loop carry the
+object as it is. A saved queue from before this has `thinkOn` and `effort` in
+each item; they are read as the object.
 
 A model's context and other settings come from the server's preset file
 (`--models-preset`); the load API takes only the model's name. For a context

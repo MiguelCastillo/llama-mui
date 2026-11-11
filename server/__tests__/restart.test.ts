@@ -101,7 +101,7 @@ describe("markInterrupted", () => {
 });
 
 describe("markInterrupted and the queue", () => {
-  const queued = [{ id: "q1", text: "next", options: { model: "m", toolsOn: false, thinkOn: false }, queuedAt: 1 }];
+  const queued = [{ id: "q1", text: "next", options: { model: "m", toolsOn: false, modelOptions: {} }, queuedAt: 1 }];
 
   it("keeps the queue and pauses it", () => {
     const out = markInterrupted({ messages: [], queue: queued }, { status: "running", startedAt: 1, kind: "turn" });
@@ -117,7 +117,7 @@ describe("markInterrupted and the queue", () => {
 
 describe("recoverInterruptedRuns", () => {
   it("leaves a waiting queue paused, after a run that was cut off and with no run record", async () => {
-    const queue = [{ id: "q1", text: "next", options: { model: "m", toolsOn: false, thinkOn: false }, queuedAt: 1 }];
+    const queue = [{ id: "q1", text: "next", options: { model: "m", toolsOn: false, modelOptions: {} }, queuedAt: 1 }];
     await put("cut", { plan: null, messages: [], revision: 3, run: { status: "running", startedAt: 1, kind: "turn", streaming: true }, queue });
     await put("idle", { plan: null, messages: [], revision: 3, queue });
     await put("done", { plan: null, messages: [], revision: 3, queue: [], queuePaused: false });

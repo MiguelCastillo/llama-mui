@@ -113,6 +113,7 @@ import {
   ApiError,
   MAX_REPLY_QUOTE,
 } from "./api";
+import { optionsFor } from "./connections/index";
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { connectionForChat, pickModel } from "./modelChoice";
 import { getSavedModelsConnectorId, pickModelsConnector, setSavedModelsConnectorId } from "./modelsConnector";
@@ -1083,7 +1084,15 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   const canPlan = toolsOn && toolContext.offered.includes("update_plan");
   const planOn = canPlan;
-  const thinkOn = !!(modelSettings?.models[model] ?? modelSettings?.defaults)?.think;
+  // The model's settings (Settings → Models) as one object, sent with each
+  // message: only the ones its connection gives this model (Think for
+  // llama.cpp; effort for a Claude model that takes it, from what the model
+  // says it can do).
+  const modelOptions = optionsFor(
+    connector?.kind,
+    { ...modelSettings?.defaults, ...modelSettings?.models[model] },
+    models.find((m) => m.id === model)?.capabilities,
+  );
 
   // A prompt from a plan step shows in the plan card, under the step (see
   // PlanView); others show at the bottom of the chat.
@@ -1336,12 +1345,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
 
   // What the server needs from here to run a plan or a reply: which connector
-  // and model, and whether tools and Think are on. The server looks up the
+  // and model, whether tools are on, and the model's settings (Think, effort). The server looks up the
   // connector (and its key, which the page never has), the models and the tools
   // itself, and runs what is saved, so a session never carries anything secret.
   const runOptions = (): RunOptions | null =>
     connector && model
-      ? { connectorId: connector.id, model, toolsOn, thinkOn, freshSteps: prefs?.freshPlanSteps }
+      ? { connectorId: connector.id, model, toolsOn, modelOptions, freshSteps: prefs?.freshPlanSteps }
       : null;
 
   // Sends one message as a chat turn, which the server runs (see

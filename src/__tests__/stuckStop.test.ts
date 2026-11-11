@@ -34,7 +34,7 @@ function setup() {
     planSummary: null,
   };
   const config: RunTurnConfig = {
-    connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: false,
+    connectorId: "c", model: "m", toolsOn: true, modelOptions: {}, planning: false,
     systemPrompt: "sys", toolDefinitions: [], toolContextUpdate: "", seenUpdate: "",
     history: [], forgotten: [], workingDir: "/w", attached: [], chatId: "a",
     controller: new AbortController(), started: 0, text: "go",

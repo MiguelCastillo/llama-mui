@@ -231,7 +231,7 @@ async function ask(connectorId: string, model: string, kind: any, api: any, prom
   const answer: string[] = [];
   try {
     await streamChat(
-      { connectorId, kind, api, model, messages: [{ role: "user", content: prompt }], think: false, tools: [] },
+      { connectorId, kind, api, model, messages: [{ role: "user", content: prompt }], purpose: { kind: "background" }, tools: [] },
       (d) => {
         if (d.content) answer.push(d.content);
       },

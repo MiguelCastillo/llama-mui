@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { streamChat, toMessages, type ChatMessage, type ImageRef, type StreamDelta, type ToolCall } from "../api";
+import { modelAnswer } from "./capabilityFixtures";
+import { type Effort, streamChat, toMessages, type ChatMessage, type ImageRef, type StreamDelta, type ToolCall } from "../api";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -356,6 +357,8 @@ function serve(events: object[], status = 200) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const asked = modelAnswer(String(url instanceof Request ? url.url : url), init?.method);
+      if (asked) return asked;
       requests.push({ url: String(url instanceof Request ? url.url : url), body: JSON.parse(String(init?.body ?? "{}")) });
       return status === 200
         ? new Response(sse, { headers: { "content-type": "text/event-stream" } })
@@ -366,11 +369,11 @@ function serve(events: object[], status = 200) {
 }
 
 const tool = { type: "function", function: { name: "read_file", description: "Read a file", parameters: { type: "object" } } };
-const request = { connectorId: "c1", model: "qwen", think: true, tools: [tool], messages: [{ role: "user" as const, content: "Read README.md" }] };
+const request = { connectorId: "c1", model: "qwen", purpose: { kind: "reply" as const, round: 0 }, tools: [tool], messages: [{ role: "user" as const, content: "Read README.md" }] };
 
-async function collect(api: "anthropic" | "openai", kind: "llama" | "anthropic" = "llama", think = true) {
+async function collect(api: "anthropic" | "openai", kind: "llama" | "anthropic" = "llama", think = true, effort?: Effort, model = "claude-sonnet-5-5") {
   const deltas: StreamDelta[] = [];
-  const reply = await streamChat({ ...request, api, kind, think }, (d) => deltas.push(d), new AbortController().signal);
+  const reply = await streamChat({ ...request, api, kind, model: kind === "anthropic" ? model : request.model, options: { think, effort } }, (d) => deltas.push(d), new AbortController().signal);
   return { reply, text: deltas.map((d) => d.content ?? "").join(""), reasoning: deltas.map((d) => d.reasoning ?? "").join("") };
 }
 
@@ -544,6 +547,13 @@ describe("streamChat with the Messages API", () => {
     expect(requests[0].body.cache_control).toBeUndefined();
   });
 
+  it("sends a llama server no effort, even when one is given", async () => {
+    const requests = serve(reply(""));
+    await collect("anthropic", "llama", false, "high");
+    expect(requests[0].body.output_config).toBeUndefined();
+    expect(requests[0].body.chat_template_kwargs).toEqual({ enable_thinking: false });
+  });
+
   it("posts Anthropic's request with adaptive thinking and caching, not chat_template_kwargs", async () => {
     const requests = serve(reply("sig"));
     await collect("anthropic", "anthropic");
@@ -552,10 +562,27 @@ describe("streamChat with the Messages API", () => {
     expect(requests[0].body.chat_template_kwargs).toBeUndefined();
   });
 
-  it("asks Anthropic for no thinking with Think off", async () => {
+  it("asks Claude to think with Think off too: Claude has no off switch", async () => {
     const requests = serve(reply("sig", "end_turn"));
     await collect("anthropic", "anthropic", false);
+    expect(requests[0].body.thinking).toEqual({ type: "adaptive", display: "summarized" });
+  });
+
+  it("sends a Claude model that can't think adaptively, or take effort, neither (Haiku 4.5)", async () => {
+    const requests = serve(reply("", "end_turn"));
+    await collect("anthropic", "anthropic", true, "high", "claude-haiku-4-5-20251001");
     expect(requests[0].body.thinking).toBeUndefined();
+    expect(requests[0].body.output_config).toBeUndefined();
+    expect(requests[0].body.cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("sends Claude the effort when one is set, and none when it's the default", async () => {
+    const withEffort = serve(reply("sig", "end_turn"));
+    await collect("anthropic", "anthropic", true, "xhigh");
+    expect(withEffort[0].body.output_config).toEqual({ effort: "xhigh" });
+    const without = serve(reply("sig", "end_turn"));
+    await collect("anthropic", "anthropic");
+    expect(without[0].body.output_config).toBeUndefined();
   });
 
   it("says so when the model declines", async () => {

@@ -1,4 +1,5 @@
 import { MAX_QUEUE, type ImageRef, type QueuedMessage } from "./api.ts";
+import { readModelOptions } from "./connections/index.ts";
 
 // What a saved queue is read as. A file written by hand, shared, or by another
 // version may hold anything, so each item is checked and a bad one is dropped
@@ -39,7 +40,9 @@ function readQueued(raw: any): QueuedMessage | null {
       ...(typeof o.connectorId === "string" && o.connectorId ? { connectorId: o.connectorId } : {}),
       model: o.model,
       toolsOn: o.toolsOn === true,
-      thinkOn: o.thinkOn === true,
+      // A queue saved before the settings were one object has thinkOn and
+      // effort here instead; they are read as the object.
+      modelOptions: readModelOptions(o),
       ...(typeof o.planning === "boolean" ? { planning: o.planning } : {}),
     },
     ...(images.length ? { images } : {}),

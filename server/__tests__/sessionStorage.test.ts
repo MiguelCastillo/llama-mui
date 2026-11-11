@@ -295,7 +295,7 @@ describe("a session's queue of messages sent during a reply", () => {
   const item = (n: number, extra: object = {}) => ({
     id: `q${n}`,
     text: `message ${n}`,
-    options: { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: false },
+    options: { connectorId: "c", model: "m", toolsOn: true, modelOptions: {}, planning: false },
     images: [{ id: "i1", mediaType: "image/png" }],
     queuedAt: 100 + n,
     ...extra,

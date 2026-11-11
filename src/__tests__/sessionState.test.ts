@@ -76,7 +76,7 @@ describe("sessionState", () => {
       titleHint: "hint",
       planMovedIn: true,
       autoApprove: { commands: true },
-      queue: [{ id: "q1", text: "later", options: { model: "m", toolsOn: true, thinkOn: false }, queuedAt: 5 }],
+      queue: [{ id: "q1", text: "later", options: { model: "m", toolsOn: true, modelOptions: {} }, queuedAt: 5 }],
       queuePaused: true,
     } as ReturnType<typeof emptySessionState>;
     const saved = toSession(state, { id: "x", model: "m" });
@@ -122,7 +122,7 @@ describe("sessionState", () => {
   it("carries the queue and its pause: empty and not paused for a new or old chat, as loaded for a saved one", () => {
     expect(emptySessionState()).toMatchObject({ queue: [], queuePaused: false });
     expect(fromSession(bare)).toMatchObject({ queue: [], queuePaused: false });
-    const item = { id: "q1", text: "later", options: { model: "m", toolsOn: false, thinkOn: true }, queuedAt: 5 };
+    const item = { id: "q1", text: "later", options: { model: "m", toolsOn: false, modelOptions: { think: true } }, queuedAt: 5 };
     const state = fromSession({ ...bare, queue: [item], queuePaused: true });
     expect(state.queue).toEqual([item]);
     expect(state.queuePaused).toBe(true);
@@ -164,7 +164,7 @@ describe("sessionState", () => {
       titleHint: "hint",
       planMovedIn: true,
       autoApprove: { commands: true },
-      queue: [{ id: "q1", text: "later", options: { model: "m", toolsOn: false, thinkOn: false }, queuedAt: 5 }],
+      queue: [{ id: "q1", text: "later", options: { model: "m", toolsOn: false, modelOptions: {} }, queuedAt: 5 }],
       queuePaused: true,
     };
 

@@ -24,7 +24,7 @@
 // Nothing here can hold an API key: the server never sends one, and the page
 // never had one.
 
-import { ApiError, type AutoKind, type ImageRef, type Picked, type Session, getSession, sendCommand } from "./api";
+import { ApiError, type AutoKind, type Effort, type ImageRef, type ModelOptions, type Picked, type Session, getSession, sendCommand } from "./api";
 import { applyPatch, type SessionPatch } from "../server/sessionPatch";
 import type { Answer, Ask } from "./runnerTypes";
 import { type RunnerView, needsYou } from "./runView";
@@ -38,7 +38,10 @@ export interface RunOptions {
   connectorId: string;
   model: string;
   toolsOn: boolean;
-  thinkOn: boolean;
+  // The model's settings, as the page has them (Settings → Models): Think for
+  // llama.cpp, effort for Claude. They travel with the message; the server
+  // never looks them up.
+  modelOptions: ModelOptions;
   // Settings → Tools, "Fresh context for each plan step"; on unless false.
   freshSteps?: boolean;
 }

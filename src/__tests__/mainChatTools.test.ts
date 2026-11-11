@@ -43,7 +43,7 @@ function setup(answer: boolean | "plan") {
     planSummary: null,
   };
   const config: RunTurnConfig = {
-    connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: true,
+    connectorId: "c", model: "m", toolsOn: true, modelOptions: {}, planning: true,
     systemPrompt: "sys", toolDefinitions: [], toolContextUpdate: "", seenUpdate: "",
     history: [], forgotten: [], workingDir: "/work", attached: [], chatId: "a",
     controller: new AbortController(), started: 0, text: "make a.txt",

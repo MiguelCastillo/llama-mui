@@ -46,7 +46,7 @@ export async function modelLoaded(h: RunnerHandle): Promise<boolean> {
 // `planStep`: the turn runs that plan step; its messages carry the step's id.
 export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
   return async (text, given, { planning = false, planStep, from, images, replyTo } = {}) => {
-    const { connector, model, toolsOn, thinkOn, toolContext } = h.env;
+    const { connector, model, toolsOn, modelOptions, toolContext } = h.env;
     // A plan step never sees a side question (see src/asides.ts): `before` is
     // the plan's own messages, and what the turn writes has them put back where
     // they were. A chat turn after the plan sees everything, side questions
@@ -155,7 +155,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         api: connector.api,
         model,
         toolsOn,
-        thinkOn,
+        modelOptions,
         planning,
         planStep,
         systemPrompt: toolContext.systemPrompt,

@@ -128,7 +128,7 @@ export async function startAside(
           api: connector.api,
           model: env.model,
           toolsOn: env.toolsOn,
-          thinkOn: env.thinkOn,
+          modelOptions: env.modelOptions,
           planning: false,
           aside: true,
           note: asideNote(s.plan, latest),

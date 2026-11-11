@@ -496,7 +496,7 @@ describe("reviewStep input", () => {
       return { toolCalls: [] };
     });
     await reviewStep(
-      { connectorId: "c", model: "m", think: false, room: 10000, tools: [], read: async () => "" },
+      { connectorId: "c", model: "m", room: 10000, tools: [], read: async () => "" },
       "Do the thing",
       messages,
       [],
@@ -838,7 +838,7 @@ describe("parseVerdict", () => {
       return { toolCalls: [] };
     });
     const r = await reviewStep(
-      { connectorId: "c", model: "m", think: false, room: 10000, tools: [], read: async () => "" },
+      { connectorId: "c", model: "m", room: 10000, tools: [], read: async () => "" },
       "Do the thing",
       [],
       [],

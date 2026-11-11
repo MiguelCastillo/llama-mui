@@ -140,7 +140,8 @@ export async function askForReport(
         api,
         model,
         messages: [{ role: "user", content: reportPrompt(input) }],
-        think: false,
+        // One-shot, with no settings of the model's.
+        purpose: { kind: "background" },
         tools: [],
       },
       (d: StreamDelta) => {

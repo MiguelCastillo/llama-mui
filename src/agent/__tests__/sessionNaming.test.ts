@@ -109,7 +109,7 @@ describe("askForSessionName", () => {
       expect.objectContaining({
         connectorId: "test-connector",
         model: "test-model",
-        think: false,
+        purpose: { kind: "background" },
         tools: [],
       }),
       expect.any(Function),

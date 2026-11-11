@@ -36,7 +36,7 @@ const env = {
   models: [],
   toolContext: { definitions: [], checkCommands: {} } as any,
   toolsOn: false,
-  thinkOn: false,
+  modelOptions: {},
 } as RunnerEnv;
 
 const QUOTE = "Use a map, not a list, for lookups.";

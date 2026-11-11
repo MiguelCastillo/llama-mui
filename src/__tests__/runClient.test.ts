@@ -376,7 +376,7 @@ describe("asks", () => {
 
 describe("commands", () => {
   it("startRun sends the page's choices and answers once the run shows", async () => {
-    const p = startRun("a", { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, freshSteps: true });
+    const p = startRun("a", { connectorId: "c1", model: "m", toolsOn: true, modelOptions: {}, freshSteps: true });
     let done = false;
     void p.then(() => (done = true));
     subscribeAll(() => {});
@@ -384,7 +384,7 @@ describe("commands", () => {
     expect(commands()[0]).toEqual({
       method: "POST",
       path: "/api/sessions/a/commands/run",
-      body: { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, freshSteps: true },
+      body: { connectorId: "c1", model: "m", toolsOn: true, modelOptions: {}, freshSteps: true },
     });
     await flush();
     expect(done).toBe(false);
@@ -395,7 +395,7 @@ describe("commands", () => {
 
   it("startRun gives up waiting for the run to show after a moment, and still resolves", async () => {
     vi.useFakeTimers();
-    const p = startRun("a", { connectorId: "c1", model: "m", toolsOn: false, thinkOn: false });
+    const p = startRun("a", { connectorId: "c1", model: "m", toolsOn: false, modelOptions: {} });
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(START_WAIT_MS);
     await expect(p).resolves.toBe("a");
@@ -403,7 +403,7 @@ describe("commands", () => {
 
   it("startRun answers with the thread a new plan moved to, and waits for that run", async () => {
     serve((method) => (method === "GET" ? { body: session("a") } : { body: { ok: true, revision: 1, sessionId: "thread-1" } }));
-    const p = startRun("a", { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false });
+    const p = startRun("a", { connectorId: "c1", model: "m", toolsOn: true, modelOptions: {} });
     let ranIn: string | undefined;
     void p.then((id) => (ranIn = id));
     subscribeAll(() => {});
@@ -421,7 +421,7 @@ describe("commands", () => {
 
   it("startRun throws the server's plain refusal", async () => {
     serve(() => ({ status: 409, body: { error: "This plan is already running.", reason: "already running" } }));
-    await expect(startRun("a", { connectorId: "c1", model: "m", toolsOn: false, thinkOn: false })).rejects.toMatchObject({
+    await expect(startRun("a", { connectorId: "c1", model: "m", toolsOn: false, modelOptions: {} })).rejects.toMatchObject({
       message: "This plan is already running.",
       data: { reason: "already running" },
     });
@@ -465,7 +465,7 @@ describe("messages to the run", () => {
   });
 
   it("sendChat sends the text with the page's choices and answers once the reply's run shows", async () => {
-    const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, planning: true };
+    const options = { connectorId: "c1", model: "m", toolsOn: true, modelOptions: {}, planning: true };
     const p = sendChat("a", "Hello", options);
     let done = false;
     void p.then(() => (done = true));
@@ -486,7 +486,7 @@ describe("messages to the run", () => {
 
   it("sendChat answers at once when the server queued the message behind a running reply", async () => {
     serve(() => ({ body: { ok: true, revision: 9, queued: true, messageId: "q1" } }));
-    const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, planning: false, images: [{ id: "img-1", mediaType: "image/png" }], replyTo: "Use a map." };
+    const options = { connectorId: "c1", model: "m", toolsOn: true, modelOptions: {}, planning: false, images: [{ id: "img-1", mediaType: "image/png" }], replyTo: "Use a map." };
     // No run starts, so there is no run event to wait for.
     await expect(sendChat("a", "And then?", options)).resolves.toEqual({ queued: true });
     expect(commands()).toEqual([{ method: "POST", path: "/api/sessions/a/commands/message", body: { text: "And then?", ...options } }]);
@@ -495,13 +495,13 @@ describe("messages to the run", () => {
 
   it("sendChat throws 'queue full' as the server's plain refusal, so the text stays in the box", async () => {
     serve(() => ({ status: 409, body: { error: "10 messages are already waiting in this chat.", reason: "queue full" } }));
-    const refused = await sendChat("a", "One more", { connectorId: "c1", model: "m", toolsOn: false, thinkOn: false, planning: false }).catch((e) => e);
+    const refused = await sendChat("a", "One more", { connectorId: "c1", model: "m", toolsOn: false, modelOptions: {}, planning: false }).catch((e) => e);
     expect(refused).toBeInstanceOf(ApiError);
     expect(refused.data.reason).toBe("queue full");
   });
 
   it("sendChat sends the response being replied to as replyTo, and leaves it out otherwise", async () => {
-    const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, planning: false };
+    const options = { connectorId: "c1", model: "m", toolsOn: true, modelOptions: {}, planning: false };
     void sendChat("a", "Why a map?", { ...options, replyTo: "Use a map." });
     await vi.waitFor(() => expect(commands()).toHaveLength(1));
     expect(commands()[0].body).toEqual({ text: "Why a map?", ...options, replyTo: "Use a map." });
@@ -512,7 +512,7 @@ describe("messages to the run", () => {
 
   it("sendChat throws the server's plain refusal, so the text stays in the box", async () => {
     serve(() => ({ status: 409, body: { error: "This session is busy: a reply is already running in it.", reason: "already running" } }));
-    const refused = await sendChat("a", "More", { connectorId: "c1", model: "m", toolsOn: false, thinkOn: false, planning: false }).catch((e) => e);
+    const refused = await sendChat("a", "More", { connectorId: "c1", model: "m", toolsOn: false, modelOptions: {}, planning: false }).catch((e) => e);
     expect(refused).toBeInstanceOf(ApiError);
     expect(refused.message).toMatch(/busy/);
     expect(refused.data.reason).toBe("already running");
@@ -553,13 +553,13 @@ describe("messages to the run", () => {
 
   it("askAside sends the question as an ask command with the page's choices, and starts no run of its own", async () => {
     serve(() => ({ body: { ok: true, revision: 9 } }));
-    const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false };
+    const options = { connectorId: "c1", model: "m", toolsOn: true, modelOptions: {} };
     await expect(askAside("a", "What is it doing?", options)).resolves.toBeUndefined();
     expect(commands()).toEqual([{ method: "POST", path: "/api/sessions/a/commands/ask", body: { text: "What is it doing?", ...options } }]);
   });
 
   it("askAside throws the server's plain refusal, so the text stays in the box", async () => {
-    const options = { connectorId: "c1", model: "m", toolsOn: false, thinkOn: false };
+    const options = { connectorId: "c1", model: "m", toolsOn: false, modelOptions: {} };
     serve(() => ({ status: 409, body: { error: "A side question is still being answered.", reason: "aside running" } }));
     const busy = await askAside("a", "More", options).catch((e) => e);
     expect(busy).toBeInstanceOf(ApiError);
@@ -663,7 +663,7 @@ describe("uploadImage", () => {
 
 describe("sendChat with images", () => {
   it("passes images in the command body", async () => {
-    const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, planning: true, images: [{ id: "img-1", mediaType: "image/png" }] };
+    const options = { connectorId: "c1", model: "m", toolsOn: true, modelOptions: {}, planning: true, images: [{ id: "img-1", mediaType: "image/png" }] };
     const p = sendChat("a", "Hello", options);
     let done = false;
     void p.then(() => (done = true));

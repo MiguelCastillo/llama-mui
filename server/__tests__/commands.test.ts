@@ -26,7 +26,7 @@ const hub = await import("../runHub.ts");
 const runners = await import("../runners.ts");
 
 // No model: a run starts from a fake, the way the real `run` command will start one from a real run.
-const env = { connector: null, model: "m", models: [], toolContext: { definitions: [], checkCommands: {} }, toolsOn: false, thinkOn: false } as unknown as RunnerEnv;
+const env = { connector: null, model: "m", models: [], toolContext: { definitions: [], checkCommands: {} }, toolsOn: false, modelOptions: {} } as unknown as RunnerEnv;
 const deps: CommandDeps = {
   start: async (id: string) => {
     await runners.startRunner(id, env, {
@@ -55,7 +55,7 @@ async function command(id: string, name: string, body: unknown = {}, method = "P
   return { status: res.statusCode, body: text ? JSON.parse(text) : null } as { status: number; body: any };
 }
 
-const options = { connectorId: "c", model: "m", toolsOn: true, thinkOn: false };
+const options = { connectorId: "c", model: "m", toolsOn: true, modelOptions: { think: false } };
 const saved = (id: string, steps = 2) => putFile(id, { ...makeSession(id, steps), revision: 1 });
 const settle = () => vi.waitFor(() => expect(hub.liveRun("a")?.streaming).toBe(true));
 
@@ -88,7 +88,37 @@ describe("run", () => {
     saved("a");
     const start = vi.fn(async () => {});
     await command("a", "run", { ...options, freshSteps: false, extra: "ignored" }, "POST", { start });
-    expect(start).toHaveBeenCalledWith("a", { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, freshSteps: false });
+    expect(start).toHaveBeenCalledWith("a", { connectorId: "c", model: "m", toolsOn: true, modelOptions: { think: false }, freshSteps: false });
+  });
+
+  it("passes the settings object on whole, and checks it", async () => {
+    saved("a");
+    const start = vi.fn(async () => {});
+    const { modelOptions: _, ...bare } = options;
+    await command("a", "run", { ...bare, modelOptions: { think: true, effort: "max" } }, "POST", { start });
+    expect(start).toHaveBeenLastCalledWith("a", { ...bare, modelOptions: { think: true, effort: "max" } });
+    // Settings that aren't any kind's are dropped; none at all is an empty object.
+    await command("a", "run", { ...bare, modelOptions: { other: 1 } }, "POST", { start });
+    expect(start).toHaveBeenLastCalledWith("a", { ...bare, modelOptions: {} });
+    await command("a", "run", bare, "POST", { start });
+    expect(start).toHaveBeenLastCalledWith("a", { ...bare, modelOptions: {} });
+    for (const bad of [{ effort: "extreme" }, { think: "yes" }, "think", ["think"], null]) {
+      const r = await command("a", "run", { ...bare, modelOptions: bad }, "POST", { start });
+      expect(r.status).toBe(400);
+    }
+    expect(start).toHaveBeenCalledTimes(3);
+  });
+
+  it("reads an older page's thinkOn and effort as the settings object", async () => {
+    saved("a");
+    const start = vi.fn(async () => {});
+    const { modelOptions: _, ...bare } = options;
+    await command("a", "run", { ...bare, thinkOn: true, effort: "high" }, "POST", { start });
+    expect(start).toHaveBeenLastCalledWith("a", { ...bare, modelOptions: { think: true, effort: "high" } });
+    await command("a", "run", { ...bare, thinkOn: false, effort: null }, "POST", { start });
+    expect(start).toHaveBeenLastCalledWith("a", { ...bare, modelOptions: { think: false } });
+    expect((await command("a", "run", { ...bare, thinkOn: "no" }, "POST", { start })).status).toBe(400);
+    expect((await command("a", "run", { ...bare, effort: "extreme" }, "POST", { start })).status).toBe(400);
   });
 
   it("is refused for a second window running the same plan", async () => {
@@ -337,7 +367,7 @@ describe("ask: a side question beside a running plan", () => {
     const r = await command("a", "ask", { ...options, text: "  What is it doing?  ", extra: "ignored" }, "POST", { ...deps, aside });
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ ok: true, revision: fileOf("a").revision });
-    expect(aside).toHaveBeenCalledWith("a", "  What is it doing?  ", { connectorId: "c", model: "m", toolsOn: true, thinkOn: false });
+    expect(aside).toHaveBeenCalledWith("a", "  What is it doing?  ", { connectorId: "c", model: "m", toolsOn: true, modelOptions: { think: false } });
     // The plan is not told: no note is kept for a step.
     expect(hub.liveRun("a")!.notes).toBeUndefined();
   });
@@ -404,7 +434,7 @@ describe("message with no run: one chat reply, run here", () => {
     const r = await command("a", "message", { ...chatOptions, text: "hello", planning: true, extra: "ignored" }, "POST", { ...deps, chat });
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ ok: true, revision: fileOf("a").revision });
-    expect(chat).toHaveBeenCalledWith("a", "hello", { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: true });
+    expect(chat).toHaveBeenCalledWith("a", "hello", { connectorId: "c", model: "m", toolsOn: true, modelOptions: { think: false }, planning: true });
     // Without the flag it is an ordinary reply.
     await command("a", "message", { ...options, text: "again" }, "POST", { ...deps, chat });
     expect(chat).toHaveBeenLastCalledWith("a", "again", expect.objectContaining({ planning: false }));
@@ -556,11 +586,14 @@ describe("message while a chat reply streams: it waits in the session's queue", 
       {
         id: r.body.messageId,
         text: "and then?",
-        options: { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: true },
+        options: { connectorId: "c", model: "m", toolsOn: true, modelOptions: { think: false }, planning: true },
         replyTo: "Use a map.",
         queuedAt: expect.any(Number),
       },
     ]);
+    // A message sent with other settings keeps them in the queue.
+    await command("a", "message", { ...chatOptions, text: "harder", modelOptions: { think: true, effort: "high" } }, "POST", { ...deps, chat });
+    expect(queueOf()[1].options).toEqual({ connectorId: "c", model: "m", toolsOn: true, modelOptions: { think: true, effort: "high" }, planning: false });
     // The reply is untouched.
     expect(hub.liveRun("a")).toMatchObject({ kind: "turn", status: "running", streaming: true });
     release(true);
@@ -619,7 +652,7 @@ describe("queue-remove, queue-clear and queue-send", () => {
   const item = (n: number, extra: object = {}) => ({
     id: `q${n}`,
     text: `m${n}`,
-    options: { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: false },
+    options: { connectorId: "c", model: "m", toolsOn: true, modelOptions: { think: false }, planning: false },
     queuedAt: n,
     ...extra,
   });
@@ -680,13 +713,20 @@ describe("queue-remove, queue-clear and queue-send", () => {
       connectorId: "c",
       model: "m",
       toolsOn: true,
-      thinkOn: false,
+      modelOptions: { think: false },
       planning: true,
       images: [{ id: "i1", mediaType: "image/png" }],
       replyTo: "Use a map.",
     });
     expect(queueOf().map((m) => m.id)).toEqual(["q2"]);
     expect(fileOf("a").queuePaused).toBe(false);
+  });
+
+  it("queue-send sends the settings the message was queued with", async () => {
+    queued([item(1, { options: { ...item(1).options, modelOptions: { think: true, effort: "low" } } })]);
+    const chat = vi.fn(async () => {});
+    await command("a", "queue-send", {}, "POST", { ...deps, chat });
+    expect(chat).toHaveBeenCalledWith("a", "m1", expect.objectContaining({ modelOptions: { think: true, effort: "low" } }));
   });
 
   it("queue-send with nothing waiting is a 409 'nothing to run'", async () => {

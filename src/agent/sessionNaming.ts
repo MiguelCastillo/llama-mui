@@ -57,7 +57,8 @@ export async function askForSessionName(
         api,
         model,
         messages: [{ role: "user", content: prompt }],
-        think: false,
+        // One-shot, with no settings of the model's.
+        purpose: { kind: "background" },
         tools: [],
       },
       (d: StreamDelta) => {

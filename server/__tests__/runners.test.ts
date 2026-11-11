@@ -31,7 +31,7 @@ const env = {
   models: [],
   toolContext: { definitions: [], checkCommands: {} } as any,
   toolsOn: false,
-  thinkOn: false,
+  modelOptions: {},
 } as RunnerEnv;
 
 const save = vi.fn((s: any) => hub.save(s.id, s));

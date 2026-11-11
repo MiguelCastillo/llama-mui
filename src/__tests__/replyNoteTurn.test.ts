@@ -22,7 +22,7 @@ function setup(planning = true) {
     planAnchor: null, planContext: null, planSummary: null,
   };
   const config: RunTurnConfig = {
-    connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning,
+    connectorId: "c", model: "m", toolsOn: true, modelOptions: {}, planning,
     systemPrompt: "sys", toolDefinitions: [], toolContextUpdate: "", seenUpdate: "",
     history: [], forgotten: [], workingDir: "/work", attached: [], chatId: "a",
     controller: new AbortController(), started: 0, text: "hi",

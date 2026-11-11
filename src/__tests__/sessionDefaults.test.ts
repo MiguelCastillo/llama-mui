@@ -100,7 +100,7 @@ describe("withSessionDefaults", () => {
     const item = (n: number, extra: object = {}) => ({
       id: `q${n}`,
       text: `message ${n}`,
-      options: { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: true },
+      options: { connectorId: "c", model: "m", toolsOn: true, modelOptions: {}, planning: true },
       images: [{ id: "i1", mediaType: "image/png" }],
       replyTo: "an earlier answer",
       queuedAt: 100 + n,
@@ -141,7 +141,7 @@ describe("withSessionDefaults", () => {
 
     it("reads switches that are not true or false as off, and leaves out an empty image list and a missing connection", () => {
       const s = load({ queue: [item(1, { options: { model: "m", toolsOn: "yes" }, images: [], replyTo: "" })] });
-      expect(s.queue?.[0]).toEqual({ id: "q1", text: "message 1", options: { model: "m", toolsOn: false, thinkOn: false }, queuedAt: 101 });
+      expect(s.queue?.[0]).toEqual({ id: "q1", text: "message 1", options: { model: "m", toolsOn: false, modelOptions: {} }, queuedAt: 101 });
     });
 
     it("loading a loaded session again changes nothing", () => {

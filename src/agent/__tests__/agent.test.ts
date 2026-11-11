@@ -203,7 +203,7 @@ function mockCallbacks(overrides?: Partial<RunPlanCallbacks>): RunPlanCallbacks 
     checkCommands: {},
     attachedPaths: () => [],
     sessionId: "test-session",
-    thinkOn: false,
+    modelOptions: {},
     toolDefinitions: [],
     ...overrides,
   };

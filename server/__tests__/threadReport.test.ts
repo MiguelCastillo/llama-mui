@@ -31,7 +31,7 @@ const env = {
   models: [],
   toolContext: { definitions: [], checkCommands: {} } as any,
   toolsOn: false,
-  thinkOn: false,
+  modelOptions: {},
 } as RunnerEnv;
 
 type Ask = (input: ReportInput, env: RunnerEnv, signal: AbortSignal) => Promise<string | null>;

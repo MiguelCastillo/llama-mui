@@ -618,7 +618,7 @@ async function launch(
     checkCommands: env.toolContext.checkCommands,
     attachedPaths,
     sessionId: id,
-    thinkOn: env.thinkOn,
+    modelOptions: env.modelOptions,
     toolDefinitions: env.toolContext.definitions,
     // Messages the user sent join the chat, and the next step's prompt.
     userNotes: (step) => takeNotes(e, step),

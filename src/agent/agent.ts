@@ -1,6 +1,6 @@
 // Turn-loop helpers extracted from Chat.tsx.
 
-import { type Api, type Kind, type ChatMessage, type ToolCall, type Usage, type Todo, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, type Picked, streamChat, runTool } from "../api.ts";
+import { type Api, type ModelOptions, type Purpose, type Kind, type ChatMessage, type ToolCall, type Usage, type Todo, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, type Picked, streamChat, runTool } from "../api.ts";
 import { closeOpenToolCalls } from "../closeOpenToolCalls.ts";
 import { callKey, shareTokens } from "./helpers.ts";
 import { ProgressWatch } from "./progress.ts";
@@ -147,7 +147,10 @@ export interface RunTurnConfig {
   api?: Api;
   model: string;
   toolsOn: boolean;
-  thinkOn: boolean;
+  // The model's settings this message carries (Think, effort; see
+  // src/connections). The loop passes them down with each request's purpose
+  // and never decides about them itself.
+  modelOptions: ModelOptions;
   planning: boolean;
   planStep?: string;
   // A side question asked while a plan runs (server/aside.ts): every message
@@ -191,6 +194,12 @@ export interface RunTurnResult {
   error?: string;
 }
 
+// Why a request of a turn is made, for the connection's module.
+export function turnPurpose(round: number, how: { planning: boolean; planStep: boolean; aside: boolean }): Purpose {
+  const kind = how.planning ? "planning" : how.planStep ? "planStep" : how.aside ? "aside" : "reply";
+  return { kind, round };
+}
+
 // Runs one reply: the full turn loop (stream, tool calls, the repeat guard,
 // plan handling) until the model stops asking for tools. A main-chat reply
 // (`planning` on) may call any tool: the model decides by size (see
@@ -203,7 +212,7 @@ export async function runTurn(
   callbacks: RunTurnCallbacks,
 ): Promise<RunTurnResult> {
   const {
-    connectorId, kind, api, model, toolsOn, thinkOn, planning, planStep,
+    connectorId, kind, api, model, toolsOn, modelOptions, planning, planStep,
     systemPrompt, toolDefinitions, toolContextUpdate, seenUpdate,
     history: baseHistory, forgotten, attached: attachedBase,
     chatId, controller, started, text, images, imagesBase64, replyTo,
@@ -271,7 +280,10 @@ export async function runTurn(
             systemPrompt
               ? [{ role: "system", content: systemPrompt }, ...history]
               : history,
-          think: thinkOn && !planning && round === 0,
+          // What the settings turn into is the connection's call (see
+          // src/connections): it is told why the request is made.
+          options: modelOptions,
+          purpose: turnPurpose(round, { planning, planStep: !!planStep, aside: !!config.aside }),
           tools: toolsOn && !lastTurn ? toolDefinitions : undefined,
           images: imagesBase64,
         },
@@ -630,9 +642,9 @@ export interface RunPlanCallbacks {
   checkCommands: Record<string, string>;
   attachedPaths: (as: Attachment[]) => string[];
   sessionId: string;
-  // For the check: the chat's Think setting, and every tool's definition
+  // For the check: the model's settings, and every tool's definition
   // (it gets the read-only ones; see CHECK_TOOLS).
-  thinkOn: boolean;
+  modelOptions: ModelOptions;
   toolDefinitions: unknown[];
   // Awaited before each step, once the previous step and its check are done.
   // It may wait; false ends the plan, leaving later steps pending.
@@ -657,7 +669,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
   const {
     connector, model, abort, planRunningRef, setPlanRunning,
     messages, planRef, setStep, reply, setError, setAbort,
-    modelLoaded, models, workingDir, attachments, checkCommands, attachedPaths, sessionId, thinkOn, toolDefinitions, gate,
+    modelLoaded, models, workingDir, attachments, checkCommands, attachedPaths, sessionId, modelOptions, toolDefinitions, gate,
   } = callbacks;
 
   if (!connector || !model || abort || planRunningRef.current) return;
@@ -724,7 +736,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
       }
       let check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep), {
         connector, model, setAbort, setError, modelLoaded,
-        models, workingDir, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
+        models, workingDir, attachments, attachedPaths, sessionId, modelOptions, toolDefinitions,
       }) : null;
       if (check && !check.done) {
         const missing = check.missing ?? "";
@@ -743,7 +755,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
         }
         check = r.ok ? await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep), {
           connector, model, setAbort, setError, modelLoaded,
-          models, workingDir, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
+          models, workingDir, attachments, attachedPaths, sessionId, modelOptions, toolDefinitions,
         }) : null;
       }
       // Still not done after the dispute retry: the step is blocked. Recovery
@@ -772,7 +784,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
         }
         check = await checkStep(text, msgs.slice(start), msgs.filter((m) => m.planStep), {
           connector, model, setAbort, setError, modelLoaded,
-          models, workingDir, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions,
+          models, workingDir, attachments, attachedPaths, sessionId, modelOptions, toolDefinitions,
         });
       }
       // The step waits for an answer, or failed on a command: the plan stops.
@@ -807,7 +819,7 @@ export interface CheckStepDeps {
   attachments: Attachment[];
   attachedPaths: (as: Attachment[]) => string[];
   sessionId: string;
-  thinkOn: boolean;
+  modelOptions: ModelOptions;
   toolDefinitions: unknown[];
 }
 
@@ -817,7 +829,7 @@ export async function checkStep(
   planMessages: ChatMessage[],
   deps: CheckStepDeps,
 ): Promise<Awaited<ReturnType<typeof reviewStep>> | null> {
-  const { connector, model, setAbort, setError, modelLoaded, models, workingDir, attachments, attachedPaths, sessionId, thinkOn, toolDefinitions } =
+  const { connector, model, setAbort, setError, modelLoaded, models, workingDir, attachments, attachedPaths, sessionId, modelOptions, toolDefinitions } =
     deps;
   if (!connector || !(await modelLoaded())) return null;
   const controller = new AbortController();
@@ -834,7 +846,7 @@ export async function checkStep(
     };
     const tools = toolDefinitions.filter((d) => CHECK_TOOLS.has((d as { function: { name: string } }).function.name));
     return await reviewStep(
-      { connectorId: connector.id, kind: connector.kind, api: connector.api, model, think: thinkOn, room, tools, read },
+      { connectorId: connector.id, kind: connector.kind, api: connector.api, model, options: modelOptions, room, tools, read },
       step,
       stepMessages,
       own,

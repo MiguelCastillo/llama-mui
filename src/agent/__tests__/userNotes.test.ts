@@ -54,7 +54,7 @@ function setup(overrides?: Partial<RunPlanCallbacks>) {
     checkCommands: {},
     attachedPaths: () => [],
     sessionId: "test-session",
-    thinkOn: false,
+    modelOptions: {},
     toolDefinitions: [],
     ...overrides,
   };

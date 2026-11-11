@@ -2,7 +2,7 @@
 // and a runner (the server's, server/runners.ts) can both use them without
 // either importing the other. No React in this file.
 
-import type { AccessRequest, Approval, AttachmentTarget, Picked, Connector, Model, PlanStep, Session, ToolContext } from "./api.ts";
+import type { AccessRequest, Approval, AttachmentTarget, Picked, Connector, Model, ModelOptions, PlanStep, Session, ToolContext } from "./api.ts";
 
 // What a tool call can wait on the user for, and their answer: allow or deny,
 // or, for a path, the files or folders they picked in its place. "plan" is for a
@@ -21,7 +21,8 @@ export interface RunnerEnv {
   models: Model[];
   toolContext: ToolContext;
   toolsOn: boolean;
-  thinkOn: boolean;
+  // The model's settings the run's message carried (see src/connections).
+  modelOptions: ModelOptions;
   // Settings → Tools, "Fresh context for each plan step"; on unless false.
   freshSteps?: boolean;
 }

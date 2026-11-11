@@ -33,7 +33,7 @@ const env = {
   models: [],
   toolContext: { definitions: [], checkCommands: {} } as any,
   toolsOn: false,
-  thinkOn: false,
+  modelOptions: {},
 } as RunnerEnv;
 
 const hello: ChatMessage[] = [
@@ -431,7 +431,7 @@ describe("the queue, when a reply ends", () => {
   const item = (id: string, text: string, extra: object = {}) => ({
     id,
     text,
-    options: { connectorId: "c", model: "m", toolsOn: false, thinkOn: false, planning: false },
+    options: { connectorId: "c", model: "m", toolsOn: false, modelOptions: {}, planning: false },
     queuedAt: 1,
     ...extra,
   });
@@ -476,7 +476,7 @@ describe("the queue, when a reply ends", () => {
 
   it("sends the item with the options saved on it", async () => {
     const images = [{ id: "i1", mediaType: "image/png" }];
-    const queued = item("q1", "look", { images, replyTo: "that answer", options: { connectorId: "other", model: "big", toolsOn: true, thinkOn: true, planning: true } });
+    const queued = item("q1", "look", { images, replyTo: "that answer", options: { connectorId: "other", model: "big", toolsOn: true, modelOptions: { think: true }, planning: true } });
     saveQueue([queued]);
     const next = vi.fn(async () => {});
     const started = await first("first", next);

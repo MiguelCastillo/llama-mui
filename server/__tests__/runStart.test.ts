@@ -28,7 +28,7 @@ const hub = await import("../runHub.ts");
 const runners = await import("../runners.ts");
 
 const KEY = "sk-test-secret-0123456789";
-const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, freshSteps: true };
+const options = { connectorId: "c1", model: "m", toolsOn: true, modelOptions: {}, freshSteps: true };
 const toolContext = { definitions: [{ name: "read_file" }], systemPrompt: "Use tools.", offered: ["read_file"], update: "", checkCommands: {} };
 
 // The server's own /api, with no network: the connector list is the real route
@@ -124,7 +124,7 @@ describe("the run command's starter", () => {
 
     const env = envs[0]!;
     expect(env.model).toBe("m");
-    expect(env).toMatchObject({ toolsOn: true, thinkOn: false, freshSteps: true });
+    expect(env).toMatchObject({ toolsOn: true, modelOptions: {}, freshSteps: true });
     // The connector is the list's entry: that a key is set, not the key.
     expect(env.connector).toEqual({ id: "c1", name: "Studio", url: "http://127.0.0.1:1", hasKey: true, kind: "llama", api: "openai" });
     expect(env.models.map((m) => m.id)).toEqual(["m"]);
@@ -260,7 +260,7 @@ describe("the message command's starter for a chat reply", () => {
     await chat("a", "And now?");
     await vi.waitFor(() => expect(said).toHaveLength(1));
     expect(said[0]).toEqual({ text: "And now?", before: history, planning: false });
-    expect(envs[0]).toMatchObject({ model: "m", toolsOn: true, thinkOn: false });
+    expect(envs[0]).toMatchObject({ model: "m", toolsOn: true, modelOptions: {} });
     // The connector is the list's entry: that a key is set, not the key.
     expect(envs[0].connector).toEqual({ id: "c1", name: "Studio", url: "http://127.0.0.1:1", hasKey: true, kind: "llama", api: "openai" });
     const context = calls.find((c) => c.url === "/api/tools/context")!;

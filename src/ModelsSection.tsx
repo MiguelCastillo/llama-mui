@@ -10,7 +10,6 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
-  FormControlLabel,
   IconButton,
   InputAdornment,
   List,
@@ -19,7 +18,6 @@ import {
   MenuItem,
   Paper,
   Stack,
-  Switch,
   TextField,
   Tooltip,
   Typography,
@@ -30,10 +28,12 @@ import DownloadIcon from "@mui/icons-material/Download";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import AnthropicModels from "./AnthropicModels";
+import ModelKnobs from "./ModelKnobs";
 import DefaultButton from "./DefaultButton";
 import { getSavedModelsConnectorId, pickModelsConnector, setSavedModelsConnectorId } from "./modelsConnector";
 import {
   type Connector,
+  type Effort,
   type Model,
   type ModelSettings,
   type SearchResult,
@@ -130,10 +130,21 @@ export default function ModelsSection() {
 
   const settingsFor = (id: string) => settings && { ...settings.defaults, ...settings.models[id] };
 
-  const setThink = (id: string, think: boolean) => {
-    // Flip it right away; the server's answer either confirms it or puts it back.
-    setSettings((s) => s && { ...s, models: { ...s.models, [id]: { ...s.defaults, ...s.models[id], think } } });
-    updateModelSettings(id, { think })
+  // Changes one of a model's settings (a knob in ModelKnobs): shown right
+  // away; the server's answer, checked against the connection, either confirms
+  // it or puts it back. An effort of undefined goes back to the model's default.
+  const changeSetting = (id: string, changes: { think?: boolean; effort?: Effort | undefined }) => {
+    setSettings((s) => {
+      if (!s) return s;
+      const { effort: _old, ...rest } = { ...s.defaults, ...s.models[id] };
+      const effort = "effort" in changes ? changes.effort : _old;
+      return { ...s, models: { ...s.models, [id]: { ...rest, ...(changes.think === undefined ? {} : { think: changes.think }), ...(effort ? { effort } : {}) } } };
+    });
+    updateModelSettings(
+      id,
+      { ...(changes.think === undefined ? {} : { think: changes.think }), ...("effort" in changes ? { effort: changes.effort ?? null } : {}) },
+      connector?.id,
+    )
       .then((saved) => setSettings((s) => s && { ...s, models: { ...s.models, [id]: saved } }))
       .catch((e) => {
         setError(e.message);
@@ -248,8 +259,8 @@ export default function ModelsSection() {
         {picker}
         <AnthropicModels
           connector={connector}
-          think={(id) => !!settingsFor(id)?.think}
-          setThink={setThink}
+          settingsFor={(id) => settingsFor(id)!}
+          changeSetting={changeSetting}
           changeDefault={changeDefault}
         />
       </Stack>
@@ -348,21 +359,7 @@ export default function ModelsSection() {
                       <Box sx={{ width: "2.125rem" }} />
                     )}
                   </Stack>
-                  {/* Short label so it stays on the model's line; the note below explains it. */}
-                  <Tooltip title="Think before answering. With it off, small models usually skip the tools.">
-                    <FormControlLabel
-                      label="Think"
-                      labelPlacement="start"
-                      control={
-                        <Switch
-                          checked={settingsFor(m.id)!.think}
-                          onChange={(e) => setThink(m.id, e.target.checked)}
-                          slotProps={{ input: { "aria-label": `Think before answering with ${m.id}` } }}
-                        />
-                      }
-                      sx={{ mr: 0, flexShrink: 0 }}
-                    />
-                  </Tooltip>
+                  <ModelKnobs kind={connector?.kind} id={m.id} settings={settingsFor(m.id)!} change={changeSetting} />
                 </ListItem>
               ))}
 

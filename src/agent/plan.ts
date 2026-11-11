@@ -2,7 +2,7 @@
 // say they're done when they aren't, so chat runs a plan one step per turn and
 // checks each step with reviewStep before ticking it off.
 
-import { type Api, type Kind, type ChatMessage, type PlanStep, type ToolCall, streamChat } from "../api.ts";
+import { type Api, type ModelOptions, type Kind, type ChatMessage, type PlanStep, type ToolCall, streamChat } from "../api.ts";
 import { newId } from "../uuid.ts";
 import { workPolicy } from "./workPolicy.ts";
 
@@ -300,7 +300,7 @@ export async function reviewStep(
     kind,
     api,
     model,
-    think,
+    options,
     room,
     tools,
     read,
@@ -309,7 +309,7 @@ export async function reviewStep(
     kind?: Kind;
     api?: Api;
     model: string;
-    think: boolean;
+    options?: ModelOptions;
     room: number;
     tools: unknown[];
     read: (call: ToolCall) => Promise<string>;
@@ -341,8 +341,8 @@ export async function reviewStep(
     answer = "";
     const last = round >= MAX_CHECK_ROUNDS;
     const { toolCalls } = await streamChat(
-      // Like a reply, only the first request thinks; then it reads and decides.
-      { connectorId, kind, api, model, think: think && round === 0, messages: history, tools: last ? undefined : tools },
+      // The connection decides what the settings mean for a check's rounds.
+      { connectorId, kind, api, model, options, purpose: { kind: "stepCheck", round }, messages: history, tools: last ? undefined : tools },
       (d) => (answer += d.content ?? ""),
       signal,
     );

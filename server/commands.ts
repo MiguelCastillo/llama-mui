@@ -3,7 +3,7 @@
 //
 //   POST /api/sessions/<id>/commands/<name>     body: JSON
 //
-//   run      { connectorId, model, toolsOn, thinkOn, freshSteps? }  start the
+//   run      { connectorId, model, toolsOn, modelOptions?, freshSteps? }  start the
 //            plan's open steps. The session must be saved first: the run reads
 //            it from the server, not from the page, and looks up the server
 //            (connector), its models and the tools itself (see runStart.ts).
@@ -31,7 +31,7 @@
 //            `ack` event says it too. Never queued silently: with no step
 //            left to start it is refused ("no step left").
 //            With no run, it is a chat turn, run here: the body also carries
-//            the run's choices ({ connectorId, model, toolsOn, thinkOn }, as
+//            the run's choices ({ connectorId, model, toolsOn, modelOptions }, as
 //            for `run`) and `planning` (true when the reply should only write
 //            a plan) and, optionally, `replyTo` (the text of the response the
 //            message replies to: saved on the message so the chat shows it,
@@ -59,7 +59,7 @@
 //            runners.ts): nothing is sent from it until queue-send or
 //            queue-clear.
 //
-//   ask      { text, connectorId, model, toolsOn, thinkOn }   a side question
+//   ask      { text, connectorId, model, toolsOn, modelOptions? }   a side question
 //            while a plan runs: answered beside the plan, written into the
 //            session as messages marked `aside`, and never shown to a step (see
 //            aside.ts). It can only read. The answer is { ok, revision } once
@@ -84,13 +84,17 @@ import { AUTO_KINDS, type AutoKind, withAuto } from "../src/autoApprove.ts";
 import { sessionFolder } from "./sessionFile.ts";
 import { validateRefs } from "./images.ts";
 import { randomUUID } from "node:crypto";
-import { type ImageRef, MAX_QUEUE, MAX_REPLY_QUOTE, type QueuedMessage } from "../src/api.ts";
+import { type ImageRef, MAX_QUEUE, MAX_REPLY_QUOTE, type ModelOptions, type QueuedMessage } from "../src/api.ts";
+import { checkOptions } from "./modelOptions.ts";
 
 export interface RunOptions {
   connectorId: string;
   model: string;
   toolsOn: boolean;
-  thinkOn: boolean;
+  // The model's settings for this message (Settings → Models), checked
+  // against its connection. They travel with the message: the server never
+  // looks them up.
+  modelOptions: ModelOptions;
   freshSteps?: boolean;
   // Image refs for a chat turn (validated refs to files in the session's images folder).
   images?: { id: string; mediaType: string }[];
@@ -116,22 +120,28 @@ const defaultDeps: Required<CommandDeps> = {
   aside: (id, text, options) => startAsideFromOptions(id, text, options),
 };
 
-function parseRunOptions(body: any): RunOptions {
+async function parseRunOptions(body: any): Promise<RunOptions> {
   const text = (v: unknown, name: string) => {
     if (typeof v !== "string" || !v) throw new HttpError(400, `${name} must be given`);
     return v;
   };
-  const flag = (v: unknown, name: string) => {
-    if (typeof v !== "boolean") throw new HttpError(400, `${name} must be true or false`);
-    return v;
-  };
+  // `modelOptions` is the settings object. A page that hasn't reloaded since
+  // it was one still sends `thinkOn` and `effort` beside each other.
+  const given = body.modelOptions;
+  if (given !== undefined && (typeof given !== "object" || given === null || Array.isArray(given))) {
+    throw new HttpError(400, "modelOptions must be an object");
+  }
+  const raw = given ?? { think: body.thinkOn, effort: body.effort };
   const freshSteps = body.freshSteps;
   if (freshSteps !== undefined && typeof freshSteps !== "boolean") throw new HttpError(400, "freshSteps must be true or false");
+  const connectorId = text(body.connectorId, "connectorId");
+  const model = text(body.model, "model");
+  if (typeof body.toolsOn !== "boolean") throw new HttpError(400, "toolsOn must be true or false");
   return {
-    connectorId: text(body.connectorId, "connectorId"),
-    model: text(body.model, "model"),
-    toolsOn: flag(body.toolsOn, "toolsOn"),
-    thinkOn: flag(body.thinkOn, "thinkOn"),
+    connectorId,
+    model,
+    toolsOn: body.toolsOn,
+    modelOptions: await checkOptions(connectorId, model, raw),
     ...(freshSteps === undefined ? {} : { freshSteps }),
   };
 }
@@ -168,11 +178,11 @@ async function queueMessage(
   images: ImageRef[] | undefined,
   replyTo: string | undefined,
 ): Promise<string | null> {
-  const { connectorId, model, toolsOn, thinkOn, planning } = options;
+  const { connectorId, model, toolsOn, modelOptions, planning } = options;
   const message: QueuedMessage = {
     id: randomUUID(),
     text,
-    options: { connectorId, model, toolsOn, thinkOn, planning },
+    options: { connectorId, model, toolsOn, modelOptions, planning },
     ...(images?.length ? { images } : {}),
     ...(replyTo ? { replyTo } : {}),
     queuedAt: Date.now(),
@@ -235,7 +245,7 @@ async function sendNext(id: string, chat: Required<CommandDeps>["chat"]): Promis
       connectorId: sent.options.connectorId ?? "",
       model: sent.options.model,
       toolsOn: sent.options.toolsOn,
-      thinkOn: sent.options.thinkOn,
+      modelOptions: sent.options.modelOptions,
       planning: sent.options.planning === true,
       images: sent.images,
       replyTo: sent.replyTo,
@@ -267,7 +277,7 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
 
   switch (parts[3]) {
     case "run": {
-      const started = await deps.start(id, parseRunOptions(body));
+      const started = await deps.start(id, await parseRunOptions(body));
       target = started?.sessionId ?? id;
       extra = { sessionId: target };
       break;
@@ -305,7 +315,7 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
         }
         // Validate image refs (empty list is fine — no images is fine too).
         const validated = images ? await validateRefs(id, images) : undefined;
-        const options = parseRunOptions(body);
+        const options = await parseRunOptions(body);
         const replyTo = replyToOf(body.replyTo);
         const queued = replyRunning ? await queueMessage(id, text, { ...options, planning: body.planning === true }, validated, replyTo) : null;
         if (queued) {
@@ -331,7 +341,7 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
       // A side question: answered beside the running plan, which never sees it.
       const text = body.text;
       if (typeof text !== "string" || !text.trim()) throw new HttpError(400, "text must be given");
-      const options = parseRunOptions(body);
+      const options = await parseRunOptions(body);
       // Only a plan has something to ask beside; with none, the page sends the
       // question as an ordinary message.
       if (!runners.isRunning(id) || hub.liveRun(id)?.kind === "turn") {

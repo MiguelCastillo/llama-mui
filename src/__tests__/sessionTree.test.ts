@@ -180,7 +180,7 @@ describe("nestedSessionFrom", () => {
   it("does not take the parent's queue, and starts with none, not paused", () => {
     const busy = {
       ...parent,
-      queue: [{ id: "q1", text: "later", options: { model: "m", toolsOn: false, thinkOn: false }, queuedAt: 1 }],
+      queue: [{ id: "q1", text: "later", options: { model: "m", toolsOn: false, modelOptions: {} }, queuedAt: 1 }],
       queuePaused: true,
     };
     const s = nestedSessionFrom(busy, "child");

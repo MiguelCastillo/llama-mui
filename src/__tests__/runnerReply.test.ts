@@ -31,7 +31,7 @@ const env = {
   models: [],
   toolContext: { definitions: [{ name: "t" }], checkCommands: {}, systemPrompt: "sys", update: "ctx" } as any,
   toolsOn: true,
-  thinkOn: false,
+  modelOptions: {},
 } as RunnerEnv;
 
 function makeHandle(patch: Partial<Session> = {}) {

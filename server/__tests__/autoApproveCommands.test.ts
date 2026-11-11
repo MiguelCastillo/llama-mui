@@ -25,7 +25,7 @@ const hub = await import("../runHub.ts");
 const runners = await import("../runners.ts");
 
 // No model: a run starts from a fake, the way the real `run` command will start one from a real run.
-const env = { connector: null, model: "m", models: [], toolContext: { definitions: [], checkCommands: {} }, toolsOn: false, thinkOn: false } as unknown as RunnerEnv;
+const env = { connector: null, model: "m", models: [], toolContext: { definitions: [], checkCommands: {} }, toolsOn: false, modelOptions: {} } as unknown as RunnerEnv;
 const deps: CommandDeps = {
   start: async (id: string) => {
     await runners.startRunner(id, env, {
@@ -54,7 +54,7 @@ async function command(id: string, name: string, body: unknown = {}, method = "P
   return { status: res.statusCode, body: text ? JSON.parse(text) : null } as { status: number; body: any };
 }
 
-const options = { connectorId: "c", model: "m", toolsOn: true, thinkOn: false };
+const options = { connectorId: "c", model: "m", toolsOn: true, modelOptions: {} };
 const saved = (id: string, extra: object = {}) => putFile(id, { ...makeSession(id, 1), revision: 1, ...extra });
 const change = { needsApproval: { type: "change", path: "/w/a.ts", action: "edit", diff: "" } } as any;
 const shell = { needsApproval: { type: "command", command: "rm -rf build", cwd: "/w" } } as any;
