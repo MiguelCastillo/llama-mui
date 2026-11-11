@@ -349,35 +349,54 @@ The **Disk** group (`server/disk.ts`) has read-only tools: `list_directory`,
 expressions over file contents). They read only the chat's working directory
 and what's attached to it.
 
-**Session settings** (the sliders icon next to the message box) has three
-sections: Working directory, Attachments and Approvals. A new chat starts with
-none of them set.
+**The message box** is one rounded container, the same on every screen size.
+Above the text, only when present: the card of the response you are replying
+to, image previews, and the Ask / Tell the plan switch (while a plan runs).
+The text starts one line tall and grows to about eight. The bottom row has,
+on the left, the image paperclip and the **folder chip**, and on the right the
+approvals marker (only while an auto-approve switch is on), the context ring
+(Clear and Compact) and a round **Send**, which turns into **Stop** while a
+reply runs and into the side question's Stop while that runs. On a wide screen
+Enter sends (Shift+Enter makes a new line); on a phone Enter makes a new line
+and the button sends. Esc stops a reply or cancels an edit, and the up arrow in
+an empty box edits your last message. Images can be dropped or pasted.
 
 - **Working directory** is the folder relative paths and `run_command` start
   in, and the system prompt names it. It's a setting of the chat, separate
-  from the attachments. The model never picks it, and attaching a folder
-  doesn't make it the working directory; the one way a folder becomes it
-  without you opening these settings is a choice you make in the model's
-  "find this folder" prompt (see below). Choose it here with **Choose folder…**
-  (one folder; files aren't offered) or pick one from **Recent**. Choosing
-  another folder replaces it, and the old one isn't kept as
-  an attachment. **Clear** removes it. Under **Recent** are the last five
-  folders you chose, each with its path on the right (newest first; kept on the
-  server in `~/.llama-mui/recent-folders.json`, so every browser sees the same
-  list; one that no longer
-  exists is left out), and clicking one sets it. The folder's **check command** (see
-  [How plans work](#how-plans-work)) is set here too. With no working
+  from the extra allowed folders. The model never picks it, and allowing a
+  folder doesn't make it the working directory; the one way a folder becomes
+  it without you using the chip is a choice you make in the model's
+  "find this folder" prompt (see below). The chip shows the folder's name.
+  Before the chat's first reply its menu is a picker: **Recent** (the last
+  five folders you chose, newest first, each with its path on the right; kept
+  on the server in `~/.llama-mui/recent-folders.json`, so every browser sees
+  the same list; one that no longer exists is left out), **Pick a folder…**
+  (one folder; files aren't offered) and **Clear**. The folder's **check
+  command** (see [How plans work](#how-plans-work)) is in that menu too. With no working
   directory, relative paths fail with "Use an absolute path", and the model
   is told "There's no working directory: use absolute paths." even if a
-  folder is attached.
-- **Attachments** are the extra files and folders the model may read, each
-  marked with whether you added it or the model asked for it, and buttons to
-  choose more files or folders. The model can read the working directory and the attachments;
-  only the working directory is where relative paths start.
-- **Approvals** has a switch for approving all file changes and one for approving
-  all commands, for this session only (see "Approving for a session" below):
-  a prompt's "Approve all ... in this session" button turns them on, and they
-  can be turned off or on here, also while a plan or reply is running.
+  folder is allowed.
+- **The chip freezes once the chat has started.** The first reply fixes the
+  folder the system prompt names (`promptDir`), so changing the working
+  directory afterwards would make the prompt wrong. From then on the chip is
+  a label, and its menu has only the two items below. **Clear context** puts
+  `promptDir` back, because the system prompt takes the folder again then, and
+  the chip is a picker again.
+- **Also allowed** (in the same menu, only when there are any) lists the extra
+  files and folders the model may read, each marked with whether you added
+  it or the model asked for it, with a remove button for each.
+  **Allow another folder…** is the one way to add one by hand; otherwise the
+  model asks when it needs access (see below). The model can read the working
+  directory and the allowed folders; only the working directory is where
+  relative paths start.
+- **A new chat starts in the folder of the chat you were in**, and you can
+  change it before the first message. This is a stopgap (`folderForNewChat` in
+  `src/sessionFolder.ts`); a new chat used to start with none.
+- **Approvals** (the marker next to the context ring) appears only while
+  "approve all file changes" or "approve all commands" is on, for this session
+  only (see "Approving for a session" below): a prompt's "Approve all ... in
+  this session" button turns them on, and the marker opens the two switches to
+  turn them off or on again, also while a plan or reply is running.
 
 Chats saved before the working directory was a setting are converted when
 they're read: their first attached folder becomes the working directory and
@@ -472,7 +491,7 @@ git or not; it runs as you, with your network access and credentials). There is
 no special handling of git: a command is approved or it isn't. Removing a
 worktree is always asked. The choice is saved in the session (`autoApprove` in
 `session.json`), so a reload keeps it, and a new session starts without it; it
-is not inherited by a thread. **Session settings → Approvals** shows what is
+is not inherited by a thread. The approvals marker in the message box shows what is
 on, and its switches turn each off (or on, before any prompt). Only the question is skipped: the paths a chat
 may reach and the files that are off limits (`settings.json`, the keys) are
 checked as before, and an approved change still shows its diff in the chat.
@@ -949,14 +968,14 @@ nothing starts again by itself: see
   it up again from that step (the step starts over; earlier steps' answers are
   kept). While a plan runs, the message box keeps **Send** (a message to the
   run) and has no Stop; it shows **Stop** instead of Send only while a chat
-  reply streams (on a wide screen there is no button: press **Esc**).
+  reply streams (**Esc** does the same).
 - When the run ends (every step done, stopped, or failed), the page reads the
   session once more from the server. That is the session it shows and the one
   its next save is based on.
-- While a plan runs the folders can't change: **Session settings** shows "Folders
-  can't change while a plan runs. Pause the plan, stop the reply, or wait until it finishes." and
+- While a plan runs the folders can't change: the folder chip's menu shows "Folders
+  can't change while a plan or a reply is running. Pause the plan, stop the reply, or wait until it finishes." and
   turns off choosing and clearing the working directory, and adding and
-  removing attachments. The run
+  removing allowed folders. The run
   works in the folders it started with, and the server owns the session
   until it ends. A folder the model asks to use, and you allow, is still
   attached, by the run.

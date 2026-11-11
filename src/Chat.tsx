@@ -134,7 +134,9 @@ import { submitDraft } from "./submitDraft";
 import { optimisticSend } from "./optimisticSend";
 import { lastEditable } from "./editLast";
 import { newId } from "./uuid";
-import SessionSettings, { ATTACHMENTS_LOCKED_NOTE, AttachmentIcon } from "./SessionSettings";
+import FolderChip, { AttachmentIcon } from "./FolderChip";
+import ApprovalsMarker from "./ApprovalsMarker";
+import { ATTACHMENTS_LOCKED_NOTE, folderForNewChat, folderIsFrozen } from "./sessionFolder";
 import SessionsPanel from "./SessionsPanel";
 import Panel, { PanelAction, PanelButton } from "./Panel";
 import QueuedMessages from "./QueuedMessages";
@@ -878,6 +880,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // a saved one keeps its own.
   const newChat = () => {
     openSession(newId());
+    // Stopgap: the chat you were in lends its folder (see folderForNewChat).
+    updateSession({ workingDir: folderForNewChat(workingDir) });
     const next = connectors ? pickModelsConnector(connectors, getSavedModelsConnectorId()) : null;
     setConnectorId(next?.id ?? null);
     if (next && next.id === connector?.id) {
@@ -2423,81 +2427,58 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         )}
       </Box>
 
-      <Paper square elevation={0} sx={{ py: 2, bgcolor: "transparent" }}>
-        <Container maxWidth={false} sx={{ maxWidth: CHAT_MAX_WIDTH }}>
-          {/* On a wide screen Enter sends and there is no Send button: the settings button
-              and the box are centered beside the context meter. On a phone Send has the
-              meter under it, the box is as tall as both, and the settings button is centered. */}
-          <Stack direction="row" spacing={1} sx={{ alignItems: narrow ? "stretch" : "center" }}>
-            <Box sx={{ height: "4.5rem", display: "flex", alignItems: "center", alignSelf: "flex-end" }}>
-            <SessionSettings
-              attachments={attachments}
-              workingDir={workingDir}
-              locked={attachmentsLocked}
-              onAttach={attach}
-              onDetach={(p) => changeAttachments((as) => as.filter((x) => x.path !== p))}
-              onSetWorkingDir={changeWorkingDir}
-              checkCommands={toolContext.checkCommands}
-              autoApprove={autoApprove}
-              onAutoApprove={changeAutoApprove}
-              onSetCheckCommand={(folder, command) =>
-                setCheckCommand(folder, command)
-                  .then(() => setContextVersion((v) => v + 1))
-                  .catch((e) => showGlobalError(e.message))
-              }
-            />
-            </Box>
-            <Composer
-              tall={narrow}
-              sendButton={narrow}
-              box={box}
-              placeholder={
-                planRunning
-                  ? tellPlan
-                    ? narrow
-                      ? "Message the plan"
-                      : "Message the running plan: the next step will see it (Enter to send)"
-                    : narrow
-                      ? "Ask a side question"
-                      : "Ask a side question: the plan goes on and won't see it (Enter to send)"
-                  : turnRunning && !narrow
-                    ? "Replying… press Esc to stop"
-                    : narrow
-                    ? "Message"
-                    : "Message (Enter to send, Shift+Enter for a new line)"
-              }
-              onSend={send}
-              onEditLast={editLast}
-              editing={stillEditing}
-              onCancelEdit={() => setEditing(null)}
-              reply={pendingReply}
-              onCancelReply={() => setReplyTarget(null)}
-              // Stop here is for a reply that is streaming, on a phone (Escape does it
-              // elsewhere). A plan run is paused from its card, and the box keeps Send
-              // for messages to it.
-              onStop={
-                turnRunning && narrow ? () => showFailure(stopRunner(sessionId)) : undefined
-              }
-              disabled={!model && !planRunning}
-              planRunning={planRunning}
-              tellPlan={tellPlan}
-              onTellPlan={setTellPlan}
-              // Stops only the side question being answered; the plan goes on.
-              onStopAside={asideRunning ? () => showFailure(stopAside(sessionId)) : undefined}
-              below={
-                showIndicator && (
-                  <ContextIndicator
-                    usage={usage}
-                    contextSize={models.find((m) => m.id === model)?.contextSize}
-                    onClear={clearContext}
-                    onCompact={compactSession}
-                    canCompact={contextStart > 0}
-                    disabled={runActive}
-                  />
-                )
-              }
-            />
-          </Stack>
+      <Paper square elevation={0} sx={{ py: narrow ? 1 : 2, bgcolor: "transparent" }}>
+        <Container maxWidth={false} sx={{ maxWidth: CHAT_MAX_WIDTH, ...(narrow && { px: 1 }) }}>
+          <Composer
+            box={box}
+            enterSends={!narrow}
+            placeholder={planRunning ? (tellPlan ? "Message the plan" : "Ask a side question") : "Message"}
+            onSend={send}
+            onEditLast={editLast}
+            editing={stillEditing}
+            onCancelEdit={() => setEditing(null)}
+            reply={pendingReply}
+            onCancelReply={() => setReplyTarget(null)}
+            // Stop here is for a reply that is streaming. A plan run is paused
+            // from its card, and the box keeps Send for messages to it.
+            onStop={turnRunning ? () => showFailure(stopRunner(sessionId)) : undefined}
+            disabled={!model && !planRunning}
+            planRunning={planRunning}
+            tellPlan={tellPlan}
+            onTellPlan={setTellPlan}
+            // Stops only the side question being answered; the plan goes on.
+            onStopAside={asideRunning ? () => showFailure(stopAside(sessionId)) : undefined}
+            folder={
+              <FolderChip
+                workingDir={workingDir}
+                frozen={folderIsFrozen(fixedPromptDir)}
+                attachments={attachments}
+                locked={attachmentsLocked}
+                onSetWorkingDir={changeWorkingDir}
+                onAttach={attach}
+                onDetach={(p) => changeAttachments((as) => as.filter((x) => x.path !== p))}
+                checkCommand={(workingDir && toolContext.checkCommands[workingDir]) || ""}
+                onSetCheckCommand={(folder, command) =>
+                  setCheckCommand(folder, command)
+                    .then(() => setContextVersion((v) => v + 1))
+                    .catch((e) => showGlobalError(e.message))
+                }
+              />
+            }
+            approvals={<ApprovalsMarker autoApprove={autoApprove} onChange={changeAutoApprove} />}
+            context={
+              showIndicator && (
+                <ContextIndicator
+                  usage={usage}
+                  contextSize={models.find((m) => m.id === model)?.contextSize}
+                  onClear={clearContext}
+                  onCompact={compactSession}
+                  canCompact={contextStart > 0}
+                  disabled={runActive}
+                />
+              )
+            }
+          />
         </Container>
       </Paper>
       </Box>
@@ -2505,9 +2486,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   );
 }
 
-// The message box and Send (Stop while a reply runs). What's typed lives in
-// the chat's message box store (messageBox.ts), which only this and the Edit
-// buttons read: kept in Chat's state, every keystroke redrew the whole chat,
+// The message box: one rounded container with, above the text (only when
+// present), the reply card, image previews and the Ask / Tell the plan switch;
+// then the text; then a bottom row with the image button and the folder chip on
+// the left, and the approvals marker, the context ring and a round Send (Stop
+// while a reply runs) on the right. The same on every screen size. What's typed
+// lives in the chat's message box store (messageBox.ts), which only this and the
+// Edit buttons read: kept in Chat's state, every keystroke redrew the whole chat,
 // about 100 ms each in a 300-message one.
 function Composer({
   box,
@@ -2518,9 +2503,10 @@ function Composer({
   onCancelEdit,
   onStop,
   disabled,
-  below,
-  tall = false,
-  sendButton = true,
+  folder,
+  approvals,
+  context,
+  enterSends,
   planRunning,
   tellPlan,
   onTellPlan,
@@ -2532,10 +2518,9 @@ function Composer({
   // lines, and a new `n` focuses the box. Closing the card calls onCancelReply.
   reply?: { text: string; n: number } | null;
   onCancelReply?: () => void;
-  // The box is as tall as the Send column beside it (Send with the meter under it).
-  tall?: boolean;
-  // Whether to show the Send button. Enter sends either way; on a wide screen the box goes without it.
-  sendButton?: boolean;
+  // Whether Enter sends (a wide screen). Otherwise Enter starts a new line and
+  // the button sends (a phone's keyboard has no Shift).
+  enterSends: boolean;
   // What is in the box, and the chat whose draft it is (see messageBox.ts).
   // The chat puts text in it with box.fill, and the box then takes focus.
   box: MessageBox;
@@ -2551,6 +2536,7 @@ function Composer({
   // up (the box is emptied here, Chat forgets the edit).
   editing: boolean;
   onCancelEdit: () => void;
+  // Stops the reply that is streaming; Send turns into Stop while it is set.
   onStop?: () => void;
   disabled: boolean;
   // Whether a plan is running (attach button disabled with explanation).
@@ -2560,10 +2546,12 @@ function Composer({
   tellPlan: boolean;
   onTellPlan: (tell: boolean) => void;
   // While a side question is being answered: ends it, and only it. The box
-  // stays usable meanwhile.
+  // stays usable meanwhile (Enter still sends).
   onStopAside?: () => void;
-  // Under Send: the context indicator.
-  below: ReactNode;
+  // The folder chip, the approvals marker and the context ring, drawn in the bottom row.
+  folder: ReactNode;
+  approvals: ReactNode;
+  context: ReactNode;
 }) {
   // The box's text and images. Opening another chat shows its draft (the chat
   // tells the store), and every change of the text is kept as that chat's
@@ -2677,18 +2665,25 @@ function Composer({
     pendingImages.forEach((img) => revokePreview(img.preview));
     box.setImages([]);
   };
+  const canSend = (!!text.trim() || pendingImages.length > 0) && !disabled && !sending;
   return (
-    <Stack
-      direction="column"
-      // No spacing: Stack puts it above every child after the first, the hidden file input included, which pushed the row down.
+    <Box
       sx={{
-        flexGrow: 1,
-        alignItems: "stretch",
+        display: "flex",
+        flexDirection: "column",
+        gap: 0.5,
+        px: 1.5,
+        pt: 1,
+        pb: 0.75,
+        bgcolor: "background.paper",
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 4,
+        "&:focus-within": { borderColor: "primary.main" },
         // An outline takes no room, so the box keeps its size and place when a file is dragged over it.
         outline: dragOver ? "2px dashed" : "none",
         outlineColor: (t) => t.palette.primary.main,
         outlineOffset: "-2px",
-        borderRadius: 1,
       }}
       onDrop={onDrop}
       onDragOver={onDragOver}
@@ -2697,7 +2692,7 @@ function Composer({
     >
       {/* While your last message is in the box to replace: says so, with a way out. */}
       {editing && (
-        <Stack direction="row" sx={{ alignItems: "center", alignSelf: "flex-start", mb: 0.5 }}>
+        <Stack direction="row" sx={{ alignItems: "center", alignSelf: "flex-start" }}>
           <Typography variant="caption" color="text.secondary">
             Editing your last message
           </Typography>
@@ -2718,7 +2713,7 @@ function Composer({
         <Stack
           direction="row"
           spacing={0.5}
-          sx={{ alignItems: "flex-start", mb: 0.5, pl: 1, borderLeft: "3px solid", borderColor: "primary.main", color: "text.secondary" }}
+          sx={{ alignItems: "flex-start", pl: 1, borderLeft: "3px solid", borderColor: "primary.main", color: "text.secondary" }}
         >
           <ReplyOutlinedIcon fontSize="small" sx={{ mt: 0.25, flexShrink: 0 }} />
           <Typography
@@ -2745,15 +2740,7 @@ function Composer({
       )}
       {/* Image preview row: hidden when there are no pending images. */}
       {pendingImages.length > 0 && (
-        <Stack
-          direction="row"
-          spacing={0.5}
-          sx={{
-            flexWrap: "wrap",
-            gap: 0.5,
-            mb: 0.5,
-          }}
-        >
+        <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.5 }}>
           {pendingImages.map((img, i) => (
             <Box
               key={img.preview}
@@ -2775,6 +2762,7 @@ function Composer({
               />
               <IconButton
                 size="small"
+                aria-label={`Remove ${img.name}`}
                 onClick={() => removeImage(i)}
                 sx={{
                   position: "absolute",
@@ -2811,7 +2799,7 @@ function Composer({
           value={tellPlan ? "tell" : "ask"}
           onChange={(_, v: "ask" | "tell" | null) => v && onTellPlan(v === "tell")}
           aria-label="Where the message goes"
-          sx={{ alignSelf: "flex-start", mb: 0.5, "& .MuiToggleButton-root": { py: 0, px: 1, textTransform: "none", fontSize: "0.75rem" } }}
+          sx={{ alignSelf: "flex-start", "& .MuiToggleButton-root": { py: 0, px: 1, textTransform: "none", fontSize: "0.75rem" } }}
         >
           <ToggleButton value="ask" title="A side question: answered now, beside the plan, which never sees it. It can only read.">
             Ask
@@ -2821,121 +2809,105 @@ function Composer({
           </ToggleButton>
         </ToggleButtonGroup>
       )}
-      {/* Main row: TextField + icons column. */}
-      <Stack
-        direction="row"
-        spacing={0.5}
-        sx={{
-          flexGrow: 1,
-          alignItems: "flex-end",
+      <TextField
+        fullWidth
+        multiline
+        variant="standard"
+        minRows={1}
+        maxRows={8}
+        placeholder={placeholder}
+        inputRef={inputRef}
+        value={text}
+        slotProps={{ htmlInput: { readOnly: sending }, input: { disableUnderline: true } }}
+        onChange={(e) => box.setText(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter sends on a wide screen; Shift+Enter makes a new line. On a phone
+          // Enter makes the new line and the button sends.
+          if (e.key === "Enter" && !e.shiftKey && enterSends && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            send();
+          }
+          // Esc while editing the last message gives the edit up. Used here, so
+          // the window-level Esc handlers (stop a reply) see it as handled; when
+          // not editing it is left alone and still stops a running reply.
+          if (e.key === "Escape" && editing && !sending && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            cancelEdit();
+            return;
+          }
+          // Up arrow in an empty box takes the last message back to edit. With
+          // anything in the box, or a modifier held, it moves the caret as usual.
+          if (
+            e.key === "ArrowUp" &&
+            !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey &&
+            !e.nativeEvent.isComposing &&
+            text === "" && !pendingImages.length && !sending
+          ) {
+            if (onEditLast()) e.preventDefault();
+          }
         }}
-      >
-        <TextField
-          fullWidth
-          multiline
-          size="small"
-          maxRows={8}
-          sx={tall ? { alignSelf: "stretch", "& .MuiInputBase-root": { flexGrow: 1, alignItems: "flex-start" } } : undefined}
-          placeholder={placeholder}
-          inputRef={inputRef}
-          value={text}
-          slotProps={{ htmlInput: { readOnly: sending } }}
-          onChange={(e) => box.setText(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter sends where there is no Send button (a wide screen). With the button
-            // (a phone, whose keyboard has no Shift) Enter starts a new line.
-            if (e.key === "Enter" && !e.shiftKey && !sendButton) {
-              e.preventDefault();
-              send();
-            }
-            // Esc while editing the last message gives the edit up. Used here, so
-            // the window-level Esc handlers (stop a reply) see it as handled; when
-            // not editing it is left alone and still stops a running reply.
-            if (e.key === "Escape" && editing && !sending && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              cancelEdit();
-              return;
-            }
-            // Up arrow in an empty box takes the last message back to edit. With
-            // anything in the box, or a modifier held, it moves the caret as usual.
-            if (
-              e.key === "ArrowUp" &&
-              !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey &&
-              !e.nativeEvent.isComposing &&
-              text === "" && !pendingImages.length && !sending
-            ) {
-              if (onEditLast()) e.preventDefault();
-            }
-          }}
-        />
-        {/* Send lines up with the input's top edge; the context
-            indicator sits just below it. */}
-        <Stack spacing={0.5} sx={{ flexShrink: 0, alignItems: "center" }}>
-          {/* Attach images. Not while a plan runs: a message to it is text only. */}
-          <Tooltip title={planRunning ? "Images can't be attached while a plan is running" : "Attach images"}>
+      />
+      {/* Bottom row: image button and folder at the left; approvals, context and Send at the right. */}
+      <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+        {/* Attach images. Not while a plan runs: a message to it is text only. */}
+        <Tooltip title={planRunning ? "Images can't be attached while a plan is running" : "Attach images"}>
+          <span>
+            <IconButton
+              aria-label="Attach images"
+              size="small"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={planRunning || disabled || sending}
+              // The button's padding (5px) and the glyph's own gap (3px) are pulled back so the icon's left edge lines up with the text above.
+              sx={{ color: "text.secondary", ml: -1 }}
+            >
+              <AttachFileIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Box sx={{ minWidth: 0, flexShrink: 1 }}>{folder}</Box>
+        <Box sx={{ flexGrow: 1 }} />
+        {approvals}
+        {context}
+        {onStop || onStopAside ? (
+          <Tooltip title={onStop ? "Stop the reply (Esc)" : "Stop the side question (the plan goes on)"}>
+            <IconButton
+              aria-label={onStop ? "Stop" : "Stop the side question"}
+              onClick={onStop ?? onStopAside}
+              sx={{ ...roundButtonSx, border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
+            >
+              <StopIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <Tooltip title={enterSends ? "Send (Enter)" : "Send"}>
             <span>
               <IconButton
-                aria-label="Attach images"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={planRunning || disabled || sending}
-                sx={{ color: "text.secondary" }}
+                aria-label={sending ? "Sending" : "Send"}
+                aria-busy={sending}
+                onClick={send}
+                disabled={!canSend}
+                sx={{
+                  ...roundButtonSx,
+                  bgcolor: "primary.main",
+                  color: "primary.contrastText",
+                  "&:hover": { bgcolor: "primary.dark" },
+                  // Busy keeps the button's colour, so it reads as working, not as unavailable.
+                  "&.Mui-disabled": sending
+                    ? { bgcolor: "primary.main", color: "primary.contrastText" }
+                    : { bgcolor: "action.disabledBackground", color: "action.disabled" },
+                }}
               >
-                <AttachFileIcon />
+                {sending ? <CircularProgress size="1.25rem" color="inherit" /> : <SendIcon fontSize="small" />}
               </IconButton>
             </span>
           </Tooltip>
-          {/* Icons, with the words as tooltip and accessible label. */}
-          {!onStop && sendButton && (
-            <Tooltip title="Send">
-              <span>
-                <IconButton
-                  aria-label={sending ? "Sending" : "Send"}
-                  aria-busy={sending}
-                  onClick={send}
-                  disabled={(!text.trim() && !pendingImages.length) || disabled || sending}
-                  sx={{
-                    bgcolor: "primary.main",
-                    color: "primary.contrastText",
-                    "&:hover": { bgcolor: "primary.dark" },
-                    // Busy keeps the button's colour, so it reads as working, not as unavailable.
-                    "&.Mui-disabled": sending
-                      ? { bgcolor: "primary.main", color: "primary.contrastText" }
-                      : { bgcolor: "action.disabledBackground", color: "action.disabled" },
-                  }}
-                >
-                  {sending ? <CircularProgress size="1.5rem" color="inherit" /> : <SendIcon />}
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
-          {onStopAside && (
-            <Tooltip title="Stop the side question (the plan goes on)">
-              <IconButton
-                aria-label="Stop the side question"
-                onClick={onStopAside}
-                sx={{ border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
-              >
-                <StopIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          {onStop && (
-            <Tooltip title="Stop the reply">
-              <IconButton
-                aria-label="Stop"
-                onClick={onStop}
-                sx={{ border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
-              >
-                <StopIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          {below}
-        </Stack>
+        )}
       </Stack>
-    </Stack>
+    </Box>
   );
 }
+
+const roundButtonSx = { width: "2.25rem", height: "2.25rem", flexShrink: 0 };
 
 // How each kind of note under a reply looks. Keyed by the kind's id, so a kind
 // added to the table (replyNoteKinds.ts) does not compile until it has a style.
