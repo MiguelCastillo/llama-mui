@@ -123,6 +123,7 @@ describe("the system prompt", () => {
 
   it("tells a model with tools to use the note tools and show commits, and one without to write plain lines", () => {
     expect(workingRules(true)).toMatch(/add_action_item/);
+    expect(workingRules(true)).toMatch(/prices, limits or API behaviour.*don't answer from memory/);
     expect(workingRules(true)).toContain("git --no-pager show --stat --oneline HEAD");
     expect(workingRules(false)).not.toMatch(/add_action_item|add_idea|tool/);
     expect(workingRules(false)).toMatch(/"Your action: …", in bold/);

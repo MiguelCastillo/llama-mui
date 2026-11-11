@@ -1587,6 +1587,65 @@ You can also **Search Hugging Face** for GGUF models:
 The search goes through our server to Hugging Face's API. Its results don't
 include an author, so the owner comes from the model id ("owner/repo").
 
+## What a Claude chat costs
+
+A llama.cpp model costs nothing per token. On an Anthropic connection you pay
+Anthropic per token, on your key. Prices change, so check
+[Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing)
+before quoting one; the numbers below are as of November 2026.
+
+**What's billed.** Every request, not only your messages: each tool round, plan
+steps, step checks, side questions, and the small background calls (naming a
+chat, a thread's report). Each request is billed for:
+
+- **Input**: everything sent, which is the whole conversation so far, the
+  system prompt, the tool descriptions and every tool result still in the chat.
+  A reply with ten tool calls sends the conversation ten times. In a long chat
+  this is usually most of the bill.
+- **Output**: the reply text, the tool calls, and **all** of Claude's
+  thinking. The Thoughts bar shows a summary written by another model; the
+  summary costs nothing extra, and hiding it would save nothing. The thinking
+  token count on the bar counts the summary's pieces, so it is lower than what
+  you pay for.
+
+**Prompt caching.** Each request asks Anthropic to cache the conversation
+(`cache_control`, the default five-minute cache). Reading a cached part costs a
+fraction of the input price; writing it costs 1.25 times the input price. So a
+request is cheap when the conversation before it is still cached, and costs
+more than an uncached one when it has to be written again. That happens when:
+
+- **more than about five minutes pass** between requests (stepping away), since
+  the cache lives five minutes from the request that last used it;
+- **the model changes** mid-chat (each model has its own cache), so a cheaper
+  model for one question saves nothing in the same chat;
+- **Effort changes** (thinking or effort settings are part of what is cached);
+- **an earlier message is edited**, or the system prompt or the tools change
+  (attaching a folder, changing the working directory, turning a tool on or
+  off).
+
+**Prices, per million tokens** (November 2026):
+
+| Model | Input | Output | Cached read |
+|---|---|---|---|
+| Haiku 5.5 | $0.10 ($0.50 above 100K-token prompts) | $0.50 ($2.50) | |
+| Sonnet 5.5 | $2 | $10 | $0.10 |
+| Opus 5.5 | $4 | $20 | $0.20 |
+| Fable 5.2 | $8 | $40 | $0.20 |
+| Haiku 4.5 | $1 | $5 | |
+
+An older model isn't cheaper: Haiku 4.5 costs ten times Haiku 5.5, and Sonnet
+4.5 (deprecated, retiring 30 November 2026) costs more than Sonnet 5.5.
+Running without thinking (Haiku 4.5, Sonnet 4.5) doesn't make a model cheaper
+either.
+
+**What lowers the cost**: a lower **Effort** (less thinking, fewer tool calls,
+shorter replies); **Clear context** or a new chat when the topic changes, so
+the old history stops being sent; asking for parts of files rather than whole
+ones; replying within a few minutes while the cache is warm; and keeping one
+model and one Effort for a chat. Turning thinking off is not a saving: Claude
+then writes its reasoning into the reply instead, and once that is quoted back
+Anthropic refuses later requests (`reasoning_extraction`).
+
 ## The server's log
 
 llama-mui's server (the one `npm run prod` or `npm run dev` starts, not the page)
