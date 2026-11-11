@@ -13,6 +13,12 @@
 // `via` is "browser" for a page and "server" for a call llama-mui made itself
 // (plan runs and replies run here). Only what is safe to keep goes in: the
 // connector's name, the path without its query, and numbers.
+//
+// A Messages API reply (`/v1/messages`, streamed) also gets the model and its
+// token counts, read from the stream's own usage events (see readUsage):
+// `tokens` is { input, cacheRead, cacheWrite, output }, which is what the bill
+// is made of (cacheWrite costs more than input, cacheRead much less). Nothing
+// of the reply's text is kept.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Readable } from "node:stream";
@@ -50,6 +56,55 @@ export interface Tracked {
   end(error?: unknown): void;
 }
 
+// The model and token counts a Messages API stream reports: message_start
+// carries the model and the input side, message_delta the output so far (the
+// last one is the total). Fed the stream in chunks, which can split a line.
+export interface Usage {
+  model?: string;
+  input?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  output?: number;
+}
+// Only the lines that can carry usage are parsed; a content line can be long,
+// so a partial line longer than this is dropped rather than kept.
+const MAX_LINE = 64 * 1024;
+export function usageReader() {
+  const usage: Usage = {};
+  let partial = "";
+  const take = (line: string) => {
+    if (!line.startsWith("data:") || !line.includes('"usage"')) return;
+    let e: any;
+    try {
+      e = JSON.parse(line.slice(5));
+    } catch {
+      return;
+    }
+    const u = e?.type === "message_start" ? e.message?.usage : e?.type === "message_delta" ? e.usage : undefined;
+    if (e?.type === "message_start" && typeof e.message?.model === "string") usage.model = e.message.model;
+    if (!u) return;
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+    usage.input = num(u.input_tokens) ?? usage.input;
+    usage.cacheRead = num(u.cache_read_input_tokens) ?? usage.cacheRead;
+    usage.cacheWrite = num(u.cache_creation_input_tokens) ?? usage.cacheWrite;
+    usage.output = num(u.output_tokens) ?? usage.output;
+  };
+  return {
+    feed(chunk: Buffer | string) {
+      const lines = (partial + chunk.toString()).split("\n");
+      partial = lines.pop() ?? "";
+      if (partial.length > MAX_LINE) partial = "";
+      for (const line of lines) take(line.trimEnd());
+    },
+    // The counts read so far, or undefined when the stream had none.
+    result(): Usage | undefined {
+      if (partial) take(partial.trimEnd());
+      partial = "";
+      return usage.input === undefined && usage.output === undefined ? undefined : { ...usage };
+    },
+  };
+}
+
 export function track(req: IncomingMessage, res: ServerResponse, connector: string, fullPath: string): Tracked {
   const id = `${Date.now().toString(36)}${(serial++ % 1296).toString(36).padStart(2, "0")}`;
   const path = fullPath.split("?")[0];
@@ -68,6 +123,8 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
   let clientGone = false;
   let upstreamError: unknown;
   let done = false;
+  // Token counts, for a Messages API reply only.
+  const usage = path === "/v1/messages" && method === "POST" ? usageReader() : undefined;
 
   // Closed before the reply was fully written, and not because the model
   // server's body broke (the pipeline closes the response then): the other
@@ -82,6 +139,7 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
       firstByteMs ??= now - startedAt;
       bytes += chunk.length;
       lastChunkAt = now;
+      usage?.feed(chunk);
       cb(null, chunk);
     },
   });
@@ -92,6 +150,7 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
     open.delete(id);
     const ms = Date.now() - startedAt;
     if (outcome === "done" && (method === "GET" || method === "HEAD") && ms < SLOW_MS) return;
+    const counted = usage?.result();
     log("upstream.end", {
       id,
       outcome,
@@ -105,6 +164,10 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
       ...(firstByteMs !== undefined ? { firstByteMs } : {}),
       bytes,
       ...(outcome === "upstream-error" || outcome === "client-closed" ? { idleMs: Date.now() - lastChunkAt } : {}),
+      ...(counted?.model ? { model: counted.model } : {}),
+      ...(counted
+        ? { tokens: { input: counted.input ?? 0, cacheRead: counted.cacheRead ?? 0, cacheWrite: counted.cacheWrite ?? 0, output: counted.output ?? 0 } }
+        : {}),
       ...extra,
     });
   };

@@ -17,6 +17,16 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { load, save } = await import("../store.ts");
 const { connectorRoutes } = await import("../connectors.ts");
+const { usageReader } = await import("../upstreamLog.ts");
+
+// A Messages API stream as Anthropic sends it: usage in message_start (the
+// input side) and message_delta (the output so far; the last one is the total).
+const MESSAGES_STREAM = [
+  'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","model":"claude-sonnet-5-5","usage":{"input_tokens":12,"cache_read_input_tokens":60000,"cache_creation_input_tokens":3000,"output_tokens":1}}}\n\n',
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}\n\n',
+  'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":480}}\n\n',
+  'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+].join("");
 const { errorFields, log, logHint, logsDir, pruneLogs } = await import("../log.ts");
 const { checkOnce, resetWatch } = await import("../watch.ts");
 const { HttpError } = await import("../http.ts");
@@ -51,6 +61,13 @@ beforeAll(async () => {
     if (req.url === "/v1/ok") {
       res.setHeader("Content-Type", "text/event-stream");
       res.end("data: hello\n\ndata: [DONE]\n\n");
+    } else if (req.url === "/v1/messages") {
+      // In three pieces that cut lines in half, as a network can.
+      res.setHeader("Content-Type", "text/event-stream");
+      const cuts = [70, 260];
+      res.write(MESSAGES_STREAM.slice(0, cuts[0]));
+      res.write(MESSAGES_STREAM.slice(cuts[0], cuts[1]));
+      res.end(MESSAGES_STREAM.slice(cuts[1]));
     } else if (req.url === "/v1/breaks") {
       // A chunk, then the connection drops: what a model's process dying looks like from here.
       res.setHeader("Content-Type", "text/event-stream");
@@ -149,6 +166,26 @@ describe("requests to a model server", () => {
     expect(end.ms).toBeGreaterThanOrEqual(0);
   });
 
+  it("give a Messages API reply's model and token counts, and nothing of its text", async () => {
+    await (await post("/v1/messages")).text();
+    const start = (await lines()).filter((l) => l.event === "upstream.start" && l.path === "/v1/messages").pop();
+    const end = await ended(start.id);
+    expect(end).toMatchObject({
+      outcome: "done",
+      model: "claude-sonnet-5-5",
+      tokens: { input: 12, cacheRead: 60000, cacheWrite: 3000, output: 480 },
+    });
+    expect(JSON.stringify(end)).not.toContain("Hello");
+  });
+
+  it("give no token counts for other paths", async () => {
+    await (await post("/v1/ok")).text();
+    const start = (await lines()).filter((l) => l.event === "upstream.start" && l.path === "/v1/ok").pop();
+    const end = await ended(start.id);
+    expect(end.tokens).toBeUndefined();
+    expect(end.model).toBeUndefined();
+  });
+
   it("say upstream-error, with the cause, when the model server's connection breaks mid-reply", async () => {
     const res = await post("/v1/breaks");
     await res.text().catch(() => {});
@@ -189,6 +226,27 @@ describe("requests to a model server", () => {
     expect(text).not.toContain("secret=");
     expect(text).not.toContain("Bearer");
     expect((await lines()).filter((l) => l.event === "upstream.end" && l.method === "GET" && l.outcome === "done")).toHaveLength(0);
+  });
+});
+
+describe("usageReader", () => {
+  it("reads the counts however the stream is cut, one character at a time included", () => {
+    const r = usageReader();
+    for (const ch of MESSAGES_STREAM) r.feed(ch);
+    expect(r.result()).toEqual({ model: "claude-sonnet-5-5", input: 12, cacheRead: 60000, cacheWrite: 3000, output: 480 });
+  });
+
+  it("gives nothing for a stream without usage", () => {
+    const r = usageReader();
+    r.feed("data: hello\n\ndata: [DONE]\n\n");
+    expect(r.result()).toBeUndefined();
+  });
+
+  it("drops an over-long line rather than keeping it, and still reads the rest", () => {
+    const r = usageReader();
+    r.feed("data: " + "x".repeat(70 * 1024));
+    r.feed("\n" + MESSAGES_STREAM);
+    expect(r.result()?.output).toBe(480);
   });
 });
 

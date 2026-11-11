@@ -1668,7 +1668,12 @@ the `tail -f` command that follows it, when it starts. Each line has `t` (time),
   silent); `connect-failed` (never reached it). It also has `ms`, `headersMs`,
   `firstByteMs`, `bytes`, and `via` (`browser`, or `server` for calls llama-mui
   makes itself, which is what plan runs and chat replies are). A GET that went
-  fine and fast isn't logged.
+  fine and fast isn't logged. A Messages API reply (`/v1/messages`) also has
+  `model` and `tokens`: `{ input, cacheRead, cacheWrite, output }`, read from
+  the stream's own usage events, which is what a Claude request is billed for
+  (see [What a Claude chat costs](#what-a-claude-chat-costs); `output` includes
+  all the thinking). Nothing of the reply's text is kept. To add up a day:
+  `grep '"tokens"' ~/.llama-mui/logs/server-<day>.log`.
 - `llama.watch`, `llama.down`, `llama.up`, `llama.model`: every 15 seconds the
   server asks each llama server for its models and writes a line only when
   something changed: it stopped answering, answered again (`downForMs` is how
