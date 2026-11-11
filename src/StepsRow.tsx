@@ -30,6 +30,8 @@ export default function StepsRow({
       expanded={open}
       onChange={(_, o) => setOpen(o)}
       elevation={0}
+      // Draw the step rows only while this is open; nobody opens most of them.
+      slotProps={{ transition: { unmountOnExit: true } }}
       sx={{
         ...flatAccordionSx,
         // Open, the step rows fill the width with no padding of their own; the

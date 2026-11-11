@@ -3096,7 +3096,12 @@ const MessageBubble = memo(function MessageBubble({
         {group.map((r, ri) => (
           <Fragment key={ri}>
             {r.reasoning && (
-              <Accordion disableGutters elevation={0} sx={flatAccordionSx}>
+              <Accordion
+                disableGutters
+                elevation={0}
+                slotProps={{ transition: { unmountOnExit: true } }}
+                sx={flatAccordionSx}
+              >
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   {/* While it's thinking, the same dots as waiting for a reply. */}
                   {streaming && r === last && !r.content && !r.toolCalls ? (
@@ -3538,6 +3543,7 @@ const ToolCallView = memo(function ToolCallView({
       expanded={open}
       onChange={(_, o) => setOpen(o)}
       elevation={0}
+      slotProps={{ transition: { unmountOnExit: true } }}
       sx={flatAccordionSx}
     >
       {/* minWidth 0 down the flex chain lets a long title shrink instead of

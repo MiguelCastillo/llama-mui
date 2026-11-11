@@ -28,6 +28,8 @@ export default function LiveLineRow({
     <Accordion
       disableGutters
       elevation={0}
+      // Draw the history only while this is open.
+      slotProps={{ transition: { unmountOnExit: true } }}
       sx={{
         ...flatAccordionSx,
         // Open, the history fills the width with no padding of its own.

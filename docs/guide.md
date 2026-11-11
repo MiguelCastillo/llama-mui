@@ -1489,8 +1489,9 @@ step that was running when the page closed comes back as pending.
   has any) sits above the answer, and it doesn't join the line above. Each
   line starts closed; click it to open the
   step rows (the **Thoughts** bar and the tool calls), each with how long it
-  took (hover for token counts). A line stays open only while the chat is on
-  screen. There is no setting for this. The reply's total time is in the small
+  took (hover for token counts). A row draws its contents only when it is
+  opened, which keeps a long chat light; closing it removes them again. A line
+  stays open only while the chat is on screen. There is no setting for this. The reply's total time is in the small
   print under the reply. A reply that is only steps (say, stopped in the
   middle of a tool call) shows just the line.
 - While a reply runs, the notes and step lines above are folded into one
