@@ -36,6 +36,24 @@ describe("submitDraft", () => {
     expect(log).toEqual(["clear", "accepted", "done:true"]);
   });
 
+  it("a message queued behind a running reply empties the box like any accepted send", async () => {
+    // The queue answers at once, without waiting for a run to show, so the send
+    // resolves right after it was accepted.
+    const { log, settle, run } = setup();
+    const p = run(true);
+    settle(true);
+    expect(await p).toBe(true);
+    expect(log).toEqual(["clear", "accepted", "done:true"]);
+  });
+
+  it("puts the text back when the queue refuses the message (it is full)", async () => {
+    const { log, settle, run } = setup();
+    const p = run(true);
+    settle(false);
+    expect(await p).toBe(false);
+    expect(log).toEqual(["clear", "accepted", "restore"]);
+  });
+
   it("puts the text back when the send fails after the box was emptied", async () => {
     const { log, settle, run } = setup();
     const p = run(true);

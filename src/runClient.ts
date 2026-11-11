@@ -405,18 +405,44 @@ export async function sendMessage(id: string, text: string): Promise<{ step: num
 // and streams it as events, so the view shows kind "turn" until it ends. The
 // session must be saved first, as for a plan: the history is what is saved
 // (Resend saves it cut short), and `text` is the new message. `planning`: the
-// reply only writes a plan. Throws an ApiError (a plain refusal: a reply is
-// already streaming, the server isn't in the list any more); the caller keeps
+// reply only writes a plan. Throws an ApiError (a plain refusal: the server
+// isn't in the list any more, a plan is running); the caller keeps
 // the text where the user typed it. Answers once the run shows. `replyTo`: the
 // text of the response the message replies to; the server saves it on the
 // message, and the model never gets it.
+// While a reply is streaming the server doesn't refuse the message: it puts it
+// in the session's queue, with these choices, and sends it when the reply ends.
+// Then the answer is { queued: true } at once (no new run shows), and the
+// session the page gets from the server carries the queue. Don't save the
+// session first in that case: the running reply owns it. A full queue is an
+// ApiError ("queue full") and the text stays in the box.
 export async function sendChat(
   id: string,
   text: string,
   options: RunOptions & { planning: boolean; images?: ImageRef[]; replyTo?: string },
-): Promise<void> {
+): Promise<{ queued: boolean }> {
   const before = generation.get(id) ?? 0;
-  await sendCommand(id, "message", { text, ...options });
+  const r = await sendCommand(id, "message", { text, ...options });
+  if (r.queued) return { queued: true };
+  await waitUntil(() => (generation.get(id) ?? 0) !== before, START_WAIT_MS);
+  return { queued: false };
+}
+
+// Takes one waiting message out of the session's queue: the Remove button, and
+// Edit (the caller then puts the text back in the box). Throws an ApiError with
+// reason "not queued" if it was sent or removed already (another window).
+export const queueRemove = (id: string, messageId: string): Promise<unknown> => sendCommand(id, "queue-remove", { id: messageId });
+
+// Empties the session's queue and clears its pause.
+export const queueClear = (id: string): Promise<unknown> => sendCommand(id, "queue-clear");
+
+// Sends the first waiting message now and un-pauses the queue ("Send next").
+// The server starts it as a normal reply with the choices it was queued with;
+// answers once the run shows. Throws an ApiError: "reply running" (a run is
+// going), "nothing to run" (the queue is empty).
+export async function queueSend(id: string): Promise<void> {
+  const before = generation.get(id) ?? 0;
+  await sendCommand(id, "queue-send");
   await waitUntil(() => (generation.get(id) ?? 0) !== before, START_WAIT_MS);
 }
 

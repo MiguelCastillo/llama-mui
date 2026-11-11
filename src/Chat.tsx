@@ -84,6 +84,7 @@ import {
   type AutoKind,
   type Todo,
   type ImageRef,
+  type QueuedMessage,
   rememberFolder,
   setCheckCommand,
   type Session,
@@ -126,6 +127,8 @@ import { newId } from "./uuid";
 import SessionSettings, { ATTACHMENTS_LOCKED_NOTE, AttachmentIcon } from "./SessionSettings";
 import SessionsPanel from "./SessionsPanel";
 import Panel, { PanelAction, PanelButton } from "./Panel";
+import QueuedMessages from "./QueuedMessages";
+import { pausedReason } from "./queue";
 import EmptyChatCreature from "./EmptyChatCreature";
 import EmptyChatSuggestions from "./EmptyChatSuggestions";
 import { settleStart, startAction, type Start, type StartAction } from "./todos";
@@ -173,6 +176,9 @@ import {
   getView,
   isLive,
   needsYou,
+  queueClear,
+  queueRemove,
+  queueSend,
   sendChat,
   sendMessage as sendToRun,
   setAutoApprove as sendAutoApprove,
@@ -381,6 +387,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     autoApprove,
     titleHint,
     planMovedIn,
+    queue,
+    queuePaused,
   } = session;
   // Per-model options from Settings → Models, plus the server's defaults for
   // models nobody changed.
@@ -1155,6 +1163,83 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     box.fill(messages[index].content);
   };
 
+  // The queue of messages sent during a reply (see QueuedMessages). It comes
+  // with the session: a running reply's updates carry it, and with no run the
+  // chat is read again after each change made here. The server owns it, so
+  // these only send commands and show what the server then says.
+  const refreshQueue = async (id: string) => {
+    // A running reply sends the changes itself, as updates of its session.
+    if (runnerActive(id)) return;
+    try {
+      const s = await getSession(id);
+      if (openId.current === id && !runnerActive(id)) applySession(s, true, false);
+    } catch {
+      // Not read: the list stays as it was until the next change.
+    }
+  };
+  // Takes one message out of the queue. Returns whether it was there to take:
+  // one that was sent or removed meanwhile (another window) is not an error,
+  // the list just catches up. Its images are deleted once it is really gone.
+  const removeQueued = async (item: QueuedMessage): Promise<boolean> => {
+    const id = sessionId;
+    try {
+      await queueRemove(id, item.id);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.data.reason === "not queued")) showSessionError(id, e instanceof Error ? e.message : String(e));
+      await refreshQueue(id);
+      return false;
+    }
+    await refreshQueue(id);
+    for (const ref of item.images ?? []) deleteImage(id, ref.id).catch(() => {});
+    return true;
+  };
+  // Edit on a queued message: it leaves the queue and its text, images and
+  // quote go back in the message box, to be changed and sent again. Only when
+  // the box is empty, as for Edit on a sent message. The images are read back
+  // first, so a failure leaves the message in the queue.
+  const editQueued = async (item: QueuedMessage) => {
+    const id = sessionId;
+    if (!box.isEmpty()) return;
+    let images: PendingImage[] = [];
+    try {
+      images = await Promise.all(
+        (item.images ?? []).map(async (ref) => {
+          const res = await fetch(`/api/sessions/${id}/images/${ref.id}`);
+          if (!res.ok) throw new Error(`the server answered ${res.status}`);
+          const blob = await res.blob();
+          return { blob, preview: URL.createObjectURL(blob), name: "Image" };
+        }),
+      );
+    } catch (e) {
+      showSessionError(id, `Couldn't take the message back into the box: its image didn't load (${e instanceof Error ? e.message : String(e)}). It is still in the queue.`);
+      return;
+    }
+    const drop = () => images.forEach((img) => revokePreview(img.preview));
+    // Something was typed while the images loaded: leave the message queued.
+    if (!box.isEmpty() || openId.current !== id) return drop();
+    if (!(await removeQueued(item)) || openId.current !== id) return drop();
+    if (item.replyTo && !pendingReply) setReplyTarget({ id, text: item.replyTo, n: Date.now() });
+    box.fill(item.text, images);
+  };
+  const sendNextQueued = async () => {
+    const id = sessionId;
+    try {
+      await queueSend(id);
+    } catch (e) {
+      showSessionError(id, e instanceof Error ? e.message : String(e));
+      await refreshQueue(id);
+    }
+  };
+  const clearQueue = async () => {
+    const id = sessionId;
+    try {
+      await queueClear(id);
+    } catch (e) {
+      showSessionError(id, e instanceof Error ? e.message : String(e));
+    }
+    await refreshQueue(id);
+  };
+
   // Sends what the user typed. Returns whether it went. `accepted` is called
   // once the send is certain to start (not refused above), so the message box
   // can clear at once instead of waiting while the session is saved and the
@@ -1202,11 +1287,15 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         return false;
       }
     }
-    // A reply is streaming: another message waits for its end (the server
-    // refuses it too, see sendNote).
+    // A reply is streaming: the message goes to the session's queue on the
+    // server, which sends it when the reply ends. Resend and Do it build their
+    // own history (`base`), which a waiting message can't use, so those wait.
     if (turnRunning) {
-      showSessionError(sessionId, "A reply is still streaming. Wait for it to finish, or stop it, then send your message.");
-      return false;
+      if (base) {
+        showSessionError(sessionId, "A reply is still streaming. Wait for it to finish, or stop it, then send your message.");
+        return false;
+      }
+      return queueReply(text, images, accepted);
     }
     // The one before this is still being saved and sent.
     if (!model || !connector || starting.current) return false;
@@ -1279,6 +1368,47 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       canRestore: () => openId.current === id && !getView(id)?.session,
       work: () => runTurn(text, before, planning, pendingImages, existingRefs, replyTo),
     });
+  };
+  // Sends a message typed while a reply streams: the server puts it in the
+  // session's queue (no banner, nothing shown in the history: the queue under
+  // the reply shows it, from the session the server sends). The session is not
+  // saved first, because the running reply owns it. The box empties once this
+  // is certain to go, and gets the text back if the server refuses it (the
+  // queue is full) or an image doesn't upload. Returns whether it went.
+  const queueReply = async (text: string, pendingImages: PendingImage[] | undefined, accepted: () => void): Promise<boolean> => {
+    const options = runOptions();
+    if (!options) return false;
+    const id = sessionId;
+    const quoted = pendingReply;
+    accepted();
+    if (quoted) setReplyTarget(null);
+    const refuse = (message: string) => {
+      showSessionError(id, message);
+      if (quoted) setReplyTarget((now) => now ?? quoted);
+      return false;
+    };
+    let refs: ImageRef[] = [];
+    if (pendingImages?.length) {
+      const results = await Promise.allSettled(pendingImages.map((img) => uploadImage(id, img.blob)));
+      refs = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed) {
+        // Keep none of it: the images that did upload are removed again.
+        await Promise.all(refs.map((ref) => deleteImage(id, ref.id).catch(() => {})));
+        const name = pendingImages[0]?.name ?? "Image";
+        return refuse(`${name}: upload failed — ${failed.reason instanceof Error ? failed.reason.message : String(failed.reason)}`);
+      }
+    }
+    try {
+      await sendChat(id, text, { ...options, planning: planOn, images: refs.length ? refs : undefined, replyTo: quoted?.text });
+      // A refusal shown earlier is out of date now; the run's own error stays.
+      setErrors((s) => clearSendRefusal(s, id));
+      toBottom();
+      return true;
+    } catch (e) {
+      await Promise.all(refs.map((ref) => deleteImage(id, ref.id).catch(() => {})));
+      return refuse(e instanceof Error ? e.message : String(e));
+    }
   };
   const runTurn = async (text: string, before: ChatMessage[], planning: boolean, pendingImages?: PendingImage[], existingRefs?: ImageRef[], replyTo?: string): Promise<boolean> => {
     const options = runOptions();
@@ -2236,6 +2366,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             {shownPending && !promptInPlan && (
               <PendingPrompt ask={shownPending.ask} onDecide={shownPending.decide} runKind={runnerView?.kind} onAlways={(k) => { shownPending.always(k); updateSession((s) => ({ autoApprove: { ...s.autoApprove, [k]: true } })); }} />
             )}
+            {/* Messages sent during the reply, waiting their turn (or paused). */}
+            <QueuedMessages
+              items={queue}
+              paused={queuePaused}
+              reason={pausedReason(failed)}
+              sessionId={sessionId}
+              box={box}
+              replyRunning={runActive}
+              onEdit={(item) => void editQueued(item)}
+              onRemove={(item) => void removeQueued(item)}
+              onSendNext={() => void sendNextQueued()}
+              onClear={() => void clearQueue()}
+            />
             {notLoaded && (
               <Alert severity="info">
                 {notLoaded} isn't loaded, so nothing was sent. Load it with ▶ in the model menu (it takes a moment and

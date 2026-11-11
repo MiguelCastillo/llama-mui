@@ -347,6 +347,19 @@ export function settleStale(id: string, fix: (session: any, run: RunState) => an
   });
 }
 
+// For a restart: a session that has messages waiting in its queue and no run in
+// this process is left paused, so nothing in it is sent by itself. Writes the
+// next revision only if it changes something; true if it did.
+export function pauseQueue(id: string): Promise<boolean> {
+  return locked(id, async () => {
+    if (runs.has(id)) return false;
+    const prev = await readSession(id);
+    if (!prev || !Array.isArray(prev.queue) || !prev.queue.length || prev.queuePaused === true) return false;
+    await commit(id, { ...prev, queuePaused: true }, prev, true);
+    return true;
+  });
+}
+
 // Deletes a session's file (the sessions route removes the folder after).
 // Refused while a run is live: stop it first.
 export function remove(id: string, deleteFile: () => Promise<void>): Promise<void> {

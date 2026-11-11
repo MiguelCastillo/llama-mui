@@ -39,7 +39,25 @@
 //            The session must be saved first: the history is what is
 //            saved, and `text` is the new message. The answer is { ok,
 //            revision } once the reply has begun; it streams as events. While
-//            a reply streams, another message is refused ("reply running").
+//            a reply streams, another message (it needs some text) is put in
+//            the session's queue with the same choices (and images, replyTo)
+//            instead, and the answer is { ok, revision, queued: true,
+//            messageId }. With MAX_QUEUE waiting already it is refused
+//            ("queue full"). The queue is saved with the session.
+//
+//   queue-remove { id }   takes one waiting message out of the queue (the page's
+//            Remove, and Edit, which then puts the text back in the box). A
+//            message no longer there is refused ("not queued"). Emptying the
+//            queue this way also clears its pause.
+//   queue-clear  empties the queue and clears the pause.
+//   queue-send   sends the first waiting message now, as a normal reply with
+//            the choices it was queued with, and un-pauses the queue. Refused
+//            while a run is going ("reply running") and with nothing waiting
+//            ("nothing to run"). A reply that can't start puts the message
+//            back at the front.
+//            A queue is paused when its reply was stopped or failed (see
+//            runners.ts): nothing is sent from it until queue-send or
+//            queue-clear.
 //
 //   ask      { text, connectorId, model, toolsOn, thinkOn }   a side question
 //            while a plan runs: answered beside the plan, written into the
@@ -54,7 +72,7 @@
 // `reason`: "already running" (a second window starting the same plan),
 // "not running", "stale ask" (that question was answered already: the first
 // answer wins), "nothing to run", "wrong answer", "no step left", "stale revision",
-// "reply running", "aside running", "not a plan" (Pause for a single reply),
+// "reply running" (images sent to a plan), "queue full", "not queued", "aside running", "not a plan" (Pause for a single reply),
 // "no connector" (the server the page chose isn't in the list any more). A run
 // that can't reach the model server or its tools is a 502, reason "unreachable".
 
@@ -65,7 +83,8 @@ import * as runners from "./runners.ts";
 import { AUTO_KINDS, type AutoKind, withAuto } from "../src/autoApprove.ts";
 import { sessionFolder } from "./sessionFile.ts";
 import { validateRefs } from "./images.ts";
-import { MAX_REPLY_QUOTE } from "../src/api.ts";
+import { randomUUID } from "node:crypto";
+import { type ImageRef, MAX_QUEUE, MAX_REPLY_QUOTE, type QueuedMessage } from "../src/api.ts";
 
 export interface RunOptions {
   connectorId: string;
@@ -136,6 +155,103 @@ const replyToOf = (v: unknown): string | undefined => {
   return v.length > MAX_REPLY_QUOTE ? `${v.slice(0, MAX_REPLY_QUOTE).trimEnd()}…` : v;
 };
 
+// Puts a message sent during a reply at the end of the session's queue, with the
+// choices it was typed with, and answers its id. Done on the session as the run
+// holds it (hub.edit), so it is saved with the run and every window sees it.
+// Answers null, queueing nothing, if the reply has ended by the time the edit
+// runs: the caller then sends the message as a normal reply. A full queue
+// (MAX_QUEUE) is a 409, "queue full".
+async function queueMessage(
+  id: string,
+  text: string,
+  options: QueuedMessage["options"],
+  images: ImageRef[] | undefined,
+  replyTo: string | undefined,
+): Promise<string | null> {
+  const { connectorId, model, toolsOn, thinkOn, planning } = options;
+  const message: QueuedMessage = {
+    id: randomUUID(),
+    text,
+    options: { connectorId, model, toolsOn, thinkOn, planning },
+    ...(images?.length ? { images } : {}),
+    ...(replyTo ? { replyTo } : {}),
+    queuedAt: Date.now(),
+  };
+  let queued = false;
+  await hub.edit(id, (s) => {
+    if (!runners.isRunning(id) || hub.liveRun(id)?.kind !== "turn") return;
+    const queue: QueuedMessage[] = Array.isArray(s.queue) ? s.queue : [];
+    if (queue.length >= MAX_QUEUE) {
+      throw new HttpError(409, `${MAX_QUEUE} messages are already waiting in this chat. Wait for one to be sent, or remove one. Your message is still in the box.`, {
+        reason: "queue full",
+      });
+    }
+    s.queue = [...queue, message];
+    queued = true;
+  });
+  return queued ? message.id : null;
+}
+
+// Takes one queued message out of the session's queue (by id), or all of them
+// when no id is given. A queue left empty is no longer paused, so the next
+// message queued is sent when its reply ends. A message that is not in the
+// queue (another window removed or sent it) is a 409, "not queued".
+async function unqueue(id: string, messageId?: string): Promise<void> {
+  await hub.edit(id, (s) => {
+    const queue: QueuedMessage[] = Array.isArray(s.queue) ? s.queue : [];
+    if (messageId !== undefined && !queue.some((m) => m.id === messageId)) {
+      throw new HttpError(409, "That message is not waiting any more: it was sent or removed already.", { reason: "not queued" });
+    }
+    const rest = messageId === undefined ? [] : queue.filter((m) => m.id !== messageId);
+    s.queue = rest;
+    if (!rest.length) s.queuePaused = false;
+  });
+}
+
+// Sends the first queued message now, as a normal reply with the choices it was
+// queued with, and un-pauses the queue (the ones after it follow as each reply
+// ends). Refused while any run is going (409 "reply running"), and with nothing
+// queued ("nothing to run"). The message leaves the queue before the reply
+// starts, so no second reply can send it; if the reply can't start, it goes
+// back to the front and the pause is as it was.
+async function sendNext(id: string, chat: Required<CommandDeps>["chat"]): Promise<void> {
+  const busy = () => new HttpError(409, "A reply is still being written. The queue sends the next message when it ends.", { reason: "reply running" });
+  if (runners.isRunning(id)) throw busy();
+  let item: QueuedMessage | undefined;
+  let wasPaused = false;
+  await hub.edit(id, (s) => {
+    if (runners.isRunning(id)) throw busy();
+    const queue: QueuedMessage[] = Array.isArray(s.queue) ? s.queue : [];
+    if (!queue.length) throw new HttpError(409, "No messages are waiting in this chat.", { reason: "nothing to run" });
+    item = queue[0];
+    wasPaused = s.queuePaused === true;
+    s.queue = queue.slice(1);
+    s.queuePaused = false;
+  });
+  if (!item) return;
+  const sent = item;
+  try {
+    await chat(id, sent.text, {
+      connectorId: sent.options.connectorId ?? "",
+      model: sent.options.model,
+      toolsOn: sent.options.toolsOn,
+      thinkOn: sent.options.thinkOn,
+      planning: sent.options.planning === true,
+      images: sent.images,
+      replyTo: sent.replyTo,
+    });
+  } catch (err) {
+    await hub
+      .edit(id, (s) => {
+        const queue: QueuedMessage[] = Array.isArray(s.queue) ? s.queue : [];
+        if (!queue.some((m) => m.id === sent.id)) s.queue = [sent, ...queue];
+        s.queuePaused = wasPaused;
+      })
+      .catch((editErr) => console.warn(`Couldn't put a queued message back in session ${id}: ${editErr}`));
+    throw err;
+  }
+}
+
 // Handles POST /api/sessions/<id>/commands/<name>; returns false for anything else.
 export async function commandRoutes({ req, res, parts, method }: Route, given: CommandDeps = defaultDeps): Promise<boolean> {
   const deps = { ...defaultDeps, ...given };
@@ -170,7 +286,9 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
       const images = body.images;
       const text = body.text ?? "";
       if (typeof text !== "string") throw new HttpError(400, "text must be given");
-      if (runners.isRunning(id)) {
+      const running = runners.isRunning(id);
+      const replyRunning = running && hub.liveRun(id)?.kind === "turn";
+      if (running && !replyRunning) {
         // A plan: folded in before the next step; the answer says which one.
         // Images are refused (a plan message has no images field).
         if (images) throw new HttpError(409, "Images can't be attached while a plan is running. Send the text without the image and try again.", {
@@ -179,14 +297,36 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
         if (!text.trim()) throw new HttpError(400, "text must be given");
         extra = await runners.sendNote(id, text);
       } else {
-        // No run: one chat reply, run here.
+        // No run: one chat reply, run here. While a reply streams: the message
+        // waits in the session's queue (see queueMessage).
         if (body.planning !== undefined && typeof body.planning !== "boolean") throw new HttpError(400, "planning must be true or false");
+        if (replyRunning && !text.trim()) {
+          throw new HttpError(400, "Add some text to the message to send it while a reply is running. Your message is still in the box.");
+        }
         // Validate image refs (empty list is fine — no images is fine too).
         const validated = images ? await validateRefs(id, images) : undefined;
-        await deps.chat(id, text, { ...parseRunOptions(body), planning: body.planning === true, images: validated, replyTo: replyToOf(body.replyTo) });
+        const options = parseRunOptions(body);
+        const replyTo = replyToOf(body.replyTo);
+        const queued = replyRunning ? await queueMessage(id, text, { ...options, planning: body.planning === true }, validated, replyTo) : null;
+        if (queued) {
+          extra = { queued: true, messageId: queued };
+        } else {
+          // (A reply that ended while the message was on its way is no reason to queue it.)
+          await deps.chat(id, text, { ...options, planning: body.planning === true, images: validated, replyTo });
+        }
       }
       break;
     }
+    case "queue-remove":
+      if (typeof body.id !== "string" || !body.id) throw new HttpError(400, "id must be given");
+      await unqueue(id, body.id);
+      break;
+    case "queue-clear":
+      await unqueue(id);
+      break;
+    case "queue-send":
+      await sendNext(id, deps.chat);
+      break;
     case "ask": {
       // A side question: answered beside the running plan, which never sees it.
       const text = body.text;

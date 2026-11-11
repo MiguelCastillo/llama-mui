@@ -14,6 +14,8 @@
 //    chat marked as not seen, so the text isn't lost;
 //  - `failed` says "interrupted" if a request was in flight, as a reload in the
 //    middle of a reply always has, so the chat shows the reply was cut off;
+//  - messages waiting in the session's queue are kept and the queue is paused
+//    (a session with a queue and no run record is paused too);
 //  - the record is removed, and the revision goes up like any server write;
 //  - for a thread, the note in its parent says it did not finish.
 //
@@ -48,7 +50,9 @@ export function markInterrupted(session: any, run: hub.RunState): any {
   const messages = [...closeOpenToolCalls(Array.isArray(session.messages) ? session.messages : []), ...unseen];
 
   const cutOff = run.kind === "turn" || run.streaming === true || wasRunning;
-  return { ...session, plan, messages, failed: cutOff ? INTERRUPTED : (session.failed ?? null) };
+  // Messages waiting in the queue are kept, and paused: nothing is sent by itself after a restart.
+  const waiting = Array.isArray(session.queue) && session.queue.length > 0;
+  return { ...session, plan, messages, failed: cutOff ? INTERRUPTED : (session.failed ?? null), ...(waiting ? { queuePaused: true } : {}) };
 }
 
 // Settles every session with a stale run record. Resolves with the ids it
@@ -65,7 +69,11 @@ export async function recoverInterruptedRuns(): Promise<string[]> {
         kind = run.kind;
         return (after = markInterrupted(session, run));
       });
-      if (!changed) continue;
+      if (!changed) {
+        // No run to settle, but a queue that was left waiting stays paused.
+        await hub.pauseQueue(id);
+        continue;
+      }
       settled.push(id);
       // A reply in a thread isn't the thread's plan: only a plan run is reported.
       if (kind !== "turn") await reportInterrupted(id, after);

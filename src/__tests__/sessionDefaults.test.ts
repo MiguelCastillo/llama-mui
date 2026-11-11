@@ -96,6 +96,60 @@ describe("withSessionDefaults", () => {
     expect(s.planMovedIn).toBe(true);
   });
 
+  describe("queue", () => {
+    const item = (n: number, extra: object = {}) => ({
+      id: `q${n}`,
+      text: `message ${n}`,
+      options: { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: true },
+      images: [{ id: "i1", mediaType: "image/png" }],
+      replyTo: "an earlier answer",
+      queuedAt: 100 + n,
+      ...extra,
+    });
+    const load = (extra: object) => withSessionDefaults({ id: "x", title: "t", model: "m", ...extra } as unknown as Session);
+
+    it("gives an old session an empty queue that is not paused", () => {
+      const s = load({});
+      expect(s.queue).toEqual([]);
+      expect(s.queuePaused).toBe(false);
+    });
+
+    it("keeps a saved queue in order, with its options, images and reply, and the pause", () => {
+      const s = load({ queue: [item(1), item(2)], queuePaused: true });
+      expect(s.queue).toEqual([item(1), item(2)]);
+      expect(s.queuePaused).toBe(true);
+    });
+
+    it("reads a queue or pause of the wrong type as none", () => {
+      const s = load({ queue: "nope", queuePaused: "yes" });
+      expect(s.queue).toEqual([]);
+      expect(s.queuePaused).toBe(false);
+    });
+
+    it("drops an item with no id, blank text or no model, and keeps the rest", () => {
+      const s = load({
+        queue: [item(1, { id: "" }), item(2, { text: "   " }), item(3, { options: { toolsOn: true } }), null, 5, item(4)],
+      });
+      expect(s.queue?.map((q) => q.id)).toEqual(["q4"]);
+    });
+
+    it("keeps at most 10 items, the first ones", () => {
+      const s = load({ queue: Array.from({ length: 14 }, (_, i) => item(i + 1)) });
+      expect(s.queue).toHaveLength(10);
+      expect(s.queue?.map((q) => q.id)).toEqual(Array.from({ length: 10 }, (_, i) => `q${i + 1}`));
+    });
+
+    it("reads switches that are not true or false as off, and leaves out an empty image list and a missing connection", () => {
+      const s = load({ queue: [item(1, { options: { model: "m", toolsOn: "yes" }, images: [], replyTo: "" })] });
+      expect(s.queue?.[0]).toEqual({ id: "q1", text: "message 1", options: { model: "m", toolsOn: false, thinkOn: false }, queuedAt: 101 });
+    });
+
+    it("loading a loaded session again changes nothing", () => {
+      const once = load({ queue: [item(1), item(2)], queuePaused: true });
+      expect(withSessionDefaults(once)).toEqual(once);
+    });
+  });
+
   it("closes a tool call that never got a result when a session loads", () => {
     const raw = {
       id: "x",

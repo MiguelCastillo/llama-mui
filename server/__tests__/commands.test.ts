@@ -516,6 +516,210 @@ describe("message with no run: one chat reply, run here", () => {
   });
 });
 
+describe("message while a chat reply streams: it waits in the session's queue", () => {
+  const chatOptions = { ...options, planning: false };
+  let release: (ok: boolean) => void = () => {};
+
+  // A reply that streams until the test lets it finish (or Stop aborts it).
+  const blockingReply = (h: any) => {
+    handles.set(h.sessionId, h);
+    return async (_text: string, before: any[]) => {
+      const controller = new AbortController();
+      h.setAbort(controller);
+      try {
+        const ok = await new Promise<boolean>((resolve) => {
+          release = resolve;
+          controller.signal.addEventListener("abort", () => resolve(false));
+        });
+        return { ok, messages: before };
+      } finally {
+        h.setAbort(null);
+      }
+    };
+  };
+  async function startReply(id = "a") {
+    putFile(id, { ...makeSession(id, 0), plan: null, messages: [], revision: 1 });
+    const turn = await runners.startTurn(id, env, { text: "first", planning: false }, { reply: blockingReply, save: (s) => hub.save(s.id, s) });
+    await vi.waitFor(() => expect(hub.liveRun(id)).toMatchObject({ kind: "turn", streaming: true }));
+    return turn;
+  }
+  const queueOf = (id = "a") => (fileOf(id).queue ?? []) as any[];
+
+  it("queues it with the choices it was typed with, and starts no second reply", async () => {
+    const turn = await startReply();
+    const chat = vi.fn(async () => {});
+    const r = await command("a", "message", { ...chatOptions, text: "and then?", planning: true, replyTo: "Use a map." }, "POST", { ...deps, chat });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ ok: true, revision: fileOf("a").revision, queued: true, messageId: expect.any(String) });
+    expect(chat).not.toHaveBeenCalled();
+    expect(queueOf()).toEqual([
+      {
+        id: r.body.messageId,
+        text: "and then?",
+        options: { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: true },
+        replyTo: "Use a map.",
+        queuedAt: expect.any(Number),
+      },
+    ]);
+    // The reply is untouched.
+    expect(hub.liveRun("a")).toMatchObject({ kind: "turn", status: "running", streaming: true });
+    release(true);
+    await turn.done;
+  });
+
+  it("keeps the order, and the image refs", async () => {
+    const { save: saveImage } = await import("../images.ts");
+    const img = await saveImage("a", Buffer.from([0x89, 0x50]), "image/png");
+    const turn = await startReply();
+    const one = await command("a", "message", { ...chatOptions, text: "one" });
+    const two = await command("a", "message", { ...chatOptions, text: "two", images: [{ id: img.id, mediaType: img.mediaType }] });
+    expect([one.status, two.status]).toEqual([200, 200]);
+    expect(one.body.messageId).not.toBe(two.body.messageId);
+    expect(queueOf().map((m) => m.text)).toEqual(["one", "two"]);
+    expect(queueOf()[0].images).toBeUndefined();
+    expect(queueOf()[1].images).toEqual([{ id: img.id, mediaType: img.mediaType }]);
+    release(true);
+    await turn.done;
+  });
+
+  it("refuses the eleventh with a plain 409 and keeps the ten", async () => {
+    const turn = await startReply();
+    for (let n = 1; n <= 10; n++) expect((await command("a", "message", { ...chatOptions, text: `m${n}` })).status).toBe(200);
+    const r = await command("a", "message", { ...chatOptions, text: "m11" });
+    expect(r).toMatchObject({ status: 409, body: { reason: "queue full" } });
+    expect(r.body.error).toMatch(/10 messages are already waiting/);
+    expect(queueOf().map((m) => m.text)).toEqual(Array.from({ length: 10 }, (_, n) => `m${n + 1}`));
+    release(true);
+    await turn.done;
+  });
+
+  it("asks for some text, queues nothing, and checks the choices like any message", async () => {
+    const turn = await startReply();
+    expect(await command("a", "message", { ...chatOptions, text: "   " })).toMatchObject({ status: 400 });
+    expect((await command("a", "message", { text: "hi" })).body.error).toMatch(/connectorId must be given/);
+    expect((await command("a", "message", { ...chatOptions, text: "hi", planning: "yes" })).status).toBe(400);
+    expect(queueOf()).toEqual([]);
+    release(true);
+    await turn.done;
+  });
+
+  it("is a normal reply again once the reply has ended", async () => {
+    const turn = await startReply();
+    release(true);
+    await turn.done;
+    const chat = vi.fn(async () => {});
+    const r = await command("a", "message", { ...chatOptions, text: "next" }, "POST", { ...deps, chat });
+    expect(r.body).toEqual({ ok: true, revision: fileOf("a").revision });
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(queueOf()).toEqual([]);
+  });
+});
+
+describe("queue-remove, queue-clear and queue-send", () => {
+  const item = (n: number, extra: object = {}) => ({
+    id: `q${n}`,
+    text: `m${n}`,
+    options: { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: false },
+    queuedAt: n,
+    ...extra,
+  });
+  const queued = (items: any[], paused = false) =>
+    putFile("a", { ...makeSession("a", 0), plan: null, messages: [], revision: 1, queue: items, queuePaused: paused });
+  const queueOf = () => (fileOf("a").queue ?? []) as any[];
+  let release: (ok: boolean) => void = () => {};
+  const blockingReply = (h: any) => {
+    handles.set(h.sessionId, h);
+    return async (_text: string, before: any[]) => {
+      const ok = await new Promise<boolean>((resolve) => (release = resolve));
+      return { ok, messages: before };
+    };
+  };
+
+  it("queue-remove takes out only that message, in order, and answers the revision", async () => {
+    queued([item(1), item(2), item(3)], true);
+    const r = await command("a", "queue-remove", { id: "q2" });
+    expect(r).toMatchObject({ status: 200, body: { ok: true, revision: fileOf("a").revision } });
+    expect(queueOf().map((m) => m.id)).toEqual(["q1", "q3"]);
+    // Still paused: there are messages left.
+    expect(fileOf("a").queuePaused).toBe(true);
+  });
+
+  it("queue-remove of the last message clears the pause", async () => {
+    queued([item(1)], true);
+    expect((await command("a", "queue-remove", { id: "q1" })).status).toBe(200);
+    expect(queueOf()).toEqual([]);
+    expect(fileOf("a").queuePaused).toBe(false);
+  });
+
+  it("queue-remove of a message that is gone is a 409 'not queued'; no id is a 400", async () => {
+    queued([item(1)]);
+    expect(await command("a", "queue-remove", { id: "nope" })).toMatchObject({ status: 409, body: { reason: "not queued" } });
+    expect((await command("a", "queue-remove", {})).status).toBe(400);
+    expect(queueOf().map((m) => m.id)).toEqual(["q1"]);
+  });
+
+  it("queue-clear empties the queue and clears the pause", async () => {
+    queued([item(1), item(2)], true);
+    const r = await command("a", "queue-clear");
+    expect(r).toMatchObject({ status: 200, body: { ok: true, revision: fileOf("a").revision } });
+    expect(queueOf()).toEqual([]);
+    expect(fileOf("a").queuePaused).toBe(false);
+  });
+
+  it("queue-clear on an empty queue is fine", async () => {
+    queued([]);
+    expect((await command("a", "queue-clear")).status).toBe(200);
+  });
+
+  it("queue-send starts the first message with its saved choices, un-pauses, and leaves the rest", async () => {
+    queued([item(1, { replyTo: "Use a map.", images: [{ id: "i1", mediaType: "image/png" }], options: { ...item(1).options, planning: true } }), item(2)], true);
+    const chat = vi.fn(async () => {});
+    const r = await command("a", "queue-send", {}, "POST", { ...deps, chat });
+    expect(r).toMatchObject({ status: 200, body: { ok: true, revision: fileOf("a").revision } });
+    expect(chat).toHaveBeenCalledWith("a", "m1", {
+      connectorId: "c",
+      model: "m",
+      toolsOn: true,
+      thinkOn: false,
+      planning: true,
+      images: [{ id: "i1", mediaType: "image/png" }],
+      replyTo: "Use a map.",
+    });
+    expect(queueOf().map((m) => m.id)).toEqual(["q2"]);
+    expect(fileOf("a").queuePaused).toBe(false);
+  });
+
+  it("queue-send with nothing waiting is a 409 'nothing to run'", async () => {
+    queued([], true);
+    const chat = vi.fn(async () => {});
+    expect(await command("a", "queue-send", {}, "POST", { ...deps, chat })).toMatchObject({ status: 409, body: { reason: "nothing to run" } });
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("queue-send while a reply runs is a 409 'reply running' and changes nothing", async () => {
+    queued([item(1)], false);
+    const turn = await runners.startTurn("a", env, { text: "first", planning: false }, { reply: blockingReply, save: (s) => hub.save(s.id, s) });
+    await vi.waitFor(() => expect(hub.liveRun("a")).toMatchObject({ kind: "turn" }));
+    const chat = vi.fn(async () => {});
+    expect(await command("a", "queue-send", {}, "POST", { ...deps, chat })).toMatchObject({ status: 409, body: { reason: "reply running" } });
+    expect(chat).not.toHaveBeenCalled();
+    expect(queueOf().map((m) => m.id)).toEqual(["q1"]);
+    release(false);
+    await turn.done;
+  });
+
+  it("queue-send puts the message back at the front, with the pause as it was, if the reply can't start", async () => {
+    queued([item(1), item(2)], true);
+    const chat = vi.fn(async () => {
+      throw new HttpError(409, "That server isn't in the list any more.", { reason: "no connector" });
+    });
+    const r = await command("a", "queue-send", {}, "POST", { ...deps, chat });
+    expect(r).toMatchObject({ status: 409, body: { reason: "no connector" } });
+    expect(queueOf().map((m) => m.id)).toEqual(["q1", "q2"]);
+    expect(fileOf("a").queuePaused).toBe(true);
+  });
+});
+
 describe("the route", () => {
   it("ignores paths that aren't commands", async () => {
     const req = Readable.from([]) as unknown as IncomingMessage;

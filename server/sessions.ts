@@ -13,7 +13,7 @@ import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
 import { descendantIds } from "../src/sessionTree.ts";
 import { worktreeStatuses } from "./worktreeStatus.ts";
-import { convertWorkingDir, deleteSession, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
+import { convertWorkingDir, deleteSession, queueFieldsOf, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
 
 // Other modules (and tests) have always got these from here.
 export { openTodoList, sessionFolder, summaryOf } from "./sessionFile.ts";
@@ -53,7 +53,9 @@ let migration: Promise<void> | undefined;
 //   GET /<id>/worktrees → [{ name, branch, uncommitted, unmerged, base }], one per
 //                  worktree the session created (its create_worktree calls), read from git (see worktreeStatus.ts)
 //   PUT /<id>    → saves it; the server sets createdAt, updatedAt and revision;
-//                  answers with its summary plus the new `revision`. Send the
+//                  answers with its summary plus the new `revision`. The queue of
+//                  messages sent during a reply (`queue`, `queuePaused`) is the
+//                  server's: a save keeps what the file has and ignores the body's. Send the
 //                  `revision` the page loaded: if the file has moved on it answers
 //                  409 { error, revision } and saves nothing. While a plan runs in
 //                  the session, every PUT is a 409 (the run owns the session).
@@ -113,9 +115,13 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
         const group = old ? (old.group ?? null) : (body.group ?? null); // a PATCH's too
         const title = String(userName ?? modelName ?? body.title ?? "New session").slice(0, 100);
         // The chat's connection is kept when it is text and dropped otherwise.
-        const { connectorId, ...rest } = body;
+        const { connectorId, queue: _queue, queuePaused: _paused, ...rest } = body;
         const connection = typeof connectorId === "string" && connectorId ? { connectorId } : {};
-        return { ...rest, ...connection, id, title, modelName, userName, group, createdAt: old?.createdAt ?? now, updatedAt: now };
+        // The queue is the server's, like the names: a save from a copy made
+        // before a message was queued or sent must not bring it back or lose it.
+        // A new session has none, whatever the body says.
+        const queue = queueFieldsOf(old);
+        return { ...rest, ...connection, id, title, modelName, userName, group, ...queue, createdAt: old?.createdAt ?? now, updatedAt: now };
       },
       sent,
     );

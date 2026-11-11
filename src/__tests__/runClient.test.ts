@@ -7,6 +7,9 @@ import {
   dismiss,
   getView,
   needsYou,
+  queueClear,
+  queueRemove,
+  queueSend,
   resetRunClient,
   sendChat,
   sendMessage,
@@ -481,6 +484,22 @@ describe("messages to the run", () => {
     expect(getView("a")).toMatchObject({ kind: "turn", status: "running" });
   });
 
+  it("sendChat answers at once when the server queued the message behind a running reply", async () => {
+    serve(() => ({ body: { ok: true, revision: 9, queued: true, messageId: "q1" } }));
+    const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, planning: false, images: [{ id: "img-1", mediaType: "image/png" }], replyTo: "Use a map." };
+    // No run starts, so there is no run event to wait for.
+    await expect(sendChat("a", "And then?", options)).resolves.toEqual({ queued: true });
+    expect(commands()).toEqual([{ method: "POST", path: "/api/sessions/a/commands/message", body: { text: "And then?", ...options } }]);
+    expect(getView("a")).toBeUndefined();
+  });
+
+  it("sendChat throws 'queue full' as the server's plain refusal, so the text stays in the box", async () => {
+    serve(() => ({ status: 409, body: { error: "10 messages are already waiting in this chat.", reason: "queue full" } }));
+    const refused = await sendChat("a", "One more", { connectorId: "c1", model: "m", toolsOn: false, thinkOn: false, planning: false }).catch((e) => e);
+    expect(refused).toBeInstanceOf(ApiError);
+    expect(refused.data.reason).toBe("queue full");
+  });
+
   it("sendChat sends the response being replied to as replyTo, and leaves it out otherwise", async () => {
     const options = { connectorId: "c1", model: "m", toolsOn: true, thinkOn: false, planning: false };
     void sendChat("a", "Why a map?", { ...options, replyTo: "Use a map." });
@@ -498,6 +517,38 @@ describe("messages to the run", () => {
     expect(refused.message).toMatch(/busy/);
     expect(refused.data.reason).toBe("already running");
     expect(getView("a")).toBeUndefined();
+  });
+
+  it("queueRemove and queueClear send their commands, and throw the server's refusal", async () => {
+    await queueRemove("a", "q1");
+    await queueClear("a");
+    expect(commands()).toEqual([
+      { method: "POST", path: "/api/sessions/a/commands/queue-remove", body: { id: "q1" } },
+      { method: "POST", path: "/api/sessions/a/commands/queue-clear", body: {} },
+    ]);
+    serve(() => ({ status: 409, body: { error: "That message is not waiting any more.", reason: "not queued" } }));
+    const gone: any = await queueRemove("a", "q1").catch((e) => e);
+    expect(gone).toBeInstanceOf(ApiError);
+    expect(gone.data.reason).toBe("not queued");
+  });
+
+  it("queueSend answers once the reply's run shows, and throws the server's refusal", async () => {
+    const p = queueSend("a");
+    let done = false;
+    void p.then(() => (done = true));
+    subscribeAll(() => {});
+    await vi.waitFor(() => expect(commands()).toHaveLength(1));
+    expect(commands()[0]).toEqual({ method: "POST", path: "/api/sessions/a/commands/queue-send", body: {} });
+    await flush();
+    expect(done).toBe(false);
+    global().emit("status", { id: "a", run: run({ kind: "turn" }) });
+    await p;
+    expect(getView("a")).toMatchObject({ kind: "turn", status: "running" });
+
+    serve(() => ({ status: 409, body: { error: "A reply is still being written.", reason: "reply running" } }));
+    const busy = await queueSend("b").catch((e) => e);
+    expect(busy).toBeInstanceOf(ApiError);
+    expect(busy.data.reason).toBe("reply running");
   });
 
   it("askAside sends the question as an ask command with the page's choices, and starts no run of its own", async () => {

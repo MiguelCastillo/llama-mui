@@ -166,7 +166,7 @@ describe("a chat reply run on the server", () => {
     expect(mine.some((e) => e.type === "step")).toBe(false);
   });
 
-  it("refuses a second message while the reply streams, and keeps nothing queued", async () => {
+  it("folds no note into a streaming reply, and starts no second reply (the message command queues instead)", async () => {
     save("a");
     const started = await turn("a");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -422,5 +422,183 @@ describe("a chat reply with images", () => {
     expect(prevSaved!.images).toEqual([{ id: imgId, mediaType: "image/png" }]);
     // No base64 data in the saved session.
     expect(JSON.stringify(done)).not.toContain("fake-png-bytes");
+  });
+});
+
+// Messages queued while a reply streams (the `message` command puts them in the
+// session's queue): what the end of a reply does with them.
+describe("the queue, when a reply ends", () => {
+  const item = (id: string, text: string, extra: object = {}) => ({
+    id,
+    text,
+    options: { connectorId: "c", model: "m", toolsOn: false, thinkOn: false, planning: false },
+    queuedAt: 1,
+    ...extra,
+  });
+  const saveQueue = (queue: any[], paused?: boolean) =>
+    putFile("a", { ...makeSession("a", 0), plan: null, messages: hello, revision: 4, queue, ...(paused === undefined ? {} : { queuePaused: paused }) });
+
+  // Sends a queued message the way runStart's does: as a reply that can itself hand on to the next.
+  const sent: string[] = [];
+  const sendNext = async (id: string, queued: { text: string }) => {
+    sent.push(queued.text);
+    await runners.startTurn(id, env, { text: queued.text, planning: false }, { reply: fakeReply, save: (s) => hub.save(s.id, s), next: sendNext });
+  };
+  const first = (text = "first", next: NonNullable<Parameters<typeof runners.startTurn>[3]>["next"] = sendNext) =>
+    runners.startTurn("a", env, { text, planning: false }, { reply: fakeReply, save: (s) => hub.save(s.id, s), next });
+
+  beforeEach(() => {
+    sent.length = 0;
+  });
+
+  it("sends the next queued message when a reply ends normally, one per ended reply, in order", async () => {
+    saveQueue([item("q1", "second"), item("q2", "third")]);
+    const started = await first();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    release(true);
+    await started.done;
+    // Exactly one started, and it left the queue.
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1].text).toBe("second");
+    expect(sent).toEqual(["second"]);
+    expect(fileOf("a").queue.map((m: any) => m.id)).toEqual(["q2"]);
+    expect(fileOf("a").queuePaused).toBeFalsy();
+
+    release(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    expect(calls[2].text).toBe("third");
+    expect(fileOf("a").queue).toEqual([]);
+    release(true);
+    await vi.waitFor(() => expect(runners.isRunning("a")).toBe(false));
+    expect(calls).toHaveLength(3);
+    expect(sent).toEqual(["second", "third"]);
+  });
+
+  it("sends the item with the options saved on it", async () => {
+    const images = [{ id: "i1", mediaType: "image/png" }];
+    const queued = item("q1", "look", { images, replyTo: "that answer", options: { connectorId: "other", model: "big", toolsOn: true, thinkOn: true, planning: true } });
+    saveQueue([queued]);
+    const next = vi.fn(async () => {});
+    const started = await first("first", next);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    release(true);
+    await started.done;
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledWith("a", queued);
+  });
+
+  it("pauses the queue instead when the reply was stopped", async () => {
+    saveQueue([item("q1", "second")]);
+    const next = vi.fn(async () => {});
+    const started = await first("first", next);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await runners.stopRun("a");
+    await started.done;
+    expect(next).not.toHaveBeenCalled();
+    expect(fileOf("a").queue.map((m: any) => m.id)).toEqual(["q1"]);
+    expect(fileOf("a").queuePaused).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("pauses the queue instead when the reply failed", async () => {
+    saveQueue([item("q1", "second")]);
+    during = async () => {
+      throw new Error("The model server went away");
+    };
+    const next = vi.fn(async () => {});
+    const started = await first("first", next);
+    await started.done;
+    expect(next).not.toHaveBeenCalled();
+    expect(fileOf("a").queue.map((m: any) => m.id)).toEqual(["q1"]);
+    expect(fileOf("a").queuePaused).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does nothing when the queue is empty, or has nothing in it to pause", async () => {
+    saveQueue([]);
+    const next = vi.fn(async () => {});
+    const started = await first("first", next);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    release(true);
+    await started.done;
+    expect(next).not.toHaveBeenCalled();
+    expect(fileOf("a").queue).toEqual([]);
+    expect(fileOf("a").queuePaused).toBeFalsy();
+  });
+
+  it("does nothing for a session that has no queue at all", async () => {
+    save("a");
+    const started = await first();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    release(true);
+    await started.done;
+    expect(sent).toEqual([]);
+    expect(fileOf("a").queue).toBeUndefined();
+    expect(fileOf("a").queuePaused).toBeUndefined();
+  });
+
+  it("sends nothing from a queue that is already paused", async () => {
+    saveQueue([item("q1", "second")], true);
+    const next = vi.fn(async () => {});
+    const started = await first("first", next);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    release(true);
+    await started.done;
+    expect(next).not.toHaveBeenCalled();
+    expect(fileOf("a").queue).toHaveLength(1);
+    expect(fileOf("a").queuePaused).toBe(true);
+  });
+
+  it("pauses a queue that has nothing to send it with", async () => {
+    saveQueue([item("q1", "second")]);
+    const started = await runners.startTurn("a", env, { text: "first", planning: false }, { reply: fakeReply, save: (s) => hub.save(s.id, s) });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    release(true);
+    await started.done;
+    expect(fileOf("a").queue).toHaveLength(1);
+    expect(fileOf("a").queuePaused).toBe(true);
+  });
+
+  it("puts a message back at the front and pauses, saying why, when it can't be started", async () => {
+    saveQueue([item("q1", "second"), item("q2", "third")]);
+    const next = vi.fn(async () => {
+      throw new Error("The server isn't in your list.");
+    });
+    const started = await first("first", next);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    release(true);
+    await started.done;
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(fileOf("a").queue.map((m: any) => m.id)).toEqual(["q1", "q2"]);
+    expect(fileOf("a").queuePaused).toBe(true);
+    const last = events.filter((e) => e.id === "a" && e.type === "status").at(-1)!;
+    expect(last.data.run).toBeNull();
+    expect(last.data.error).toMatch(/queue is paused.*isn't in your list/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("puts the message back without pausing when another reply began in the gap", async () => {
+    saveQueue([item("q1", "second")]);
+    const next = vi.fn(async (id: string) => {
+      // A message sent just then began a reply of its own.
+      await runners.startTurn(id, env, { text: "squeezed in", planning: false }, { reply: fakeReply, save: (s) => hub.save(s.id, s), next: sendNext });
+      await runners.startTurn(id, env, { text: "second", planning: false }, { reply: fakeReply, save: (s) => hub.save(s.id, s) });
+    });
+    const started = await first("first", next);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    release(true);
+    await started.done;
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1].text).toBe("squeezed in");
+    expect(hub.liveRun("a")).not.toBeNull();
+    expect(fileOf("a").queuePaused).toBeFalsy();
+    expect(fileOf("a").queue.map((m: any) => m.id)).toEqual(["q1"]);
+    // That reply's own end sends the message that was put back.
+    release(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    expect(calls[2].text).toBe("second");
+    expect(fileOf("a").queue).toEqual([]);
+    release(true);
+    await vi.waitFor(() => expect(runners.isRunning("a")).toBe(false));
   });
 });

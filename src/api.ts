@@ -688,6 +688,35 @@ export interface Session {
   // The server's record of a plan running in this session now. Read only: a
   // save never sends it. Missing when nothing runs.
   run?: { status: string; startedAt: number };
+  // Messages sent while a reply was running, waiting to be sent in order (at
+  // most MAX_QUEUE). The server owns them, like the names: a save never changes
+  // them, and a nested session starts with none. Older saved chats don't have it.
+  queue?: QueuedMessage[];
+  // The queue is waiting for the user: the reply before it was stopped or failed,
+  // or the server restarted. Nothing in it is sent until Send next or Clear queue.
+  queuePaused?: boolean;
+}
+
+// The most messages one session's queue holds.
+export const MAX_QUEUE = 10;
+
+// A message waiting in a session's queue, with what it needs to be sent later
+// the way it was typed: the connection, model and switches the page had then.
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  options: {
+    connectorId?: string;
+    model: string;
+    toolsOn: boolean;
+    thinkOn: boolean;
+    planning?: boolean;
+  };
+  images?: ImageRef[];
+  // The message this one answers, if it was sent as a reply to one.
+  replyTo?: string;
+  // When it was queued (ms since 1970).
+  queuedAt: number;
 }
 
 // A plan that runs in its own nested session; see planThread.ts.
@@ -834,7 +863,7 @@ export const getWorktreeStatuses = (id: string) => call<WorktreeStatus[]>("GET",
 // which session the plan runs in (`sessionId`): the session itself, or the new
 // thread it moved to. `revision` is that session's.
 export const sendCommand = (id: string, name: string, body: Record<string, unknown> = {}) =>
-  call<{ ok: true; revision: number; sessionId?: string; step?: number; stepId?: string; messageId?: string }>("POST", `/api/sessions/${id}/commands/${name}`, body);
+  call<{ ok: true; revision: number; sessionId?: string; step?: number; stepId?: string; messageId?: string; queued?: boolean }>("POST", `/api/sessions/${id}/commands/${name}`, body);
 
 // The server wrote this session once (not a save from this page): `revision` is
 // the new count. If it is the next one after what this page knew, nothing else

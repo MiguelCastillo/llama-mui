@@ -5,6 +5,7 @@ import type {
   PastPlan,
   PlanStep,
   PlanThread,
+  QueuedMessage,
   Todo,
   Usage,
 } from "./api.ts";
@@ -57,6 +58,11 @@ export interface SessionState {
   planMovedIn: boolean;
   // What is approved for the rest of the session without asking.
   autoApprove: AutoApprove;
+  // Messages sent during a reply, waiting to be sent in order, and whether the
+  // queue is waiting for the user (see Session). The server owns both: they are
+  // held here so the chat shows them, and a save that carries them changes nothing.
+  queue: QueuedMessage[];
+  queuePaused: boolean;
 }
 
 // A new chat: nothing said, nothing planned.
@@ -83,6 +89,8 @@ export function emptySessionState(): SessionState {
     titleHint: null,
     planMovedIn: false,
     autoApprove: {},
+    queue: [],
+    queuePaused: false,
   };
 }
 
@@ -162,5 +170,7 @@ export function fromSession(
     titleHint: s.titleHint ?? null,
     planMovedIn: s.planMovedIn ?? false,
     autoApprove: s.autoApprove ?? {},
+    queue: s.queue ?? [],
+    queuePaused: s.queuePaused ?? false,
   };
 }

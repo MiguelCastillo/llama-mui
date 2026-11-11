@@ -7,6 +7,8 @@ import path from "node:path";
 import { sessionsDir } from "./disk.ts";
 import { withFileLock } from "./fileLock.ts";
 import { HttpError } from "./http.ts";
+import type { QueuedMessage } from "../src/api.ts";
+import { readQueue } from "../src/queue.ts";
 
 // Ids come from the browser and become folder names, so only plain ones pass.
 export function sessionFolder(id: string): string {
@@ -34,9 +36,28 @@ export function convertWorkingDir(session: any): any {
   return { ...session, workingDir: attachments[i].path, attachments: attachments.filter((_, j) => j !== i) };
 }
 
+// The queue fields a session file holds, read as a valid queue (see readQueue):
+// a list of at most MAX_QUEUE messages with an id, text and options, and a
+// pause that is true or false. A file that has neither field gets neither, so
+// a session that never queued anything is saved as before. Pure.
+export function queueFieldsOf(session: any): { queue?: QueuedMessage[]; queuePaused?: boolean } {
+  if (!session || typeof session !== "object") return {};
+  const out: { queue?: QueuedMessage[]; queuePaused?: boolean } = {};
+  if ("queue" in session) out.queue = readQueue(session.queue);
+  if ("queuePaused" in session) out.queuePaused = session.queuePaused === true;
+  return out;
+}
+
+// The session with its queue fields cleaned up, so a hand-edited or shared
+// file can't hand the server a bad queue to send. Anything else is untouched.
+export function convertQueue(session: any): any {
+  const fields = queueFieldsOf(session);
+  return Object.keys(fields).length ? { ...session, ...fields } : session;
+}
+
 export async function readSession(id: string): Promise<any | null> {
   try {
-    return convertWorkingDir(JSON.parse(await readFile(sessionFile(id), "utf8")));
+    return convertQueue(convertWorkingDir(JSON.parse(await readFile(sessionFile(id), "utf8"))));
   } catch (e: any) {
     if (e.code === "ENOENT") return null;
     throw e;

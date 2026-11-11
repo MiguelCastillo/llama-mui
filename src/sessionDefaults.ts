@@ -1,6 +1,7 @@
 import type { Session } from "./api.ts";
 import { readTodos } from "./agent/todos.ts";
 import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
+import { readQueue } from "./queue.ts";
 
 // A session as chat opens it, with a default for every field it reads: shared
 // or imported session.json files may lack some, and chat showed a blank page.
@@ -25,5 +26,8 @@ export function withSessionDefaults(s: Session): Session {
     threads: Array.isArray(s.threads) ? s.threads : [],
     titleHint: typeof s.titleHint === "string" ? s.titleHint : null,
     planMovedIn: s.planMovedIn === true,
+    // The server's queue of messages sent during a reply (see readQueue).
+    queue: readQueue(s.queue),
+    queuePaused: s.queuePaused === true,
   };
 }

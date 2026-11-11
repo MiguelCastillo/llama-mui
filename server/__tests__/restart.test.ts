@@ -100,7 +100,39 @@ describe("markInterrupted", () => {
   });
 });
 
+describe("markInterrupted and the queue", () => {
+  const queued = [{ id: "q1", text: "next", options: { model: "m", toolsOn: false, thinkOn: false }, queuedAt: 1 }];
+
+  it("keeps the queue and pauses it", () => {
+    const out = markInterrupted({ messages: [], queue: queued }, { status: "running", startedAt: 1, kind: "turn" });
+    expect(out.queue).toEqual(queued);
+    expect(out.queuePaused).toBe(true);
+  });
+
+  it("adds no pause to a session with an empty queue or none", () => {
+    expect(markInterrupted({ messages: [], queue: [] }, { status: "running", startedAt: 1, kind: "turn" })).not.toHaveProperty("queuePaused");
+    expect(markInterrupted({ messages: [] }, { status: "running", startedAt: 1, kind: "turn" })).not.toHaveProperty("queuePaused");
+  });
+});
+
 describe("recoverInterruptedRuns", () => {
+  it("leaves a waiting queue paused, after a run that was cut off and with no run record", async () => {
+    const queue = [{ id: "q1", text: "next", options: { model: "m", toolsOn: false, thinkOn: false }, queuedAt: 1 }];
+    await put("cut", { plan: null, messages: [], revision: 3, run: { status: "running", startedAt: 1, kind: "turn", streaming: true }, queue });
+    await put("idle", { plan: null, messages: [], revision: 3, queue });
+    await put("done", { plan: null, messages: [], revision: 3, queue: [], queuePaused: false });
+    const doneBefore = await readFile(file("done"), "utf8");
+    await recoverInterruptedRuns();
+    const cut = await get("cut");
+    expect(cut).toMatchObject({ queue, queuePaused: true });
+    expect(cut.run).toBeUndefined();
+    expect(await get("idle")).toMatchObject({ queue, queuePaused: true, revision: 4 });
+    // An empty queue, and one already paused, are not written again.
+    expect(await readFile(file("done"), "utf8")).toBe(doneBefore);
+    await recoverInterruptedRuns();
+    expect((await get("idle")).revision).toBe(4);
+  });
+
   it("settles a session whose saved run was active, and removes the record", async () => {
     await put("a", {
       plan: [step("s1", "done"), step("s2", "running"), step("s3", "pending")],

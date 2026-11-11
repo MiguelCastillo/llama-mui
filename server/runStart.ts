@@ -136,7 +136,26 @@ export async function startTurnFromOptions(
   const disk = await readSession(id);
   if (!disk) throw new HttpError(404, "No such session");
   const env = await buildEnv(disk, options);
-  await startTurn(id, env, { text, planning: options.planning, images: options.images, replyTo: options.replyTo }, deps);
+  // When this reply ends normally, the next message in the session's queue is
+  // sent the same way, with the choices it was queued with.
+  const next =
+    deps.next ??
+    ((nextId, item) =>
+      startTurnFromOptions(
+        nextId,
+        item.text,
+        {
+          connectorId: item.options.connectorId ?? "",
+          model: item.options.model,
+          toolsOn: item.options.toolsOn,
+          thinkOn: item.options.thinkOn,
+          planning: item.options.planning === true,
+          images: item.images,
+          replyTo: item.replyTo,
+        },
+        deps,
+      ));
+  await startTurn(id, env, { text, planning: options.planning, images: options.images, replyTo: options.replyTo }, { ...deps, next });
 }
 
 // Starts a side question in a session whose plan is running: the `ask`

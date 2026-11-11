@@ -4,8 +4,8 @@
 // - Typing redraws only what reads it: the box itself, and the Edit buttons on
 //   screen, which follow only whether it is empty. The chat and its messages
 //   aren't drawn again (in a long chat that took ~100 ms a keystroke).
-// - The chat puts text in the box (Edit, the up arrow, a suggestion) by
-//   writing it here; the box focuses itself when that happens.
+// - The chat puts text in the box (Edit, the up arrow, a queued message taken
+//   back) by writing it here; the box focuses itself when that happens.
 // - Every change of the text is kept as the chat's draft (drafts.ts), so a
 //   refresh brings it back, whoever made the change.
 

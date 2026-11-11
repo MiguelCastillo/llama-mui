@@ -291,6 +291,71 @@ describe("replacing a chat's working directory", () => {
   });
 });
 
+describe("a session's queue of messages sent during a reply", () => {
+  const item = (n: number, extra: object = {}) => ({
+    id: `q${n}`,
+    text: `message ${n}`,
+    options: { connectorId: "c", model: "m", toolsOn: true, thinkOn: false, planning: false },
+    images: [{ id: "i1", mediaType: "image/png" }],
+    queuedAt: 100 + n,
+    ...extra,
+  });
+  // The server is the only writer of a queue, so a test puts one in the file.
+  const withQueue = async (id: string, extra: object) => {
+    await call("PUT", [id], saved(id));
+    const onDisk = JSON.parse(await readFile(sessionFile(id), "utf8"));
+    await writeFile(sessionFile(id), JSON.stringify({ ...onDisk, ...extra }));
+  };
+  const onDisk = async (id: string) => JSON.parse(await readFile(sessionFile(id), "utf8"));
+
+  it("is read back as saved, in order, with its pause", async () => {
+    await withQueue("q-round", { queue: [item(1), item(2)], queuePaused: true });
+    const { body } = await call("GET", ["q-round"]);
+    expect(body.queue).toEqual([item(1), item(2)]);
+    expect(body.queuePaused).toBe(true);
+  });
+
+  it("is left out of a session that never had one", async () => {
+    await call("PUT", ["q-none"], saved("q-none"));
+    const { body } = await call("GET", ["q-none"]);
+    expect("queue" in body).toBe(false);
+    expect("queuePaused" in body).toBe(false);
+    expect("queue" in (await onDisk("q-none"))).toBe(false);
+  });
+
+  it("is kept at 10 messages when a file holds more, and a bad item is dropped", async () => {
+    await withQueue("q-cap", { queue: Array.from({ length: 13 }, (_, i) => item(i + 1)) });
+    expect((await call("GET", ["q-cap"])).body.queue.map((q: any) => q.id)).toEqual(Array.from({ length: 10 }, (_, i) => `q${i + 1}`));
+    await withQueue("q-bad", { queue: [item(1, { text: "  " }), item(2, { id: "" }), item(3)], queuePaused: "yes" });
+    const { body } = await call("GET", ["q-bad"]);
+    expect(body.queue.map((q: any) => q.id)).toEqual(["q3"]);
+    expect(body.queuePaused).toBe(false);
+  });
+
+  it("is kept through a save from a page that never knew it, and a save can't change it", async () => {
+    await withQueue("q-save", { queue: [item(1)], queuePaused: true });
+    // A page that loaded the chat before anything was queued saves without it.
+    expect((await call("PUT", ["q-save"], saved("q-save"))).status).toBe(200);
+    expect(await onDisk("q-save")).toMatchObject({ queue: [item(1)], queuePaused: true });
+    // A body with another queue, or a pause, is ignored.
+    await call("PUT", ["q-save"], saved("q-save", { queue: [item(7), item(8)], queuePaused: false }));
+    expect(await onDisk("q-save")).toMatchObject({ queue: [item(1)], queuePaused: true });
+  });
+
+  it("is kept through a rename", async () => {
+    await withQueue("q-name", { queue: [item(1)] });
+    await call("PATCH", ["q-name"], { userName: "Renamed" });
+    expect((await call("GET", ["q-name"])).body.queue).toEqual([item(1)]);
+  });
+
+  it("a new session starts with none, whatever its first save says", async () => {
+    await call("PUT", ["q-new"], saved("q-new", { queue: [item(1)], queuePaused: true }));
+    const file = await onDisk("q-new");
+    expect("queue" in file).toBe(false);
+    expect("queuePaused" in file).toBe(false);
+  });
+});
+
 describe("the run record on GET", () => {
   it("shows a run that is live in this process, and hides a record a crash left in the file", async () => {
     const hub = await import("../runHub.ts");

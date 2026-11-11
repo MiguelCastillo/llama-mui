@@ -177,6 +177,17 @@ describe("nestedSessionFrom", () => {
     expect(attachments).toHaveLength(1);
   });
 
+  it("does not take the parent's queue, and starts with none, not paused", () => {
+    const busy = {
+      ...parent,
+      queue: [{ id: "q1", text: "later", options: { model: "m", toolsOn: false, thinkOn: false }, queuedAt: 1 }],
+      queuePaused: true,
+    };
+    const s = nestedSessionFrom(busy, "child");
+    expect(s.queue).toEqual([]);
+    expect(s.queuePaused).toBe(false);
+  });
+
   it("does not take the parent's messages, plan or todos", () => {
     const s = nestedSessionFrom(parent, "child");
     expect(s.messages).toEqual([]);

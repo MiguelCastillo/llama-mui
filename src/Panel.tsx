@@ -16,7 +16,7 @@ import { useTapReveal } from "./tapReveal";
 //   left-aligned and styled like the buttons in the approval prompts: the main
 //   answer is a filled button, the others are outlined.
 
-export type PanelVariant = "idea" | "action" | "actionDone" | "message" | "messageAside" | "reply" | "replyAside";
+export type PanelVariant = "idea" | "action" | "actionDone" | "message" | "messageAside" | "queued" | "reply" | "replyAside";
 
 export const PANEL_VARIANTS: Record<PanelVariant, SxProps<Theme>> = {
   // Standing out, but less than an action: an info-coloured bar and tint.
@@ -83,6 +83,17 @@ export const PANEL_VARIANTS: Record<PanelVariant, SxProps<Theme>> = {
     borderStyle: "dashed",
     bgcolor: (t) => alpha(t.palette.primary.main, 0.06),
     color: "text.primary",
+  },
+  // A message waiting for the running reply to end: the shape of a sent
+  // message but lighter (a fainter tint, dimmer text), so it reads as not sent yet.
+  queued: {
+    px: 2,
+    py: 1.5,
+    width: "100%",
+    maxWidth: "100%",
+    borderRadius: 1,
+    bgcolor: (t) => alpha(t.palette.primary.main, 0.05),
+    color: "text.secondary",
   },
   // The model's reply: it sits on the page, no border, fill or padding of its
   // own (its step rows run edge to edge, and each text block pads itself).

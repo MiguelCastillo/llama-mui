@@ -31,6 +31,10 @@
 // plan, on its own request, and its messages are kept apart from the plan's own
 // list (src/asides.ts) so a step's reply, which writes back the list it has,
 // can't drop them. The plan never sees them.
+// A message sent while a reply streams waits in the session's queue (the
+// `message` command puts it there). When the reply ends normally the first
+// queued message starts as a normal reply (see end); Stop or a failure pauses
+// the queue instead, and a paused queue sends nothing until a command says so.
 // When the run is over (for any reason) its entry is gone and the hub's run
 // record with it: the session is the page's again, and the page learns how it
 // ended from the `status` event (run null, and `error` if it went wrong).
@@ -42,7 +46,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type RunPlanCallbacks, runPlan } from "../src/agent/agent.ts";
-import type { ChatMessage, PlanStep, Session } from "../src/api.ts";
+import type { ChatMessage, PlanStep, QueuedMessage, Session } from "../src/api.ts";
 import { type AsideGroup, plainCount, splitAsides, weaveAsides, withoutAsides } from "../src/asides.ts";
 import { planRequestFor } from "../src/planThread.ts";
 import { attachedPaths, makeReply, modelLoaded } from "../src/runnerReply.ts";
@@ -67,7 +71,13 @@ export interface RunnerDeps {
   // Asks the model for the report a thread sends its parent when its run ends
   // (see threadReport.ts); one request to the run's own model by default.
   report?: AskReport;
+  // Starts a queued message as a normal chat reply once the reply before it has
+  // ended (see end). runStart's startTurnFromOptions passes one; with none the
+  // queue is only paused, never sent.
+  next?: (id: string, item: QueuedMessage) => Promise<void>;
 }
+
+type ResolvedDeps = Required<Omit<RunnerDeps, "next">> & Pick<RunnerDeps, "next">;
 
 // A save comes this long after the last change, and at the latest this long
 // after the first change since the previous save.
@@ -83,7 +93,7 @@ interface Entry {
   kind: "plan" | "turn";
   session: Session;
   env: RunnerEnv;
-  deps: Required<RunnerDeps>;
+  deps: ResolvedDeps;
   handle: RunnerHandle;
   // The pending ask: its id (what a command names), the ask itself, and the
   // way to resolve it. Only {id, kind, details} reaches the hub.
@@ -309,8 +319,9 @@ export async function sendNote(id: string, text: string): Promise<{ messageId: s
   const e = liveEntry(id);
   const clean = text.trim();
   if (!clean) throw new HttpError(400, "text must be given");
-  // A reply that is streaming takes no second message: the page asks again
-  // when it is over (or after Stop), as it always did.
+  // A reply that is streaming takes no note: only a plan folds messages in.
+  // (The `message` command puts a message sent during a reply in the session's
+  // queue and doesn't come here; this stays as a guard.)
   if (e.kind === "turn") {
     throw new HttpError(
       409,
@@ -485,8 +496,9 @@ async function launch(
   const plain = groups.length ? split!.plain : session.messages;
 
   const planRunning = { current: false };
-  const resolved: Required<RunnerDeps> & { readImage: typeof import("../server/images.ts").read } = {
+  const resolved: ResolvedDeps & { readImage: typeof import("../server/images.ts").read } = {
     run: deps.run ?? runPlan,
+    next: deps.next,
     save: deps.save ?? ((s) => hub.save(id, s)),
     reply: deps.reply ?? makeReply,
     modelLoaded: deps.modelLoaded ?? modelLoaded,
@@ -649,6 +661,9 @@ async function end(e: Entry) {
     await e.aside.done.catch(() => {});
   }
   await e.chain; // the run record is current before it goes
+  // From here to store.delete nothing waits, so a message that comes in to the
+  // queue (see commands.ts) is either in it now or is sent as a normal reply.
+  const next = e.kind === "turn" ? settleQueue(e) : null;
   e.ended = true;
   e.runningStep = null;
   e.controller = null;
@@ -659,6 +674,59 @@ async function end(e: Entry) {
     await hub.endRun(e.id, { error: e.error });
   } catch (err) {
     console.warn(`Couldn't finish the run of session ${e.id}: ${err}`);
+  }
+  // Only once the session is the hub's again can the next reply start.
+  if (next) await startQueued(e.id, next, e.deps.next);
+}
+
+// What a reply's end does to the session's queue, as part of its last save: a
+// reply that ended normally hands back the first queued message (removed from
+// the queue, to be sent), unless the queue is paused. One that was stopped or
+// failed (an error, or a reply that was cut off), or that has nothing to start
+// the next with, pauses a queue that has something in it instead. Nothing
+// happens to an empty queue. Called once per run (end runs once), so at most one
+// message starts per ended reply.
+function settleQueue(e: Entry): QueuedMessage | null {
+  const goOn = !e.stopRequested && !e.error && !e.session.failed && !!e.deps.next;
+  let next = null as QueuedMessage | null;
+  change(e, (s) => {
+    const queue = s.queue ?? [];
+    if (!queue.length) return s;
+    if (s.queuePaused) return s;
+    if (!goOn) return { ...s, queuePaused: true };
+    next = queue[0];
+    return { ...s, queue: queue.slice(1) };
+  });
+  return next;
+}
+
+// Starts a queued message that settleQueue took out, as a normal reply. If it
+// can't start, the message goes back to the front of the queue, so nothing the
+// user typed is lost, and the queue is paused with the reason shown as the
+// chat's error. The exception is a reply that began meanwhile (the user sent a
+// message in the gap): the queue is left as it is, and that reply's end sends it.
+async function startQueued(id: string, item: QueuedMessage, start: RunnerDeps["next"]) {
+  try {
+    if (!start) throw new Error("Nothing is set up to send it.");
+    await start(id, item);
+  } catch (err: any) {
+    const meanwhile = err instanceof HttpError && err.extra.reason === "already running";
+    try {
+      await hub.edit(id, (s) => {
+        const queue: QueuedMessage[] = Array.isArray(s.queue) ? s.queue : [];
+        if (!queue.some((m) => m.id === item.id)) s.queue = [item, ...queue];
+        if (!meanwhile) s.queuePaused = true;
+      });
+    } catch (editErr) {
+      console.warn(`Couldn't put a queued message back in session ${id}: ${editErr}`);
+    }
+    if (!meanwhile) {
+      hub.publish({
+        type: "status",
+        id,
+        data: { run: null, error: `The next queued message wasn't sent, and the queue is paused. ${err?.message ?? err}` },
+      });
+    }
   }
 }
 

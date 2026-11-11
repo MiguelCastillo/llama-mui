@@ -959,6 +959,44 @@ joins the chat and is put in that step's prompt, and in every step after it.
   thread's run sees it; the chat that started the thread gets just the outcome
   and the report when the run ends.
 
+### Sending while a reply is being written
+
+You can keep typing while the model answers. A message sent during an ordinary
+chat reply is not refused and is not lost: the box empties and the message goes
+into the chat's **queue**. Queued messages show under the running reply, in
+order, in a lighter style, with a line saying how many are waiting. This is a
+first version of the rules; they are meant to be tuned after trying them.
+
+- **Sent in order.** When a reply ends normally, the server sends the first
+  queued message as an ordinary reply, with the server, model, tools, Think
+  and planning choices it had when you sent it (and its pictures and quoted
+  text). Then the next one, and so on. This happens on the server, so it
+  carries on with the page closed.
+- **Pause on Stop or failure.** If you press **Stop**, or the reply fails, the
+  queue pauses and nothing more is sent. A quiet line under the queued messages
+  says why ("Paused because you stopped the reply" or "Paused because the reply
+  failed") and offers **Send next** (sends the first queued message now and
+  resumes the queue) and **Clear queue** (removes all of them and clears the
+  pause). Send next waits while a reply is running.
+- **Edit and Remove.** Each queued message has a hover toolbar. **Remove**
+  takes it out of the queue. **Edit** takes it out and puts its text and
+  pictures back in the message box, like Edit on a sent message, and only
+  while the box is empty.
+- **At most 10.** With 10 waiting, another message is refused with a plain
+  note and your text stays in the box.
+- **Kept with the chat.** The queue is saved in the chat itself, so a window
+  on another computer, or the same chat opened later, shows the same queue.
+  A copy of the chat made as a nested session doesn't take the queue along.
+  After a server restart a queue that was waiting is kept and **paused**:
+  nothing is sent by itself until you press **Send next** or **Clear queue**.
+- **Not changed.** While a *plan* runs, a message to the plan still joins the
+  run at the next step (above) and a side question is still answered
+  separately: the queue is for ordinary replies only.
+
+The commands behind it are `message` (answers `queued: true` when it was
+queued), `queue-remove`, `queue-clear` and `queue-send`, listed at the top of
+`server/commands.ts`.
+
 ### Side questions while a plan runs
 
 A running plan doesn't block the chat. While a plan runs, the message box has
@@ -1047,9 +1085,9 @@ in it or it is running a plan.
   an error if the reply failed. Reloading or closing the page doesn't cut it
   off; open the session and it is still streaming.
 - **Resend** on a failed reply cuts the failed reply off, saves the shorter
-  chat, then sends the message again. A reply being written takes no second
-  message: it is refused with "A reply is still streaming…" and the text stays
-  in the box. **Stop** works as before; a chat reply has no **Pause**, only Stop.
+  chat, then sends the message again. A message typed while a reply is being
+  written is not refused: it waits in the chat's queue (see below). **Stop**
+  works as before; a chat reply has no **Pause**, only Stop.
 - An error message about one session shows only in that session: open another
   session and it is gone, and it stays gone when you come back. Problems with
   the whole server, such as a server that can't be reached or a model that
@@ -1074,6 +1112,8 @@ was going (the `run` record in `session.json`), and settles each one, once:
 - The chat shows the last reply as cut off (the same as a reload in the middle
   of a reply), and a chat reply that was streaming shows as failed, with
   **Resend**.
+- Messages waiting in the chat's queue are kept and the queue is paused: none
+  is sent until you press **Send next** or **Clear queue**.
 - The run's record is removed and the revision goes up by one. If the session
   was a thread, the note in the chat that started it says **Not finished in a
   thread**, with "The server restarted while this was running, so it stopped
