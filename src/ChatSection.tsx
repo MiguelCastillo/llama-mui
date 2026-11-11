@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Alert, Box, CircularProgress, List, ListItem, ListItemText, Paper, Stack, Switch, Typography } from "@mui/material";
 import type { Preferences } from "./api";
 import { usePreferences } from "./usePreferences";
+import { setShowSteps, useShowSteps } from "./showSteps";
 
 // Display options for the chat screen. Add a row to OPTIONS for each new
 // boolean preference.
@@ -28,6 +29,7 @@ const OPTIONS: { key: keyof Preferences; label: string; summary: string }[] = [
 export default function ChatSection() {
   const [error, setError] = useState<string | null>(null);
   const [prefs, set] = usePreferences(setError);
+  const showSteps = useShowSteps();
 
   return (
     <Stack spacing={2}>
@@ -47,6 +49,25 @@ export default function ChatSection() {
       ) : (
         <Paper variant="outlined">
           <List disablePadding>
+            {/* Kept in this browser, not in the settings file, so the page knows it
+                before it draws a reply (see showSteps.ts). */}
+            <ListItem
+              divider
+              sx={{ pr: 10 }}
+              secondaryAction={
+                <Switch
+                  edge="end"
+                  checked={showSteps}
+                  onChange={(e) => setShowSteps(e.target.checked)}
+                  slotProps={{ input: { "aria-label": "Show steps" } }}
+                />
+              }
+            >
+              <ListItemText
+                primary="Show steps"
+                secondary="Show each round's steps (thinking and tool calls) as a line under its note, and a live line while a reply runs. Off shows only the notes and the answer. Saved in this browser, so each device has its own; off until you turn it on."
+              />
+            </ListItem>
             {OPTIONS.map((o, i) => (
               <ListItem
                 key={o.key}

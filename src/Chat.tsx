@@ -113,6 +113,7 @@ import {
   ApiError,
   MAX_REPLY_QUOTE,
 } from "./api";
+import { useShowSteps } from "./showSteps";
 import { connection, optionsFor } from "./connections/index";
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
 import { connectionForChat, pickModel } from "./modelChoice";
@@ -507,6 +508,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Clear context moves contextStart to the end: earlier messages stay on
   // screen but aren't sent any more.
   const [prefs, setPrefs] = useState<Preferences | null>(null);
+  // Kept in this browser, so it is known before the first draw (see showSteps.ts).
+  const showSteps = useShowSteps();
   // Expanded on a wide screen the first time; on a phone it starts folded, so
   // the chat is what you see (the model was most likely chosen already). What
   // you choose after that is kept (see setToolbarOpen). Read from the window
@@ -1813,6 +1816,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         renderMarkdown={prefs?.renderMarkdown ?? true}
         showModelName={prefs?.showModelName ?? false}
         reasoningIsSummary={connection(connector?.kind).reasoningIsSummary}
+        showSteps={showSteps}
         failed={i === lastFailedTurnIndex ? failed : undefined}
         connectorName={connector ? connector.name || connector.kind : undefined}
         onResend={i === lastFailedTurnIndex ? bubbleActions.retry : undefined}
@@ -2972,6 +2976,7 @@ const MessageBubble = memo(function MessageBubble({
   renderMarkdown,
   showModelName,
   reasoningIsSummary,
+  showSteps,
   failed,
   connectorName,
   onResend,
@@ -3006,6 +3011,9 @@ const MessageBubble = memo(function MessageBubble({
   // The chat's connection streams a readable summary as its reasoning (Claude)
   // and not raw thoughts: shown open in the steps and on the live line.
   reasoningIsSummary: boolean;
+  // Off (the default): no steps lines and no live line, only each round's note
+  // and the answer (Settings → Chat; kept in this browser, see showSteps.ts).
+  showSteps: boolean;
   // Error message for the last user message in this turn.
   failed?: string | null;
   // Who answered the failed request, named in its error line.
@@ -3068,12 +3076,14 @@ const MessageBubble = memo(function MessageBubble({
   // Once thinking streams, the steps row says "Thinking…" instead. A plan
   // step's turns render under the step, so during a run its dots are inside the
   // collapsed details and the step's own spinner is what shows.
-  const waiting = streaming && !last.content && !last.reasoning && !last.toolCalls?.length;
+  // With steps hidden, thinking and tool calls show nothing, so the dots
+  // wait for text only.
+  const waiting = streaming && !last.content && (!showSteps || (!last.reasoning && !last.toolCalls?.length));
   // While a reply runs (and the task's start is known) its history folds into
   // one live line at the bottom: the latest note, a spinner and the elapsed
   // time, with the history inside. Once the newest round is writing the
   // answer the line is left out and the answer streams as normal text.
-  const live = !isUser && streaming && since != null ? liveLine(parts, reasoningIsSummary) : null;
+  const live = showSteps && !isUser && streaming && since != null ? liveLine(parts, reasoningIsSummary) : null;
   const showLiveLine = !!live && !live.writingAnswer;
   // One round's steps (its thinking and shown tool calls) fold into one row
   // of their own, put under that round's note, or above the answer when the
@@ -3091,7 +3101,7 @@ const MessageBubble = memo(function MessageBubble({
     return group;
   };
   const stepsRowFor = (m: ChatMessage): ReactNode => {
-    if (isUser || m.role !== "assistant") return null;
+    if (!showSteps || isUser || m.role !== "assistant") return null;
     if (roundGroups.find((g) => g.round === m)?.joinsPrevious) return null;
     const group = groupOf(m);
     const sum = stepSummary(group);
@@ -3147,6 +3157,10 @@ const MessageBubble = memo(function MessageBubble({
 
   // Ideas and action items under a finished reply (never while it streams).
   const notes = !isUser && !streaming ? noteBoxes(parts) : [];
+  // With steps hidden, a finished reply that was only steps (say, stopped in
+  // the middle of a tool call) would be an empty box.
+  const onlyStepsHidden =
+    !showSteps && !isUser && !streaming && !notes.length && !parts.some((m) => m.content) && parts.some((m) => m.reasoning || shownCalls(m.toolCalls).length > 0);
   const hasError = !!failed;
   const errorLine = failed && (
     <Stack spacing={0.5} sx={{ alignItems: isUser ? "flex-end" : "flex-start", mt: 0.5, flexShrink: 0 }}>
@@ -3323,6 +3337,11 @@ const MessageBubble = memo(function MessageBubble({
           history
         );
       })()}
+      {onlyStepsHidden && (
+        <Typography variant="body2" color="text.secondary">
+          No text in this reply, only steps. Turn on Show steps in Settings → Chat to see them.
+        </Typography>
+      )}
       {notes.map((box, i) => (
         // The Panel is spaced by the reply card's rule for non-step
         // children; its look comes from the Panel's table of styles. The

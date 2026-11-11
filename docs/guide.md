@@ -1477,6 +1477,15 @@ step that was running when the page closed comes back as pending.
   box, with a note to load it from the model menu. Opening an old chat picks
   its model, but doesn't load it.
 - Streaming replies with a Stop button (on a phone) or Esc (wide screens).
+- **Show steps** (Settings → Chat) turns all of this on, and it is off until
+  you do: with it off a reply shows each round's note and the answer, and no
+  steps lines; while it runs, the waiting dots and the elapsed time show
+  instead of the live line. A reply that was only steps (say, stopped in the
+  middle of a tool call) says so, and where to turn them on. The choice is
+  kept in this browser, not in the settings file, so each device has its own,
+  and the page knows it before it draws a reply (a setting kept on the server
+  is only known once settings load, which made steps flash and then vanish on
+  reload). The description below is of a reply with steps shown.
 - A reply reads in the order the model worked. Each round (one trip to the
   model) shows its short note first, and below it that round's steps (its
   thinking and its tool calls) folded into one grey line, for example
@@ -1497,7 +1506,7 @@ step that was running when the page closed comes back as pending.
   they stay in a closed **Thoughts** bar you click to read, with its time
   and token count. A row draws its contents only when it is
   opened, which keeps a long chat light; closing it removes them again. A line
-  stays open only while the chat is on screen. There is no setting for this. The reply's total time is in the small
+  stays open only while the chat is on screen. The reply's total time is in the small
   print under the reply. A reply that is only steps (say, stopped in the
   middle of a tool call) shows just the line.
 - While a reply runs, the notes and step lines above are folded into one
