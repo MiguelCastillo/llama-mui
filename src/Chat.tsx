@@ -3091,8 +3091,11 @@ const MessageBubble = memo(function MessageBubble({
     const group = groupOf(m);
     const sum = stepSummary(group);
     if (sum.count === 0) return null;
+    // "3 steps · 12s": the time is what the rounds' thinking and tool runs took.
+    const ms = group.reduce((t, r) => t + (r.stats?.ms ?? 0), 0);
+    const label = `${sum.count} ${sum.count === 1 ? "step" : "steps"}${ms ? ` · ${formatSeconds(ms)}` : ""}`;
     return (
-      <StepsRow summary={sum}>
+      <StepsRow summary={sum} label={label}>
         {group.map((r, ri) => (
           <Fragment key={ri}>
             {r.reasoning && (

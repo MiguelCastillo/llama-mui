@@ -16,14 +16,16 @@ import type { StepSummary } from "./stepSummary";
 // reply's total time is in the footer under the reply.
 export default function StepsRow({
   summary,
+  label: labelOverride,
   children,
 }: {
   summary: StepSummary;
+  label?: string;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const { count } = summary;
-  const label = `${count} ${count === 1 ? "step" : "steps"}`;
+  const label = labelOverride ?? `${count} ${count === 1 ? "step" : "steps"}`;
   return (
     <Accordion
       disableGutters
