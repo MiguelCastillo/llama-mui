@@ -222,7 +222,7 @@ import {
 } from "./chatErrors";
 import { withSessionDefaults } from "./sessionDefaults";
 import { emptySessionState, fromSession, stateKey, toSession, type SessionState } from "./sessionState";
-import { SESSION_KEY } from "./sessionRoute";
+import { SESSION_KEY, sessionFromHash, setSessionAddress } from "./sessionRoute";
 import { descendantIds, nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 
 // Per-browser choices kept in localStorage: whether the toolbar is expanded,
@@ -602,6 +602,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // saved until the open session has loaded, so an empty screen can't
   // overwrite it.
   const [sessionId, setSessionId] = useState(loadSessionId);
+  // First load: the address takes the open chat's id, replacing the current
+  // entry so it isn't an extra step back. A Settings or pairing address stays.
+  useEffect(() => {
+    if (location.hash === "" || location.hash === "#" || location.hash.startsWith("#/session/")) {
+      setSessionAddress(sessionId, "replace");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // The banner under the chat: the open session's own message, else a global one.
   const error = visibleError(errors, sessionId);
   // What is in the message box (text and images), kept outside React state so
@@ -839,8 +847,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // `toPlan`: show the plan card when it is open, not the end of the chat: "" for
   // the session's plan, or a planId to find its card (a thread's note
   // has one). The cards are marked with data-plan-card where they are drawn.
-  const openSession = (id: string, saveFirst = true, toPlan: string | null = null) => {
+  // `address`: "push" (default) adds a browser history entry for the chat;
+  // "replace" is for switches the history already knows about (back/forward) or
+  // that shouldn't be a place to go back to (a deleted chat's stand-in).
+  const openSession = (
+    id: string,
+    saveFirst = true,
+    toPlan: string | null = null,
+    address: "push" | "replace" = "push",
+  ) => {
     if (saveFirst) saveNow();
+    setSessionAddress(id, address);
     // The session being left keeps only its run error.
     setErrors((s) => leaveSession(s, sessionId));
     scrollToPlan.current = toPlan === null ? null : { sessionId: id, planId: toPlan };
@@ -859,6 +876,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setDrawerOpen(false);
     loadSession(id);
   };
+  // Back and forward: when the address changes to another chat, open it
+  // without adding a history entry (the entry is already there). The latest
+  // openSession is kept in a ref so the listener never uses an old copy.
+  const openSessionRef = useRef(openSession);
+  openSessionRef.current = openSession;
+  useEffect(() => {
+    const onAddress = () => {
+      const id = sessionFromHash(location.hash);
+      if (id && id !== openId.current) openSessionRef.current(id, true, null, "replace");
+    };
+    addEventListener("hashchange", onAddress);
+    return () => removeEventListener("hashchange", onAddress);
+  }, []);
   // An empty session under `parentId`, with the same working directory, attachments and model
   // but none of its messages. It is saved right away (saveNow skips empty
   // sessions) so it shows in the list under its parent, then opened.
@@ -966,7 +996,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         setSessions((ss) => ss.filter((x) => !gone.has(x.id)));
         setErrors((s) => [...gone].reduce(dropSession, s));
         // The open session is one of them: start a new one.
-        if (gone.has(sessionId)) openSession(newId(), false);
+        if (gone.has(sessionId)) openSession(newId(), false, null, "replace");
       })
       .catch((e) => showGlobalError(e.message));
   };

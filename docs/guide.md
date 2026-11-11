@@ -567,9 +567,13 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   exists because `inspect_page` opens a fresh browser every time, and the page
   remembers which chat is open in the browser (`localStorage`), so a plain
   address always shows an empty chat. `#/session/<id>` (`src/sessionRoute.ts`)
-  opens that chat: it sets the remembered chat, then the address goes back to
-  plain, so a reload or a click on another chat isn't pulled back. It works on
-  load and when the address changes while the page is open. The line says
+  opens that chat and the address stays: it always names the open chat, a chat
+  you switch to adds a browser history entry (so the back and forward buttons
+  move between chats, saving the one you leave), and the first load, going
+  back or forward and a deleted chat's stand-in replace the current entry
+  instead. It works on load and when the address changes while the page is
+  open. Settings closes back to the open chat's address. An empty new chat
+  has no saved file, so its address opens a new empty chat. The line says
   `http://localhost:<port>/#/session/<id>`, with the port the request came to
   and localhost as the host, which `inspect_page` opens without asking. The tool
   list, which comes before them, lists every tool, even ones that are off, and a

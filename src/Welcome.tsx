@@ -11,6 +11,7 @@ import {
   testConnector,
 } from "./api";
 import { modelReady, setWelcomeHidden, settingsHash, welcomeDone, welcomeSteps } from "./welcomeState";
+import { openChatHash } from "./sessionRoute";
 import { StatusIcon } from "./StatusMark";
 import { getSavedModelsConnectorId, pickModelsConnector } from "./modelsConnector";
 
@@ -55,7 +56,7 @@ async function read(): Promise<Snapshot> {
 
 const startChatting = () => {
   setWelcomeHidden(true);
-  location.hash = "";
+  location.hash = openChatHash();
 };
 
 // The getting-started page, #/welcome. It reads the app's state when it opens

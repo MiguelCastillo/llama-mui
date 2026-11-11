@@ -6,38 +6,29 @@ import Welcome from "./Welcome";
 import { ApiError, getConnectors } from "./api";
 import Pair from "./Pair";
 import { WELCOME_HASH, hasWelcomeMarker, settingsHash, welcomeHidden, welcomeRedirect } from "./welcomeState";
-import { takeSessionRoute } from "./sessionRoute";
+import { openChatHash, routeSession } from "./sessionRoute";
 
-// "#/session/<id>" opens that chat and the address goes back to plain (see
-// sessionRoute.ts). True when it did.
-const openSessionFromAddress = () =>
-  takeSessionRoute(location.hash, localStorage, () => history.replaceState(null, "", location.pathname + location.search));
-
-// Hash routes: "" is chat, "#/settings/<section>" is settings. Hash routing
-// needs no server support and survives reloads. `opened` counts the times a
-// session address took effect after load; Chat is keyed by it, so it starts
-// again on the chat the address named.
+// Hash routes: "" and "#/session/<id>" are chat, "#/settings/<section>" is
+// settings. Hash routing needs no server support and survives reloads. Chat
+// itself follows session addresses after load (back and forward), so it is
+// never remounted for them.
 function useHash() {
   // Before anything reads the address, so a page opened on a session address
-  // already shows plain, and Chat's first load finds the chat it names.
+  // has Chat's first load find the chat it names.
   const [hash, setHash] = useState(() => {
-    openSessionFromAddress();
+    routeSession(location.hash, localStorage);
     return location.hash;
   });
-  const [opened, setOpened] = useState(0);
   useEffect(() => {
-    const onChange = () => {
-      if (openSessionFromAddress()) setOpened((n) => n + 1);
-      setHash(location.hash);
-    };
+    const onChange = () => setHash(location.hash);
     addEventListener("hashchange", onChange);
     return () => removeEventListener("hashchange", onChange);
   }, []);
-  return { hash, opened };
+  return hash;
 }
 
 export default function App() {
-  const { hash, opened } = useHash();
+  const hash = useHash();
   const settings = hash.match(/^#\/settings(?:\/([\w-]+))?/);
   // "?from=welcome" on the address: the user came from the getting-started checklist.
   const welcome = hasWelcomeMarker(hash);
@@ -81,10 +72,10 @@ export default function App() {
     <>
       {/* Chat stays mounted under Settings so an open conversation survives a visit there. */}
       <Box sx={{ display: settings || onWelcome ? "none" : "block" }}>
-        <Chat key={opened} visible={!settings && !onWelcome} onOpenSettings={() => (location.hash = settingsHash("connectors"))} />
+        <Chat visible={!settings && !onWelcome} onOpenSettings={() => (location.hash = settingsHash("connectors"))} />
       </Box>
       {onWelcome && <Welcome />}
-      {settings && <Settings section={settings[1] ?? "connectors"} welcome={welcome} onClose={() => (location.hash = "")} />}
+      {settings && <Settings section={settings[1] ?? "connectors"} welcome={welcome} onClose={() => (location.hash = openChatHash())} />}
     </>
   );
 }
