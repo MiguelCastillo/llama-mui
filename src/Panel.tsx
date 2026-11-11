@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Box, Button, IconButton, Stack, Tooltip, alpha } from "@mui/material";
-import type { SxProps, Theme } from "@mui/material/styles";
-import { useTapReveal } from "./tapReveal";
+import { keyframes, type SxProps, type Theme } from "@mui/material/styles";
+import { useToolbarReveal } from "./tapReveal";
 
 // One reusable panel for the boxes under a reply (ideas, action items) and for
 // the messages you send. Each kind of panel gets its look from the table below,
@@ -10,7 +10,8 @@ import { useTapReveal } from "./tapReveal";
 // A panel has two kinds of buttons, each in its own slot:
 // - "tools" act on the content itself (copy it, show it raw, show hidden
 //   notes). They are small icon-only buttons (PanelButton) in a toolbar at the
-//   panel's top right corner, shown when the panel is hovered.
+//   panel's top right corner, drawn only while the panel is hovered, has
+//   keyboard focus, or is tapped open.
 // - "actions" respond to the content (Do it, Add to todos, Make plan). They are
 //   always visible, labelled buttons (PanelAction) in a row under the text,
 //   left-aligned and styled like the buttons in the approval prompts: the main
@@ -115,9 +116,13 @@ export const PANEL_VARIANTS: Record<PanelVariant, SxProps<Theme>> = {
   },
 };
 
+// The toolbar fades in when it is drawn, as it did when it was always there
+// and only its opacity changed.
+const fadeIn = keyframes`from { opacity: 0; }`;
+
 // The row of icon buttons: fits its buttons and sits at the top right corner of
-// the panel, moved a quarter of a rem left and up. Hidden until the panel is
-// hovered. Offsets are rem, so they scale with the font size.
+// the panel, moved a quarter of a rem left and up. Offsets are rem, so they
+// scale with the font size.
 const toolbarSx: SxProps<Theme> = {
   position: "absolute",
   top: "-0.25rem",
@@ -129,29 +134,19 @@ const toolbarSx: SxProps<Theme> = {
   borderColor: "divider",
   borderRadius: 1.5,
   boxShadow: 1,
-  opacity: 0,
-  transition: "opacity 0.15s",
+  animation: `${fadeIn} 0.15s`,
 };
 
-// Shows the toolbar on hover or when a button in it has keyboard focus. Where
-// there is no hover (touch) it stays hidden, and can't be tapped by accident,
-// until the box is tapped open (the box carries data-tap-open, see
-// useTapReveal). Goes on the box the toolbar sits in. Only that box's own
-// toolbar (its direct child) is shown: a panel nested in another (an action box
-// in a reply) keeps its toolbar hidden until the nested panel itself is
-// hovered or tapped.
-export const revealToolbarSx = {
-  "&:hover > .hover-toolbar, &:focus-within > .hover-toolbar": { opacity: 1 },
-  "@media (hover: none)": {
-    "& > .hover-toolbar": { pointerEvents: "none" },
-    "&[data-tap-open] > .hover-toolbar": { opacity: 1, pointerEvents: "auto" },
-  },
-};
-
-// The hover toolbar on its own, for a box that isn't a Panel but should act
-// like one (a table in a reply). Put it inside a box with position "relative"
-// and revealToolbarSx, and fill it with PanelButtons.
-export function PanelToolbar({ children }: { children: ReactNode }) {
+// The hover toolbar. Its box decides when it shows (useToolbarReveal: hovered,
+// keyboard focus, or tapped open on a touch screen) and passes `shown`; while
+// it is hidden nothing is drawn, so hidden buttons and their tooltips aren't in
+// the page and nothing they listen to (the message box being empty, for Edit)
+// reaches them. It sits out of the layout (absolute), so drawing it moves
+// nothing. A Panel does all this itself; a box that isn't a Panel but should act
+// like one (a table in a reply) has position "relative", spreads
+// useToolbarReveal's props, and puts this inside it, filled with PanelButtons.
+export function PanelToolbar({ shown, children }: { shown: boolean; children: ReactNode }) {
+  if (!shown) return null;
   return (
     <Stack className="hover-toolbar" direction="row" spacing={0} sx={toolbarSx}>
       {children}
@@ -249,9 +244,10 @@ export default function Panel({
   error?: boolean;
   children?: ReactNode;
 }) {
-  const tapReveal = useTapReveal();
+  // Only a panel with tools takes focus, so Tab stops where there is a toolbar.
+  const reveal = useToolbarReveal({ focusable: !!tools });
   return (
-    <Box {...tapReveal} sx={{ position: "relative", width: "100%", ...revealToolbarSx }}>
+    <Box {...reveal.props} sx={{ position: "relative", width: "100%" }}>
       <Box
         data-note={variant === "idea" ? "idea" : variant === "action" || variant === "actionDone" ? "action" : undefined}
         sx={[PANEL_VARIANTS[variant], error && { border: 1, borderColor: "error.main" }] as SxProps<Theme>}
@@ -263,7 +259,7 @@ export default function Panel({
           </Stack>
         )}
       </Box>
-      {tools && <PanelToolbar>{tools}</PanelToolbar>}
+      {tools && <PanelToolbar shown={reveal.shown}>{tools}</PanelToolbar>}
     </Box>
   );
 }

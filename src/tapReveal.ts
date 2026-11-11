@@ -1,9 +1,20 @@
-// Tap-to-reveal for the small toolbars on messages, tables and plan steps. On
-// touch screens they stay hidden until the box they belong to is tapped; tapping
-// it again, or anywhere else, hides them. Only one box is open at a time, so the
-// id of the open box lives in one small store shared by all of them.
+// When to show the small toolbars on messages, tables and plan steps. A toolbar
+// is drawn only while it shows (see useToolbarReveal): its box is hovered with a
+// mouse, has keyboard focus, or was tapped open on a touch screen. On touch
+// screens a toolbar stays hidden until its box is tapped; tapping it again, or
+// anywhere else, hides it. Only one box is open at a time, so the id of the open
+// box lives in one small store shared by all of them.
 
-import { useCallback, useEffect, useId, useSyncExternalStore, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useState,
+  useSyncExternalStore,
+  type FocusEvent,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
 
 export type TapReveal = {
   // The id of the open box, or null when none is open.
@@ -64,12 +75,27 @@ function listenForOutsideTaps() {
   });
 }
 
-// Props to spread on the outer element of a box whose toolbar should appear on
-// tap. On devices with hover the styles ignore the open mark, so this is
-// harmless there.
-export function useTapReveal() {
+// Whether the box's toolbar is showing, and the props to spread on the box's
+// outer element. The toolbar shows while:
+// - a mouse or pen is over the box (a touch's pointer doesn't count: a finger
+//   has no hover, and taps decide instead);
+// - focus is in the box and was put there by the keyboard (the browser's
+//   :focus-visible), so Tab reaches a toolbar that isn't drawn yet: the box
+//   itself takes focus, which draws its toolbar, and the next Tab goes into it.
+//   A mouse click that focuses something in the box doesn't count;
+// - the box was tapped open (touch screens).
+// The box's toolbar draws its buttons only while `shown`, so a long chat
+// doesn't keep hundreds of hidden buttons in the page.
+//
+// Nested boxes (an action box in a reply) each have their own state; being
+// over or in the inner box also counts as being in the outer one, as :hover
+// and :focus-within did.
+export function useToolbarReveal({ focusable = true }: { focusable?: boolean } = {}) {
   const id = useId();
-  const open = useSyncExternalStore(tapReveal.subscribe, tapReveal.get) === id;
+  // A boolean snapshot, so a tap re-renders only the box that opens or closes.
+  const tapOpen = useSyncExternalStore(tapReveal.subscribe, () => tapReveal.get() === id);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
   useEffect(listenForOutsideTaps, []);
   const onClick = useCallback(
     (event: MouseEvent<HTMLElement>) => {
@@ -83,11 +109,48 @@ export function useTapReveal() {
     },
     [id],
   );
+  const onPointerEnter = useCallback((event: PointerEvent<HTMLElement>) => {
+    if (hoversOnPointer(event.pointerType)) setHovered(true);
+  }, []);
+  const onPointerLeave = useCallback(() => setHovered(false), []);
+  // React's focus and blur bubble (focusin, focusout), so these see focus
+  // moving anywhere inside the box.
+  const onFocus = useCallback((event: FocusEvent<HTMLElement>) => {
+    setFocused(isKeyboardFocus(event.target));
+  }, []);
+  const onBlur = useCallback((event: FocusEvent<HTMLElement>) => {
+    const next = event.relatedTarget;
+    if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFocused(false);
+  }, []);
   return {
-    onClick,
-    [ID_ATTRIBUTE]: id,
-    "data-tap-open": open ? "" : undefined,
+    shown: hovered || focused || tapOpen,
+    props: {
+      onClick,
+      onPointerEnter,
+      onPointerLeave,
+      onFocus,
+      onBlur,
+      tabIndex: focusable ? 0 : undefined,
+      [ID_ATTRIBUTE]: id,
+    },
   };
+}
+
+// Whether a pointer of this kind hovers: a mouse or a pen does, a finger
+// doesn't (touch screens show a toolbar on tap instead).
+export function hoversOnPointer(pointerType: string): boolean {
+  return pointerType !== "touch";
+}
+
+// Whether focus on this element came from the keyboard, as the browser judges
+// it for :focus-visible.
+function isKeyboardFocus(target: EventTarget): boolean {
+  try {
+    return target instanceof Element && target.matches(":focus-visible");
+  } catch {
+    // A browser without :focus-visible: any focus counts.
+    return true;
+  }
 }
 
 // Things a tap on which does its own job, so it must not also open or close a

@@ -120,6 +120,7 @@ import { autoApproves } from "./autoApprove";
 import { copyText } from "./clipboard";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import { createMessageBox, type MessageBox, type PendingImage } from "./messageBox";
+import EditButton from "./EditButton";
 import { submitDraft } from "./submitDraft";
 import { optimisticSend } from "./optimisticSend";
 import { lastEditable } from "./editLast";
@@ -588,8 +589,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // The banner under the chat: the open session's own message, else a global one.
   const error = visibleError(errors, sessionId);
   // What is in the message box (text and images), kept outside React state so
-  // typing doesn't redraw the chat: only the box and the Edit buttons read it
-  // (see messageBox.ts). The chat puts text in the box with box.fill.
+  // typing doesn't redraw the chat: only the box and the Edit buttons on
+  // screen read it (see messageBox.ts). The chat puts text in the box with
+  // box.fill.
   const [box] = useState(() => createMessageBox(sessionId));
   // The position of the user message being edited: sending then replaces it and
   // everything after it. Null when the box is for a new message.
@@ -2942,21 +2944,6 @@ const DONE_STYLE: { icon: ReactNode; label: SxProps<Theme>; text: SxProps<Theme>
   label: { fontWeight: 700 },
   text: { color: "text.secondary" },
 };
-
-// The Edit button on a message you sent. It follows only whether the message
-// box is empty, by itself, so typing updates these buttons only when the box
-// goes from empty to typed or back, and not every message in the chat.
-function EditButton({ onEdit, box }: { onEdit: () => void; box: MessageBox }) {
-  const empty = useSyncExternalStore(box.subscribe, box.isEmpty);
-  return (
-    <PanelButton
-      label={empty ? "Edit" : "Edit: the message box must be empty"}
-      icon={<EditOutlinedIcon />}
-      onClick={onEdit}
-      disabled={!empty}
-    />
-  );
-}
 
 // One bubble per turn: a user message, or every assistant step of one reply
 // (thinking, tool calls, text) in the order they happened.

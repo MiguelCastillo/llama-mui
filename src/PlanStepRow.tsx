@@ -5,8 +5,8 @@
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Box, Button, Stack, TextField, Tooltip, Typography } from "@mui/material";
-import { PanelButton, PanelToolbar, revealToolbarSx } from "./Panel";
-import { useTapReveal } from "./tapReveal";
+import { PanelButton, PanelToolbar } from "./Panel";
+import { useToolbarReveal } from "./tapReveal";
 import ReplayOutlinedIcon from "@mui/icons-material/ReplayOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
@@ -83,7 +83,9 @@ export function PlanStepRow({
   // Nothing to unfold when the line already is the whole text (tidied, as stepLine does).
   const instruction = stepLine(s) !== s.text.replace(/\s+/g, " ").trim() ? s.text : null;
   const expandable = !!turns || !!instruction;
-  const tapReveal = useTapReveal();
+  const hasTools = !running && !readOnly;
+  // The row takes focus when it unfolds or has tools, so Tab reaches them.
+  const reveal = useToolbarReveal({ focusable: expandable || hasTools });
 
   // Rerunning a step leaves the ones after it done, but built on the old version.
   const rerun = () =>
@@ -100,12 +102,12 @@ export function PlanStepRow({
   return (
     <Box>
       <Box
-        {...tapReveal}
+        {...reveal.props}
         // The whole row opens and closes the details; clicks on its buttons and
         // fields are theirs, and so is a click that ends a text selection. On
         // touch screens the same tap also shows or hides the row's buttons.
         onClick={(e) => {
-          tapReveal.onClick(e);
+          reveal.props.onClick(e);
           if (!expandable || editing?.i === i) return;
           if ((e.target as HTMLElement).closest("button, input, textarea, a, label")) return;
           if (window.getSelection()?.toString()) return;
@@ -119,7 +121,6 @@ export function PlanStepRow({
           }
         }}
         role={expandable ? "button" : undefined}
-        tabIndex={expandable ? 0 : undefined}
         aria-expanded={expandable ? open : undefined}
         sx={{
           position: "relative",
@@ -127,7 +128,6 @@ export function PlanStepRow({
           gap: 1,
           alignItems: "flex-start",
           cursor: expandable ? "pointer" : undefined,
-          ...revealToolbarSx,
         }}
       >
         <Box sx={{ pt: 0.25 }}>{STATUS_ICON[s.status]}</Box>
@@ -214,9 +214,9 @@ export function PlanStepRow({
             </Typography>
           )}
         </Box>
-        {!running && !readOnly && (
+        {hasTools && (
           // Shown on hover so the list stays quiet.
-          <PanelToolbar>
+          <PanelToolbar shown={reveal.shown}>
             {canMarkDone(s.status) && (
               <PanelButton
                 label="The check is wrong: mark it done"

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTapReveal, isInsideBox, shouldToggle } from "../tapReveal";
+import { createTapReveal, hoversOnPointer, isInsideBox, shouldToggle } from "../tapReveal";
 
 describe("isInsideBox", () => {
   const within = (id: string) => ({
@@ -105,5 +105,13 @@ describe("shouldToggle", () => {
     const box = {};
     const onInner = { closest: () => ({}) };
     expect(shouldToggle(onInner, "", box)).toBe(false);
+  });
+});
+
+describe("hoversOnPointer", () => {
+  it("shows a toolbar for a mouse or a pen over its box, not for a finger", () => {
+    expect(hoversOnPointer("mouse")).toBe(true);
+    expect(hoversOnPointer("pen")).toBe(true);
+    expect(hoversOnPointer("touch")).toBe(false);
   });
 });

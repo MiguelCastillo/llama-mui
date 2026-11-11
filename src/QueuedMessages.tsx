@@ -1,9 +1,8 @@
-import { useSyncExternalStore } from "react";
 import { Box, Button, Stack, Typography } from "@mui/material";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
-import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import type { QueuedMessage } from "./api";
 import type { MessageBox } from "./messageBox";
+import EditButton from "./EditButton";
 import Panel, { PanelButton } from "./Panel";
 
 // The messages sent while a reply was running, waiting to go in order. They sit
@@ -26,20 +25,13 @@ function QueuedItem({
   onEdit: () => void;
   onRemove: () => void;
 }) {
-  // Like the Edit button on a sent message: it needs an empty box to land in.
-  const empty = useSyncExternalStore(box.subscribe, box.isEmpty);
   return (
     <Box sx={{ alignSelf: "flex-end", width: "100%", display: "flex", justifyContent: "flex-end" }} data-queued={item.id}>
       <Panel
         variant="queued"
         tools={
           <>
-            <PanelButton
-              label={empty ? "Edit" : "Edit: the message box must be empty"}
-              icon={<EditOutlinedIcon />}
-              onClick={onEdit}
-              disabled={!empty}
-            />
+            <EditButton onEdit={onEdit} box={box} />
             <PanelButton label="Remove" icon={<DeleteOutlinedIcon />} onClick={onRemove} />
           </>
         }
