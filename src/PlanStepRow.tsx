@@ -6,6 +6,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Box, Button, Stack, TextField, Tooltip, Typography } from "@mui/material";
 import { PanelButton, PanelToolbar, revealToolbarSx } from "./Panel";
+import { useTapReveal } from "./tapReveal";
 import ReplayOutlinedIcon from "@mui/icons-material/ReplayOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
@@ -82,6 +83,7 @@ export function PlanStepRow({
   // Nothing to unfold when the line already is the whole text (tidied, as stepLine does).
   const instruction = stepLine(s) !== s.text.replace(/\s+/g, " ").trim() ? s.text : null;
   const expandable = !!turns || !!instruction;
+  const tapReveal = useTapReveal();
 
   // Rerunning a step leaves the ones after it done, but built on the old version.
   const rerun = () =>
@@ -98,9 +100,12 @@ export function PlanStepRow({
   return (
     <Box>
       <Box
+        {...tapReveal}
         // The whole row opens and closes the details; clicks on its buttons and
-        // fields are theirs, and so is a click that ends a text selection.
+        // fields are theirs, and so is a click that ends a text selection. On
+        // touch screens the same tap also shows or hides the row's buttons.
         onClick={(e) => {
+          tapReveal.onClick(e);
           if (!expandable || editing?.i === i) return;
           if ((e.target as HTMLElement).closest("button, input, textarea, a, label")) return;
           if (window.getSelection()?.toString()) return;

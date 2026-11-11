@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Box, Button, IconButton, Stack, Tooltip, alpha } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material/styles";
+import { useTapReveal } from "./tapReveal";
 
 // One reusable panel for the boxes under a reply (ideas, action items) and for
 // the messages you send. Each kind of panel gets its look from the table below,
@@ -121,14 +122,19 @@ const toolbarSx: SxProps<Theme> = {
   transition: "opacity 0.15s",
 };
 
-// Shows the toolbar on hover or when a button in it has keyboard focus, and
-// always where there is no hover (touch). Goes on the box the toolbar sits in.
-// Only that box's own toolbar (its direct child) is shown: a panel nested in
-// another (an action box in a reply) keeps its toolbar hidden until the nested
-// panel itself is hovered.
+// Shows the toolbar on hover or when a button in it has keyboard focus. Where
+// there is no hover (touch) it stays hidden, and can't be tapped by accident,
+// until the box is tapped open (the box carries data-tap-open, see
+// useTapReveal). Goes on the box the toolbar sits in. Only that box's own
+// toolbar (its direct child) is shown: a panel nested in another (an action box
+// in a reply) keeps its toolbar hidden until the nested panel itself is
+// hovered or tapped.
 export const revealToolbarSx = {
   "&:hover > .hover-toolbar, &:focus-within > .hover-toolbar": { opacity: 1 },
-  "@media (hover: none)": { "& > .hover-toolbar": { opacity: 1 } },
+  "@media (hover: none)": {
+    "& > .hover-toolbar": { pointerEvents: "none" },
+    "&[data-tap-open] > .hover-toolbar": { opacity: 1, pointerEvents: "auto" },
+  },
 };
 
 // The hover toolbar on its own, for a box that isn't a Panel but should act
@@ -232,8 +238,9 @@ export default function Panel({
   error?: boolean;
   children?: ReactNode;
 }) {
+  const tapReveal = useTapReveal();
   return (
-    <Box sx={{ position: "relative", width: "100%", ...revealToolbarSx }}>
+    <Box {...tapReveal} sx={{ position: "relative", width: "100%", ...revealToolbarSx }}>
       <Box
         data-note={variant === "idea" ? "idea" : variant === "action" || variant === "actionDone" ? "action" : undefined}
         sx={[PANEL_VARIANTS[variant], error && { border: 1, borderColor: "error.main" }] as SxProps<Theme>}

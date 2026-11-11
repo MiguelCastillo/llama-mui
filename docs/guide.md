@@ -206,7 +206,10 @@ is made once, in that table, and no box is styled on its own.
 
 - **Tools** act on the content itself (Copy, formatted/raw, show hidden notes).
   They are icon-only buttons in a small toolbar in the box's top right corner,
-  shown on hover, and are drawn by PanelButton: a new tool only gives a label
+  shown on hover (on a touch screen, which has no hover, tap the box to show
+  them; tap it again, or anywhere else, to hide them, and only one box shows its
+  buttons at a time; a tap on a link or button, or while text is selected, does
+  not toggle them), and are drawn by PanelButton: a new tool only gives a label
   (the tooltip), an icon and what it does. Ideas, action items, your own
   messages and the model's replies all have Copy (a reply's copies its text,
   and more tools will join it). A finished reply that has text also has
@@ -232,7 +235,10 @@ are for tools on the content, in the hover toolbar. The plan follows it: Run
 (Continue once it has started) is the filled button, and Pause (while the plan
 runs), Clone (on a plan you are only reading) and Discard are outlined buttons
 in the same row under the steps. A step's own tools (mark done, rerun, edit,
-remove) are the hover toolbar of its row.
+remove) are the hover toolbar of its row. Every such toolbar (messages, tables,
+plan steps) works the same way on a touch screen: hidden until its box is
+tapped. The shared logic is in tapReveal.ts (useTapReveal on the box's outer
+element, and the touch rule in revealToolbarSx).
 
 **To add a kind of note:** add a row to the table (id, tool name, one-sentence
 description that doesn't overlap another kind's, tool label and summary in

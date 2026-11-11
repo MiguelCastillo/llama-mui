@@ -8,6 +8,7 @@ import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import CloseFullscreenIcon from "@mui/icons-material/CloseFullscreen";
 import { copyText } from "./clipboard";
 import { PanelButton, PanelToolbar, revealToolbarSx } from "./Panel";
+import { useTapReveal } from "./tapReveal";
 
 // On the user's primary-colored bubble the theme's greys disappear, so code
 // is tinted darker there.
@@ -43,8 +44,9 @@ function CodeBlock({ children, tint }: { children?: ReactNode; tint: string }) {
 // other row help the eye follow a row across.
 function Table({ children }: { children?: ReactNode }) {
   const [full, setFull] = useState(false);
+  const tapReveal = useTapReveal();
   return (
-    <Box sx={{ position: "relative", width: full ? "100%" : "fit-content", maxWidth: "100%", my: 2, ...revealToolbarSx }}>
+    <Box {...tapReveal} sx={{ position: "relative", width: full ? "100%" : "fit-content", maxWidth: "100%", my: 2, ...revealToolbarSx }}>
       <Box sx={{ overflowX: "auto" }}>
         <Box
           component="table"
