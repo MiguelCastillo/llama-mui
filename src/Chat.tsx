@@ -1,4 +1,4 @@
-import { Fragment, useCallback, type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import { isImageFile, prepareImage, revokePreview } from "./images";
 import {
@@ -118,7 +118,7 @@ import { getSavedModelsConnectorId, pickModelsConnector, setSavedModelsConnector
 import { autoApproves } from "./autoApprove";
 import { copyText } from "./clipboard";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
-import { loadDraft, saveDraft } from "./drafts";
+import { createMessageBox, type MessageBox, type PendingImage } from "./messageBox";
 import { submitDraft } from "./submitDraft";
 import { optimisticSend } from "./optimisticSend";
 import { lastEditable } from "./editLast";
@@ -246,8 +246,6 @@ function saveFlag(key: string, value: boolean) {
 // Splits the tokens a turn read fresh among the previous round's tool results,
 // by length. The total is exact (it includes a little chat-template framing);
 // the split is an estimate.
-// An image queued for upload but not yet sent.
-type PendingImage = { blob: Blob; preview: string; name: string };
 // What a tool call can wait on the user for, and their answer: allow or deny,
 // or, for a path, the files or folders they picked in its place.
 type Ask =
@@ -566,8 +564,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [sessionId, setSessionId] = useState(loadSessionId);
   // The banner under the chat: the open session's own message, else a global one.
   const error = visibleError(errors, sessionId);
-  // A suggestion clicked on the empty screen, for the message box to take.
-  const [fill, setFill] = useState<{ text: string; n: number } | null>(null);
+  // What is in the message box (text and images), kept outside React state so
+  // typing doesn't redraw the chat: only the box and the Edit buttons read it
+  // (see messageBox.ts). The chat puts text in the box with box.fill.
+  const [box] = useState(() => createMessageBox(sessionId));
   // The position of the user message being edited: sending then replaces it and
   // everything after it. Null when the box is for a new message.
   const [editing, setEditing] = useState<number | null>(null);
@@ -805,6 +805,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     scrollToPlan.current = toPlan === null ? null : { sessionId: id, planId: toPlan };
     setFollowing(toPlan === null);
     setSessionId(id);
+    // The box shows the opened chat's draft, before anything is put in it.
+    box.show(id);
     openId.current = id;
     saveSessionId(id);
     savedKey.current = "";
@@ -1109,23 +1111,20 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const target = lastEditable(messages, planRunning, turnRunning);
     if (!target) return false;
     setEditing(target.index);
-    setFill({ text: target.text, n: Date.now() });
+    box.fill(target.text);
     return true;
   };
-  // Whether the message box has nothing in it (no text, no images), told by
-  // the box: the Edit button on a past message only works then.
-  const [boxEmpty, setBoxEmpty] = useState(true);
   // The Edit button on a message you sent, at `index` in the messages. The
   // last one is replaced when sent, like the up arrow; an older one only has
   // its text copied into the box, to be sent as a new message (nothing is cut).
   const editMessage = (index: number) => {
-    if (!boxEmpty) return;
+    if (!box.isEmpty()) return;
     const last = lastEditable(messages, planRunning, turnRunning);
     if (last && last.index === index) {
       editLast();
       return;
     }
-    setFill({ text: messages[index].content, n: Date.now() });
+    box.fill(messages[index].content);
   };
 
   // Sends what the user typed. Returns whether it went. `accepted` is called
@@ -1585,7 +1584,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       onResend={i === lastFailedTurnIndex ? retry : undefined}
       resendDisabled={i === lastFailedTurnIndex ? runActive : undefined}
       onEdit={t.parts[0].role === "user" && !t.parts[0].aside && !t.parts[0].planStep ? () => editMessage(t.start) : undefined}
-      editDisabled={!boxEmpty}
+      box={box}
       sessionId={sessionId}
       replyRunning={runActive || turnRunning}
       // Do it marks its box done at once and the mark is saved with the message;
@@ -1739,7 +1738,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const startFromEmpty = (start: Start) => {
     const action = startAction(start, { model: !!model && !!connector, busy: runActive });
     if (action.sessionId && action.sessionId !== sessionId) openSession(action.sessionId);
-    if (action.kind === "fill") setFill({ text: action.text, n: Date.now() });
+    if (action.kind === "fill") box.fill(action.text);
     else setPendingStart(action);
   };
   useEffect(() => {
@@ -1747,14 +1746,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const action = settleStart(pendingStart, loadedOk.current, todosRef.current);
     if (action.kind === "fill") {
       setPendingStart(null);
-      setFill({ text: action.text, n: Date.now() });
+      box.fill(action.text);
     } else if (action.boundary) {
       clearContext();
       setPendingStart({ ...action, boundary: false });
     } else {
       setPendingStart(null);
       send(action.text, undefined, () => {}).then((sent) => {
-        if (!sent) setFill({ text: action.text, n: Date.now() });
+        if (!sent) box.fill(action.text);
       });
     }
   }, [pendingStart, loaded, sessionId]);
@@ -2220,7 +2219,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             <Composer
               tall={narrow}
               sendButton={narrow}
-              sessionId={sessionId}
+              box={box}
               placeholder={
                 planRunning
                   ? tellPlan
@@ -2240,8 +2239,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               onEditLast={editLast}
               editing={stillEditing}
               onCancelEdit={() => setEditing(null)}
-              onEmptyChange={setBoxEmpty}
-              fill={fill}
               reply={pendingReply}
               onCancelReply={() => setReplyTarget(null)}
               // Stop here is for a reply that is streaming, on a phone (Escape does it
@@ -2277,21 +2274,20 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   );
 }
 
-// The message box and Send (Stop while a reply runs). It keeps what's typed
-// itself: kept in Chat, every keystroke redrew the whole chat, about 100 ms
-// each in a 300-message one.
+// The message box and Send (Stop while a reply runs). What's typed lives in
+// the chat's message box store (messageBox.ts), which only this and the Edit
+// buttons read: kept in Chat's state, every keystroke redrew the whole chat,
+// about 100 ms each in a 300-message one.
 function Composer({
-  sessionId,
+  box,
   placeholder,
   onSend,
   onEditLast,
   editing,
   onCancelEdit,
-  onEmptyChange,
   onStop,
   disabled,
   below,
-  fill,
   tall = false,
   sendButton = true,
   planRunning,
@@ -2309,11 +2305,10 @@ function Composer({
   tall?: boolean;
   // Whether to show the Send button. Enter sends either way; on a wide screen the box goes without it.
   sendButton?: boolean;
-  // The chat the box belongs to: what's typed and not sent is kept per chat (see drafts.ts).
-  sessionId: string;
+  // What is in the box, and the chat whose draft it is (see messageBox.ts).
+  // The chat puts text in it with box.fill, and the box then takes focus.
+  box: MessageBox;
   placeholder: string;
-  // Text to put in the box and focus it (not sent); a new `n` is a new request.
-  fill?: { text: string; n: number } | null;
   // Resolves to whether the message went. `accepted` is called as soon as the
   // send is certain to start (never for a refused one), so the box can clear
   // before the server has answered; a false result then means it failed.
@@ -2325,8 +2320,6 @@ function Composer({
   // up (the box is emptied here, Chat forgets the edit).
   editing: boolean;
   onCancelEdit: () => void;
-  // Told whenever the box becomes empty (no text, no images) or not.
-  onEmptyChange: (empty: boolean) => void;
   onStop?: () => void;
   disabled: boolean;
   // Whether a plan is running (attach button disabled with explanation).
@@ -2341,34 +2334,17 @@ function Composer({
   // Under Send: the context indicator.
   below: ReactNode;
 }) {
-  const [text, setText] = useState(() => loadDraft(sessionId));
-  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  // The box's text and images. Opening another chat shows its draft (the chat
+  // tells the store), and every change of the text is kept as that chat's
+  // draft, so a refresh brings it back.
+  const { text, images: pendingImages } = useSyncExternalStore(box.subscribe, box.get);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Visual cue when a file is being dragged over the composer.
   const [dragOver, setDragOver] = useState(false);
-  // The chat whose draft is in the box. Opening another chat shows its draft,
-  // not the text typed in the one before.
-  const shownFor = useRef(sessionId);
-  useEffect(() => {
-    if (shownFor.current === sessionId) return;
-    shownFor.current = sessionId;
-    setText(loadDraft(sessionId));
-  }, [sessionId]);
-  // Every change is kept, so a refresh brings the text back.
-  const edit = (value: string) => {
-    setText(value);
-    saveDraft(sessionId, value);
-  };
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const isEmpty = text.trim() === "" && !pendingImages.length;
-  useEffect(() => {
-    onEmptyChange(isEmpty);
-  }, [isEmpty]);
-  useEffect(() => {
-    if (!fill) return;
-    edit(fill.text);
-    inputRef.current?.focus();
-  }, [fill]);
+  // Text the chat puts in the box (Edit, the up arrow, a suggestion) is for
+  // changing, so the cursor goes there.
+  useEffect(() => box.onFill(() => inputRef.current?.focus()), [box]);
   // Replying to a response puts the cursor in the box.
   useEffect(() => {
     if (reply) inputRef.current?.focus();
@@ -2390,16 +2366,14 @@ function Composer({
         // unsupported type – silently skip
       }
     }
-    if (images.length) setPendingImages((prev) => [...prev, ...images]);
-  }, []);
+    if (images.length) box.setImages([...box.get().images, ...images]);
+  }, [box]);
   const removeImage = useCallback((index: number) => {
-    setPendingImages((prev) => {
-      const next = [...prev];
-      revokePreview(next[index].preview);
-      next.splice(index, 1);
-      return next;
-    });
-  }, []);
+    const next = [...box.get().images];
+    revokePreview(next[index].preview);
+    next.splice(index, 1);
+    box.setImages(next);
+  }, [box]);
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
@@ -2431,7 +2405,7 @@ function Composer({
     if (sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
-    const sentFrom = sessionId;
+    const sentFrom = box.sessionId();
     const sentImages = pendingImages;
     try {
       // The box empties as soon as the send is accepted, without waiting for
@@ -2440,25 +2414,24 @@ function Composer({
       await submitDraft({
         text: t,
         images: sentImages,
-        stillShown: () => shownFor.current === sentFrom,
+        stillShown: () => box.sessionId() === sentFrom,
         send: (accepted) => onSend(t, sentImages.length ? sentImages : undefined, accepted),
+        // setTextFor changes only the draft when another chat was opened
+        // meanwhile, so that chat's box is left alone.
         clear: () => {
-          setText("");
-          saveDraft(sentFrom, "");
-          setPendingImages([]);
+          box.setTextFor(sentFrom, "");
+          box.setImages([]);
         },
         restore: () => {
-          setText(text);
-          saveDraft(sentFrom, text);
-          setPendingImages(sentImages);
+          box.setTextFor(sentFrom, text);
+          box.setImages(sentImages);
         },
         // It went: that chat's draft is gone, the previews are revoked, and the
         // box is cleared unless another chat was opened meanwhile.
-        done: (shown) => {
+        done: () => {
           sentImages.forEach((img) => revokePreview(img.preview));
-          setPendingImages([]);
-          saveDraft(sentFrom, "");
-          if (shown) setText("");
+          box.setImages([]);
+          box.setTextFor(sentFrom, "");
         },
       });
     } finally {
@@ -2469,10 +2442,9 @@ function Composer({
   // Gives up editing the last message: the box is emptied, nothing is sent.
   const cancelEdit = () => {
     onCancelEdit();
-    setText("");
-    saveDraft(sessionId, "");
+    box.setText("");
     pendingImages.forEach((img) => revokePreview(img.preview));
-    setPendingImages([]);
+    box.setImages([]);
   };
   return (
     <Stack
@@ -2637,7 +2609,7 @@ function Composer({
           inputRef={inputRef}
           value={text}
           slotProps={{ htmlInput: { readOnly: sending } }}
-          onChange={(e) => edit(e.target.value)}
+          onChange={(e) => box.setText(e.target.value)}
           onKeyDown={(e) => {
             // Enter sends where there is no Send button (a wide screen). With the button
             // (a phone, whose keyboard has no Shift) Enter starts a new line.
@@ -2762,6 +2734,21 @@ const DONE_STYLE: { icon: ReactNode; label: SxProps<Theme>; text: SxProps<Theme>
   text: { color: "text.secondary" },
 };
 
+// The Edit button on a message you sent. It follows only whether the message
+// box is empty, by itself, so typing updates these buttons only when the box
+// goes from empty to typed or back, and not every message in the chat.
+function EditButton({ onEdit, box }: { onEdit: () => void; box: MessageBox }) {
+  const empty = useSyncExternalStore(box.subscribe, box.isEmpty);
+  return (
+    <PanelButton
+      label={empty ? "Edit" : "Edit: the message box must be empty"}
+      icon={<EditOutlinedIcon />}
+      onClick={onEdit}
+      disabled={!empty}
+    />
+  );
+}
+
 // One bubble per turn: a user message, or every assistant step of one reply
 // (thinking, tool calls, text) in the order they happened.
 function MessageBubble({
@@ -2777,7 +2764,7 @@ function MessageBubble({
   onResend,
   resendDisabled,
   onEdit,
-  editDisabled,
+  box,
   since,
   rate,
   sessionId,
@@ -2813,7 +2800,7 @@ function MessageBubble({
   // Edit button on a message you sent (not a side question): takes its text
   // back into the message box. Disabled while the box has something in it.
   onEdit?: () => void;
-  editDisabled?: boolean;
+  box: MessageBox;
   // While this reply streams: when the task started, for the counter beside
   // the waiting dots, and how fast the current round is streaming.
   since?: number | null;
@@ -2916,14 +2903,7 @@ function MessageBubble({
             )
           }
         />
-        {onEdit && !isAside && (
-          <PanelButton
-            label={editDisabled ? "Edit: the message box must be empty" : "Edit"}
-            icon={<EditOutlinedIcon />}
-            onClick={onEdit}
-            disabled={editDisabled}
-          />
-        )}
+        {onEdit && !isAside && <EditButton onEdit={onEdit} box={box} />}
         {hidden && (
           <PanelButton
             label={showHidden ? "Hide what was sent with this message" : "Show what was sent with this message, unseen"}
