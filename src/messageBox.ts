@@ -15,7 +15,11 @@ import { loadDraft, saveDraft } from "./drafts";
 // object URL (revoked once it is no longer shown).
 export type PendingImage = { blob: Blob; preview: string; name: string };
 
-export type BoxContent = { text: string; images: PendingImage[] };
+// A text file or PDF added to the box: its text, read in the browser, and
+// whether it was cut to the size cap.
+export type PendingDocument = { name: string; text: string; truncated: boolean };
+
+export type BoxContent = { text: string; images: PendingImage[]; documents: PendingDocument[] };
 
 export type MessageBox = {
   // What is in the box now. The same object until something changes, so it
@@ -33,6 +37,7 @@ export type MessageBox = {
   // after another chat was opened): then only its draft is changed.
   setTextFor: (id: string, text: string) => void;
   setImages: (images: PendingImage[]) => void;
+  setDocuments: (documents: PendingDocument[]) => void;
   // Puts text in the box for the user to change and send, adds `images`, and
   // asks the box to take focus.
   fill: (text: string, images?: PendingImage[]) => void;
@@ -46,7 +51,7 @@ export type Drafts = { load: (id: string) => string; save: (id: string, text: st
 
 export function createMessageBox(sessionId: string, drafts: Drafts = { load: loadDraft, save: saveDraft }): MessageBox {
   let shown = sessionId;
-  let content: BoxContent = { text: drafts.load(sessionId), images: [] };
+  let content: BoxContent = { text: drafts.load(sessionId), images: [], documents: [] };
   const listeners = new Set<() => void>();
   const fillListeners = new Set<() => void>();
   const change = (next: Partial<BoxContent>) => {
@@ -63,7 +68,7 @@ export function createMessageBox(sessionId: string, drafts: Drafts = { load: loa
   };
   return {
     get: () => content,
-    isEmpty: () => content.text.trim() === "" && content.images.length === 0,
+    isEmpty: () => content.text.trim() === "" && content.images.length === 0 && content.documents.length === 0,
     sessionId: () => shown,
     show: (id) => {
       if (id === shown) return;
@@ -73,6 +78,7 @@ export function createMessageBox(sessionId: string, drafts: Drafts = { load: loa
     setText: (text) => setTextFor(shown, text),
     setTextFor,
     setImages: (images) => change({ images }),
+    setDocuments: (documents) => change({ documents }),
     fill: (text, images) => {
       setTextFor(shown, text);
       if (images?.length) change({ images: [...content.images, ...images] });

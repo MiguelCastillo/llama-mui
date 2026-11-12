@@ -1,6 +1,7 @@
 import { Box, Button, Stack, Typography } from "@mui/material";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import type { QueuedMessage } from "./api";
+import { splitMessage } from "./documents";
 import type { MessageBox } from "./messageBox";
 import EditButton from "./EditButton";
 import Panel, { PanelButton } from "./Panel";
@@ -25,6 +26,8 @@ function QueuedItem({
   onEdit: () => void;
   onRemove: () => void;
 }) {
+  // Files inlined in the message show by name, not as their text.
+  const { words, files } = splitMessage(item.text);
   return (
     <Box sx={{ alignSelf: "flex-end", width: "100%", display: "flex", justifyContent: "flex-end" }} data-queued={item.id}>
       <Panel
@@ -55,8 +58,13 @@ function QueuedItem({
             overflow: "hidden",
           }}
         >
-          {item.text}
+          {words}
         </Typography>
+        {files.length > 0 && (
+          <Typography variant="caption" component="div" sx={{ mt: 0.5, overflowWrap: "anywhere" }}>
+            {files.map((f) => (f.truncated ? `${f.name} (cut)` : f.name)).join(", ")}
+          </Typography>
+        )}
         {item.images && item.images.length > 0 && (
           <Stack direction="row" spacing={1} sx={{ mt: 0.5, flexWrap: "wrap" }}>
             {item.images.map((img) => (

@@ -69,6 +69,7 @@ import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import ViewInArOutlinedIcon from "@mui/icons-material/ViewInArOutlined";
 import DnsOutlinedIcon from "@mui/icons-material/DnsOutlined";
 import CloseIcon from "@mui/icons-material/Close";
+import InsertDriveFileOutlinedIcon from "@mui/icons-material/InsertDriveFileOutlined";
 import ReplyOutlinedIcon from "@mui/icons-material/ReplyOutlined";
 import { keyframes } from "@mui/material/styles";
 import {
@@ -131,7 +132,8 @@ import Elapsed, { type StreamRate } from "./Elapsed";
 import { stepSummary } from "./stepSummary";
 import { groupRounds } from "./stepGroups";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
-import { createMessageBox, type MessageBox, type PendingImage } from "./messageBox";
+import { createMessageBox, type MessageBox, type PendingDocument, type PendingImage } from "./messageBox";
+import { composeMessage, isDocumentFile, prepareDocument, splitMessage } from "./documents";
 import EditButton from "./EditButton";
 import { submitDraft } from "./submitDraft";
 import { optimisticSend } from "./optimisticSend";
@@ -1189,7 +1191,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const target = lastEditable(messages, planRunning, turnRunning);
     if (!target) return false;
     setEditing(target.index);
-    box.fill(target.text);
+    fillWithFiles(target.text);
     return true;
   };
   // Last render's turns by start index, so an unchanged turn keeps its arrays
@@ -1215,7 +1217,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       editLast();
       return;
     }
-    box.fill(messages[index].content);
+    fillWithFiles(messages[index].content);
+  };
+  // Puts a sent message back in the box: its words as text, and the files that
+  // were inlined in it as attached files again.
+  const fillWithFiles = (content: string) => {
+    const { words, files } = splitMessage(content);
+    box.fill(words);
+    if (files.length) box.setDocuments(files);
   };
 
   // The queue of messages sent during a reply (see QueuedMessages). It comes
@@ -1274,7 +1283,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (!box.isEmpty() || openId.current !== id) return drop();
     if (!(await removeQueued(item)) || openId.current !== id) return drop();
     if (item.replyTo && !pendingReply) setReplyTarget({ id, text: item.replyTo, n: Date.now() });
-    box.fill(item.text, images);
+    const { words, files } = splitMessage(item.text);
+    box.fill(words, images);
+    if (files.length) box.setDocuments(files);
   };
   const sendNextQueued = async () => {
     const id = sessionId;
@@ -2599,7 +2610,7 @@ function Composer({
   // The box's text and images. Opening another chat shows its draft (the chat
   // tells the store), and every change of the text is kept as that chat's
   // draft, so a refresh brings it back.
-  const { text, images: pendingImages } = useSyncExternalStore(box.subscribe, box.get);
+  const { text, images: pendingImages, documents: pendingDocuments } = useSyncExternalStore(box.subscribe, box.get);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Visual cue when a file is being dragged over the composer.
   const [dragOver, setDragOver] = useState(false);
@@ -2623,12 +2634,29 @@ function Composer({
     const t = setTimeout(() => setRefused(false), 6000);
     return () => clearTimeout(t);
   }, [refused]);
+  // Why a text file or PDF wasn't added (unreadable, scanned PDF, ...).
+  const [documentError, setDocumentError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!documentError) return;
+    const t = setTimeout(() => setDocumentError(null), 8000);
+    return () => clearTimeout(t);
+  }, [documentError]);
   const noImagesRef = useRef(noImages);
   noImagesRef.current = noImages;
   const addImages = useCallback(async (files: FileList) => {
     const images: PendingImage[] = [];
+    const documents: PendingDocument[] = [];
+    const problems: string[] = [];
     for (const file of Array.from(files)) {
-      if (!isImageFile(file)) continue;
+      if (!isImageFile(file)) {
+        if (!isDocumentFile(file)) continue;
+        try {
+          documents.push(await prepareDocument(file));
+        } catch (err) {
+          problems.push(err instanceof Error ? err.message : `"${file.name}" couldn't be read.`);
+        }
+        continue;
+      }
       // Not for a model that can't read them: say so instead of adding it.
       if (noImagesRef.current !== undefined) {
         setRefused(true);
@@ -2642,12 +2670,19 @@ function Composer({
       }
     }
     if (images.length) box.setImages([...box.get().images, ...images]);
+    if (documents.length) box.setDocuments([...box.get().documents, ...documents]);
+    setDocumentError(problems.length ? problems.join(" ") : null);
   }, [box]);
   const removeImage = useCallback((index: number) => {
     const next = [...box.get().images];
     revokePreview(next[index].preview);
     next.splice(index, 1);
     box.setImages(next);
+  }, [box]);
+  const removeDocument = useCallback((index: number) => {
+    const next = [...box.get().documents];
+    next.splice(index, 1);
+    box.setDocuments(next);
   }, [box]);
   const onDrop = useCallback(
     (e: React.DragEvent) => {
@@ -2679,7 +2714,8 @@ function Composer({
     // Images in the box stay there when the model can't read them: the text
     // goes alone, and the box said so (see unsentImages).
     const sentImages = noImages !== undefined ? [] : pendingImages;
-    if (!t && !sentImages.length) return;
+    const sentDocuments = pendingDocuments;
+    if (!t && !sentImages.length && !sentDocuments.length) return;
     if (sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
@@ -2692,22 +2728,27 @@ function Composer({
         text: t,
         images: sentImages,
         stillShown: () => box.sessionId() === sentFrom,
-        send: (accepted) => onSend(t, sentImages.length ? sentImages : undefined, accepted),
+        // The files are inlined here, once, so a normal send, a queued one and
+        // an edited one all carry them (see composeMessage).
+        send: (accepted) => onSend(composeMessage(t, sentDocuments), sentImages.length ? sentImages : undefined, accepted),
         // setTextFor changes only the draft when another chat was opened
         // meanwhile, so that chat's box is left alone.
         clear: () => {
           box.setTextFor(sentFrom, "");
           if (sentImages.length) box.setImages([]);
+          if (sentDocuments.length) box.setDocuments([]);
         },
         restore: () => {
           box.setTextFor(sentFrom, text);
           if (sentImages.length) box.setImages(sentImages);
+          if (sentDocuments.length) box.setDocuments(sentDocuments);
         },
         // It went: that chat's draft is gone, the previews are revoked, and the
         // box is cleared unless another chat was opened meanwhile.
         done: () => {
           sentImages.forEach((img) => revokePreview(img.preview));
           if (sentImages.length) box.setImages([]);
+          if (sentDocuments.length) box.setDocuments([]);
           box.setTextFor(sentFrom, "");
         },
       });
@@ -2722,8 +2763,9 @@ function Composer({
     box.setText("");
     pendingImages.forEach((img) => revokePreview(img.preview));
     box.setImages([]);
+    box.setDocuments([]);
   };
-  const canSend = (!!text.trim() || (pendingImages.length > 0 && noImages === undefined)) && !disabled && !sending;
+  const canSend = (!!text.trim() || (pendingImages.length > 0 && noImages === undefined) || pendingDocuments.length > 0) && !disabled && !sending;
   const attach = attachButton({ images: noImages === undefined ? undefined : false, model: noImages, planRunning });
   return (
     <Box
@@ -2797,9 +2839,22 @@ function Composer({
           </IconButton>
         </Stack>
       )}
-      {/* Image preview row: hidden when there are no pending images. */}
-      {pendingImages.length > 0 && (
-        <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.5 }}>
+      {/* Image previews and document chips: hidden when nothing is attached. */}
+      {(pendingImages.length > 0 || pendingDocuments.length > 0) && (
+        <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.5, alignItems: "center" }}>
+          {pendingDocuments.map((doc, i) => (
+            <Chip
+              key={`${doc.name}-${i}`}
+              icon={<InsertDriveFileOutlinedIcon fontSize="small" />}
+              label={doc.truncated ? `${doc.name} (cut)` : doc.name}
+              title={doc.truncated ? `${doc.name}: too long, only the start is sent` : doc.name}
+              size="small"
+              variant="outlined"
+              onDelete={() => removeDocument(i)}
+              deleteIcon={<CloseIcon aria-label={`Remove ${doc.name}`} />}
+              sx={{ maxWidth: "14rem" }}
+            />
+          ))}
           {pendingImages.map((img, i) => (
             <Box
               key={img.preview}
@@ -2849,11 +2904,16 @@ function Composer({
           {refusedImages(noImages)}
         </Typography>
       )}
+      {documentError && (
+        <Typography variant="caption" color="warning.main" role="status">
+          {documentError}
+        </Typography>
+      )}
       {/* Hidden file picker, triggered by the attach button. */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,text/*,application/pdf,application/json,.pdf,.txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.log,.xml,.yaml,.yml,.toml,.ini,.cfg,.conf,.html,.htm,.css,.js,.mjs,.ts,.tsx,.jsx,.py,.rb,.go,.rs,.java,.c,.h,.cpp,.sh,.sql,.tex,.rtf"
         multiple
         hidden
         onChange={(e) => {
@@ -2911,7 +2971,7 @@ function Composer({
             e.key === "ArrowUp" &&
             !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey &&
             !e.nativeEvent.isComposing &&
-            text === "" && !pendingImages.length && !sending
+            text === "" && !pendingImages.length && !pendingDocuments.length && !sending
           ) {
             if (onEditLast()) e.preventDefault();
           }
@@ -3326,12 +3386,36 @@ const MessageBubble = memo(function MessageBubble({
           {!shownCalls(m.toolCalls).length && stepsRowFor(m)}
           {m.content &&
             (() => {
-              const body = !showMarkdown ? (
-                <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</Typography>
+              // Files inlined in your message show as chips with their names,
+              // not as their whole text; the model still gets the text.
+              const { words, files } = m.role === "user" ? splitMessage(m.content) : { words: m.content, files: [] };
+              const chips = files.length > 0 && (
+                <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.5, mb: words ? 0.5 : 0 }}>
+                  {files.map((f, n) => (
+                    <Chip
+                      key={`${f.name}-${n}`}
+                      icon={<InsertDriveFileOutlinedIcon fontSize="small" />}
+                      label={f.truncated ? `${f.name} (cut)` : f.name}
+                      title={f.truncated ? `${f.name}: too long, only the start was sent` : f.name}
+                      size="small"
+                      variant="outlined"
+                      sx={{ maxWidth: "14rem" }}
+                    />
+                  ))}
+                </Stack>
+              );
+              const text = !showMarkdown ? (
+                <Typography sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{words}</Typography>
               ) : m.role === "assistant" ? (
-                <MarkdownRenderer content={m.content} />
+                <MarkdownRenderer content={words} />
               ) : (
-                <MarkdownRenderer content={m.content} breaks />
+                <MarkdownRenderer content={words} breaks />
+              );
+              const body = (
+                <>
+                  {chips}
+                  {words && text}
+                </>
               );
               // Replies always show in full; a long message of yours folds.
               return isUser ? (

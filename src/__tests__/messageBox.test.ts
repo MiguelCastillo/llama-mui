@@ -12,7 +12,13 @@ const image = (name: string): PendingImage => ({ blob: new Blob(), preview: `blo
 describe("createMessageBox", () => {
   it("starts with the chat's saved draft and no images", () => {
     const box = createMessageBox("a", memoryDrafts({ a: "half typed" }));
-    expect(box.get()).toEqual({ text: "half typed", images: [] });
+    expect(box.get()).toEqual({ text: "half typed", images: [], documents: [] });
+    expect(box.isEmpty()).toBe(false);
+  });
+
+  it("is not empty with only a document", () => {
+    const box = createMessageBox("a", memoryDrafts());
+    box.setDocuments([{ name: "a.txt", text: "hi", truncated: false }]);
     expect(box.isEmpty()).toBe(false);
   });
 

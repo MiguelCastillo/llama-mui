@@ -353,7 +353,7 @@ and what's attached to it.
 Above the text, only when present: the card of the response you are replying
 to, image previews, and the Ask / Tell the plan switch (while a plan runs).
 The text starts one line tall and grows to about eight. The bottom row has,
-on the left, the image paperclip and the **folder chip**, and on the right the
+on the left, the paperclip and the **folder chip**, and on the right the
 approvals marker (only while an auto-approve switch is on), the context ring
 (Clear and Compact) and a round **Send**, which turns into **Stop** while a
 reply runs and into the side question's Stop while that runs. On a wide screen
@@ -365,6 +365,19 @@ for a model whose server says it can't, the paperclip is off with a tooltip
 saying so, a pasted or dropped image is refused with a note, and images already
 in the box when you switch to such a model stay there under a line saying they
 won't be sent (the text goes alone).
+
+The paperclip also takes **text files and PDFs** (plain text, `.md`, `.csv`,
+`.json`, `.log` and similar), by picker, drop or paste, so documents from Drive
+or Files can be sent. Nothing is stored on the server: the browser reads the
+file (a PDF's text is pulled out in the browser, by a library loaded only when
+a PDF is first attached) and puts it into the message as a block headed
+`File: name`, after your words. So it works with every model, whether or not it
+reads images. Each file is cut at 50,000 characters and one message carries at
+most 120,000 characters of files; when something is cut, the chip says "cut" and
+the block in the message says so too. The chat bubble shows only the file names,
+also after reopening the chat. A scanned PDF that is only pictures has no text
+to read, so it is refused with a message; photograph it and attach it as an
+image instead. Images work as before.
 
 - **Working directory** is the folder relative paths and `run_command` start
   in, and the system prompt names it. It's a setting of the chat, separate

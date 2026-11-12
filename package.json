@@ -19,6 +19,7 @@
     "@mui/material": "^9.5.0",
     "diff": "^8.0.2",
     "openai": "^7.47.0",
+    "pdfjs-dist": "^6.5.438",
     "puppeteer-core": "^25.16.0",
     "qrcode-generator": "^2.0.4",
     "react": "^19.3.1",
