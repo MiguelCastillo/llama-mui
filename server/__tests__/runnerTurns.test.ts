@@ -216,6 +216,32 @@ describe("a chat reply run on the server", () => {
     expect(fileOf("a").messages.at(-1)).toEqual({ role: "assistant", content: "Fine." });
   });
 
+  it("lets a running tool call finish on Stop, and cuts it short on Stop everything", async () => {
+    save("a");
+    let toolEnded = "";
+    // A tool call that never finishes by itself (a command stuck waiting for
+    // input), which only the kill signal ends.
+    during = (h) =>
+      new Promise<void>((resolve) => {
+        h.killSignal!.addEventListener("abort", () => {
+          toolEnded = "killed";
+          resolve();
+        });
+      });
+    const started = await turn("a");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    void runners.stopRun("a");
+    // The plain Stop is waiting on the tool call, and the page is told so.
+    await vi.waitFor(() => expect(hub.liveRun("a")?.stopping).toBe(true));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(toolEnded).toBe("");
+    expect(hub.liveRun("a")).not.toBeNull();
+    await runners.stopRun("a", { force: true });
+    await started.done;
+    expect(toolEnded).toBe("killed");
+    expect(hub.liveRun("a")).toBeNull();
+  });
+
   it("stores a question as plain data, and a command answers it", async () => {
     save("a");
     let answer: unknown = "none";

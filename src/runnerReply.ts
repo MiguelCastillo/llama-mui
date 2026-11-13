@@ -153,6 +153,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         syncFailed();
         h.setAbort(c);
       },
+      killSignal: h.killSignal,
       // Chat refreshes its own model list; there is nothing to refresh here.
       refreshModels: () => {},
       askUser: h.askUser,

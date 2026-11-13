@@ -21,6 +21,9 @@ export interface ToolContext {
   // has to ask a model. Missing when the caller didn't say.
   connectorId?: string;
   model?: string;
+  // Aborted when the caller gives up on the call (Stop everything closes its
+  // request): a tool that starts something long, like run_command, stops it.
+  signal?: AbortSignal;
 }
 
 // The folders and files the tools may reach: the working directory first,

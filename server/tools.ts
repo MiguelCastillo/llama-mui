@@ -502,7 +502,14 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
 
   if (parts[1] === "call" && method === "POST") {
     const body = await readJson(req);
-    const ctx = await contextFor(body);
+    // The caller hung up before the answer was sent (Stop everything aborts
+    // the request): whatever the tool started is stopped.
+    const gone = new AbortController();
+    // (A test's stand-in response may have no events.)
+    res.on?.("close", () => {
+      if (!res.writableFinished) gone.abort();
+    });
+    const ctx = { ...(await contextFor(body)), signal: gone.signal };
     // The chat's persona is fixed once it starts, so the saved session names it.
     const persona = await personaForCall(ctx.chatId, ctx.store.defaultPersona);
     sendJson(res, 200, await runTool(String(body.name), body.arguments, ctx, persona));

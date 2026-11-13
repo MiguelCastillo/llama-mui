@@ -26,6 +26,9 @@ export interface RunnerView {
   error: string | null;
   // A request is in flight (a step's reply or its check).
   streaming: boolean;
+  // Stop was pressed and the run is finishing what is in flight (a tool call
+  // that is running); Stop everything cuts that short.
+  stopping?: boolean;
   // A side question is being answered beside the plan (Stop in the message box
   // ends only it, see stopAside in runClient.ts).
   aside: boolean;

@@ -48,10 +48,25 @@ function loginEnv(): Promise<NodeJS.ProcessEnv> {
   return loginEnvPromise;
 }
 
+// The message when the caller gave up on a command (Stop everything).
+const STOPPED = "Stopped by the user before it finished";
+
 // stdin is closed and git is told not to prompt, so a command waiting for
-// input fails instead of hanging until the timeout.
-export async function exec(command: string, cwd: string): Promise<string> {
-  const env = { ...(await loginEnv()), GIT_TERMINAL_PROMPT: "0" };
+// input fails instead of hanging until the timeout. An aborted signal stops
+// it, and everything it started, at once, including while the login
+// environment is still being read.
+export async function exec(command: string, cwd: string, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new ToolError(STOPPED);
+  const baseEnv = await new Promise<NodeJS.ProcessEnv>((resolve, reject) => {
+    const onAbort = () => reject(new ToolError(STOPPED));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    loginEnv().then((env) => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(env);
+    });
+  });
+  if (signal?.aborted) throw new ToolError(STOPPED);
+  const env = { ...baseEnv, GIT_TERMINAL_PROMPT: "0" };
   return new Promise((resolve, reject) => {
     const child = spawn(SHELL, ["-c", command], {
       cwd,
@@ -69,21 +84,32 @@ export async function exec(command: string, cwd: string): Promise<string> {
     child.stdout.on("data", take);
     child.stderr.on("data", take);
     let timedOut = false;
+    const killGroup = () => {
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      process.kill(-child.pid!, "SIGKILL");
+      killGroup();
     }, TIMEOUT_MS);
+    signal?.addEventListener("abort", killGroup, { once: true });
     child.on("error", (e) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", killGroup);
       reject(e);
     });
-    child.on("close", (code, signal) => {
+    child.on("close", (code, killedBy) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", killGroup);
+      if (signal?.aborted) return reject(new ToolError(STOPPED));
       const body = output.length > MAX_OUTPUT_CHARS || cut ? `${output.slice(0, MAX_OUTPUT_CHARS)}\n… (output cut)` : output;
       const status = timedOut
         ? `killed after ${TIMEOUT_MS / 1000} seconds`
-        : signal
-          ? `killed by ${signal}`
+        : killedBy
+          ? `killed by ${killedBy}`
           : `exit code ${code}`;
       resolve(`$ ${command}\n${body.trimEnd() || "(no output)"}\n[${status}]`);
     });
@@ -138,7 +164,7 @@ const runCommand: ToolSpec = {
       ...(reason ? { reason } : {}),
       ...(readOnly === undefined ? {} : { readOnly }),
     });
-    return exec(command, cwd);
+    return exec(command, cwd, ctx.signal);
   },
 };
 

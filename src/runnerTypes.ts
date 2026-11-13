@@ -36,6 +36,8 @@ export interface RunnerHandle {
   edit: (fn: (s: Session) => Session) => void;
   setError: (err: string | null) => void;
   setAbort: (c: AbortController | null) => void;
+  // Aborted by Stop everything: a tool call in flight is cut short too.
+  killSignal?: AbortSignal;
   askUser: (ask: Ask, signal: AbortSignal) => Promise<Answer>;
   // True while runPlan runs; the plan tool reads it (see planFromCall).
   planRunningRef: { current: boolean };

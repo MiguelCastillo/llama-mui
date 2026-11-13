@@ -114,6 +114,9 @@ export interface RunTurnCallbacks {
   setFailed: (err: string | null) => void;
   setUsage: (u: Usage | undefined) => void;
   setAbort: (c: AbortController | null) => void;
+  // Aborted by Stop everything (a forced stop): cuts short a tool call that is
+  // running, which a plain Stop lets finish.
+  killSignal?: AbortSignal;
   refreshModels: (id: string) => void;
   askUser: (ask: { needsAccess: AccessRequest } | { needsApproval: Approval } | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }, signal: AbortSignal) => Promise<boolean | "plan" | Picked[]>;
   attach: (a: Attachment) => void;
@@ -220,7 +223,7 @@ export async function runTurn(
     history: baseHistory, forgotten, attached: attachedBase,
     chatId, controller, started, text, images, imagesBase64, replyTo, clearCount,
   } = config;
-  const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setWorkingDir, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, setPlanSummary, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext, planSummary } = callbacks;
+  const { setMessages, setError, setFailed, setUsage, setAbort, killSignal, refreshModels, askUser, attach, setWorkingDir, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, setPlanSummary, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext, planSummary } = callbacks;
 
   const tag = { ...(planStep ? { planStep } : {}), ...(config.aside ? { aside: true } : {}) };
   const noteText = config.note ?? (planning ? PLANNING_NOTE : undefined);
@@ -362,7 +365,7 @@ export async function runTurn(
             );
           }
 
-          let outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model });
+          let outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model }, killSignal);
           while (!("result" in outcome)) {
             // Only a chat with no working directory offers to make the folder one.
             if ("needsLocation" in outcome && workingDir === null && outcome.needsLocation.kind === "folder") {
@@ -417,7 +420,7 @@ export async function runTurn(
               }
               attached = [...attached, target.path];
               attach({ path: target.path, kind: target.kind, source: "request" });
-              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model });
+              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model }, killSignal);
             } else {
               const approval = (outcome as any).needsApproval;
               if (!answer) {
@@ -434,12 +437,14 @@ export async function runTurn(
                 break;
               }
               if (approval.type === "change") diff = approval.diff;
-              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model, approved: approval as Approval });
+              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model, approved: approval as Approval }, killSignal);
             }
           }
           result = outcome.result;
         } catch (e: any) {
-          result = `Error: ${e.message}`;
+          result = killSignal?.aborted
+            ? "Error: the user stopped everything while this ran, so it was cut short and may have done part of its work"
+            : `Error: ${e.message}`;
         }
 
         if (CHANGES_DISK.has(call.name) && !result.startsWith("Error:")) ran.clear();

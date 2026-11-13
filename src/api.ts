@@ -300,11 +300,12 @@ export function setApiOrigin(origin: string | null) {
 
 const originOf = () => apiOrigin ?? location.origin;
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(apiOrigin ? apiOrigin + path : path, {
     method,
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(data.error ?? `${method} ${path}: ${res.status} ${res.statusText}`, res.status, data);
@@ -721,8 +722,10 @@ export interface ToolCallContext {
   connectorId?: string;
   model?: string;
 }
-export const runTool = (c: ToolCall, context: ToolCallContext) =>
-  call<ToolOutcome>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments, ...context });
+// The signal cuts the call short (Force stop): the server then stops what the
+// tool started, such as a running command (see /api/tools/call).
+export const runTool = (c: ToolCall, context: ToolCallContext, signal?: AbortSignal) =>
+  call<ToolOutcome>("POST", "/api/tools/call", { name: c.name, arguments: c.arguments, ...context }, signal);
 
 // A saved chat: everything needed to reopen it where it was left.
 // What the user chose to approve for the rest of a session without being asked

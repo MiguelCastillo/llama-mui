@@ -53,6 +53,8 @@ export interface RunState {
   notes?: RunNote[];
   // A request is in flight (a step's reply or its check).
   streaming?: boolean;
+  // Stop was pressed and the run is finishing what is in flight.
+  stopping?: boolean;
   // A side question is being answered beside the plan (see aside.ts).
   aside?: boolean;
   // What went wrong, in the run's plain words (never a key: the run doesn't have one).
@@ -282,7 +284,7 @@ export function beginRun(
 // whether a request is in flight and the error shown (`error: null` clears it).
 export function updateRun(
   id: string,
-  patch: { status?: RunStatus; ask?: RunAsk | null; streaming?: boolean; aside?: boolean; error?: string | null; notes?: RunNote[] },
+  patch: { status?: RunStatus; ask?: RunAsk | null; streaming?: boolean; stopping?: boolean; aside?: boolean; error?: string | null; notes?: RunNote[] },
 ): Promise<RunState> {
   return locked(id, async () => {
     const live = runs.get(id);
@@ -295,6 +297,10 @@ export function updateRun(
     if (patch.streaming !== undefined) {
       if (patch.streaming) live.state.streaming = true;
       else delete live.state.streaming;
+    }
+    if (patch.stopping !== undefined) {
+      if (patch.stopping) live.state.stopping = true;
+      else delete live.state.stopping;
     }
     if (patch.aside !== undefined) {
       if (patch.aside) live.state.aside = true;

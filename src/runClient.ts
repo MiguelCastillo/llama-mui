@@ -63,6 +63,7 @@ interface WireRun {
   kind?: "turn";
   ask?: { id: string; kind: "access" | "location" | "approval"; details: any };
   streaming?: boolean;
+  stopping?: boolean;
   // A side question is being answered.
   aside?: boolean;
   error?: string;
@@ -145,6 +146,7 @@ function viewOf(l: Live): RunnerView {
     ask: askOf(l),
     error: l.commandError ?? l.run.error ?? null,
     streaming: !!l.run.streaming,
+    stopping: !!l.run.stopping,
     aside: !!l.run.aside,
     startedAt: l.run.startedAt,
     notes: (l.run.notes ?? []).map(({ id, text, step }) => ({ id, text, step })),
@@ -387,11 +389,13 @@ export async function startRun(id: string, options: RunOptions): Promise<string>
   return sessionId;
 }
 
-// Stop is immediate: the plan card's Pause, and a reply's Stop. The plan stays.
-// Answers once the run is over and its final session is in hand (see
-// subscribe), so what the page does next starts from that.
-export async function stop(id: string): Promise<void> {
-  await quiet(sendCommand(id, "stop"));
+// Stop: the plan card's Pause, and a reply's Stop. The model's request ends at
+// once; a tool call that is running is let finish, unless `force` (Stop
+// everything), which cuts it short. The plan stays. Answers once the run is
+// over and its final session is in hand (see subscribe), so what the page does
+// next starts from that.
+export async function stop(id: string, opts: { force?: boolean } = {}): Promise<void> {
+  await quiet(sendCommand(id, "stop", opts.force ? { force: true } : {}));
   await waitUntil(() => !lives.has(id) && !ending.has(id), STOP_WAIT_MS);
 }
 

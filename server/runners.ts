@@ -113,6 +113,9 @@ interface Entry {
   closing: boolean;
   controller: AbortController | null;
   stopRequested: boolean;
+  // Aborted by a forced stop (Stop everything): it cuts short what a plain
+  // Stop lets finish, such as a tool call that is running.
+  kill: AbortController;
   ended: boolean;
   // Dropped by resetRunners (tests): nothing is reported for it.
   discarded: boolean;
@@ -172,6 +175,7 @@ function sync(e: Entry): Promise<void> {
       status: statusOf(e),
       ask: e.ask ? askToPlain(e.ask.id, e.ask.ask) : null,
       streaming: e.controller !== null,
+      stopping: e.stopRequested,
       aside: e.aside !== null,
       error: e.error,
       notes: e.notes,
@@ -521,6 +525,7 @@ async function launch(
     closing: false,
     controller: null,
     stopRequested: false,
+    kill: new AbortController(),
     ended: false,
     discarded: false,
     runningStep: null,
@@ -530,7 +535,7 @@ async function launch(
     saveAgain: false,
     debounce: null,
     maxWait: null,
-    pushed: JSON.stringify({ status: "running", ask: null, streaming: false, aside: false, error: null, notes: [] }),
+    pushed: JSON.stringify({ status: "running", ask: null, streaming: false, stopping: false, aside: false, error: null, notes: [] }),
     chain: Promise.resolve(),
   } as unknown as Entry;
 
@@ -568,6 +573,7 @@ async function launch(
       if (c && e.stopRequested) c.abort();
       sync(e);
     },
+    killSignal: e.kill.signal,
     askUser: (ask, signal) => askUser(e, ask, signal),
     planRunningRef: planRunning,
     planRef,
@@ -734,12 +740,16 @@ async function startQueued(id: string, item: QueuedMessage, start: RunnerDeps["n
 
 // ── commands ─────────────────────────────────────────────────────────────────
 
-// Stop is immediate (it is the card's Pause, and a reply's Stop): the request
-// is aborted and a pending ask is turned down. The run is over once runPlan
-// returns; the step in flight goes back to pending, with the note "Paused",
-// and the plan stays for `run` to pick up. Answers when the run is over, or after
-// STOP_WAIT_MS if it still isn't (it goes on stopping).
-export async function stopRun(id: string) {
+// Stop (the card's Pause, and a reply's Stop): the model's request is aborted
+// and a pending ask is turned down, but a tool call that is running is let
+// finish, so what it did is recorded; the run ends after it. Forced (Stop
+// everything, held down on the page) that tool call is cut short too: the
+// server stops what it started, such as a command (see /api/tools/call). A
+// forced stop can follow a plain one that is still waiting. The run is over
+// once runPlan returns; the step in flight goes back to pending, with the note
+// "Paused", and the plan stays for `run` to pick up. Answers when the run is
+// over, or after STOP_WAIT_MS if it still isn't (it goes on stopping).
+export async function stopRun(id: string, opts: { force?: boolean } = {}) {
   const e = liveEntry(id);
   if (!e.stopRequested) {
     e.stopRequested = true;
@@ -749,6 +759,7 @@ export async function stopRun(id: string) {
     e.ask?.decide(false);
     sync(e);
   }
+  if (opts.force) e.kill.abort();
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([e.done, new Promise<void>((resolve) => (timer = setTimeout(resolve, STOP_WAIT_MS)))]);
   clearTimeout(timer);
@@ -784,7 +795,7 @@ export async function answerAsk(id: string, askId: string, answer: Answer) {
 // config change): its runs end properly, with their last save, instead of being
 // left running with no server to hold them.
 export async function stopAllRuns() {
-  await Promise.all([...store.keys()].map((id) => stopRun(id).catch(() => {})));
+  await Promise.all([...store.keys()].map((id) => stopRun(id, { force: true }).catch(() => {})));
 }
 
 // For tests: drops every entry without saving, and lets the hub go of the sessions.

@@ -290,7 +290,8 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
         }
         break;
       }
-      await runners.stopRun(id);
+      // force: Stop everything, which also cuts short a tool call that is running.
+      await runners.stopRun(id, { force: body.force === true });
       break;
     case "message": {
       const images = body.images;

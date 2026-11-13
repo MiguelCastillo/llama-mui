@@ -1,5 +1,6 @@
 import { Fragment, memo, useCallback, type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import ChatUsageButton from "./ChatUsageButton";
+import { StopButton } from "./StopButton";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import { isImageFile, prepareImage, revokePreview } from "./images";
 import { attachButton, refusedImages, unsentImages } from "./imageRule";
@@ -2518,6 +2519,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             // Stop here is for a reply that is streaming. A plan run is paused
             // from its card, and the box keeps Send for messages to it.
             onStop={turnRunning ? () => showFailure(stopRunner(sessionId)) : undefined}
+            // Held down (or tapped again while stopping): also cuts short a running tool call.
+            onStopAll={turnRunning ? () => showFailure(stopRunner(sessionId, { force: true })) : undefined}
+            stopping={turnRunning && !!runnerView?.stopping}
             disabled={!model && !planRunning}
             planRunning={planRunning}
             tellPlan={tellPlan}
@@ -2594,6 +2598,8 @@ function Composer({
   editing,
   onCancelEdit,
   onStop,
+  onStopAll,
+  stopping,
   disabled,
   folder,
   persona,
@@ -2636,6 +2642,10 @@ function Composer({
   onCancelEdit: () => void;
   // Stops the reply that is streaming; Send turns into Stop while it is set.
   onStop?: () => void;
+  // Stop everything: also cuts short a tool call that is running (see StopButton).
+  onStopAll?: () => void;
+  // Stop was sent and the reply is finishing a tool call that is running.
+  stopping?: boolean;
   disabled: boolean;
   // Whether a plan is running (attach button disabled with explanation).
   planRunning: boolean;
@@ -3046,15 +3056,14 @@ function Composer({
         {approvals}
         {context}
         {onStop || onStopAside ? (
-          <Tooltip title={onStop ? "Stop the reply (Esc)" : "Stop the side question (the plan goes on)"}>
-            <IconButton
-              aria-label={onStop ? "Stop" : "Stop the side question"}
-              onClick={onStop ?? onStopAside}
-              sx={{ ...roundButtonSx, border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
-            >
-              <StopIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
+          <StopButton
+            title={onStop ? "Stop the reply (Esc)" : "Stop the side question (the plan goes on)"}
+            label={onStop ? "Stop" : "Stop the side question"}
+            onStop={(onStop ?? onStopAside)!}
+            onStopAll={onStop ? onStopAll : undefined}
+            stopping={!!onStop && stopping}
+            sx={{ ...roundButtonSx, border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
+          />
         ) : (
           <Tooltip title={enterSends ? "Send (Enter)" : "Send"}>
             <span>
