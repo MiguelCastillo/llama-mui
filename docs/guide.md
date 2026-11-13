@@ -647,10 +647,20 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
 ### Personas
 
 A persona is a way of working the model is told to follow in one chat, kept
-as a plain text file you can edit. It is the part of the built-in way of
+as a plain text file that ships with the app. It is the part of the built-in way of
 working that suits one kind of job, such as checking your work and planning
 before changing files, so it can differ from one persona to another. Tone
 and personal preferences still belong in your own rules.
+
+**Design principle: write personas for the job, not for the model's
+weaknesses.** A persona describes the role: what the job is, what done looks
+like, and what someone in that role cares about. It is not a list of patches
+for things a model tends to get wrong, such as guessing or giving up early.
+Those patches go stale as models improve, they crowd every chat, and they
+make the persona read as a correction instead of a role. A line belongs in a
+persona if it would still make sense for a person doing the same job, or for a
+different model. When a line is there to fix a habit, say what the job needs
+instead (for example, "base claims on what you have just checked").
 
 - **Where they live.** One file per persona, ending in `.md`, in the app's
   `personas` folder at the top of the project. They ship with the app and
