@@ -625,15 +625,6 @@ export const getToolContext = (
     ...(persona ? { persona } : {}),
     ...(personaText !== undefined ? { personaText } : {}),
   });
-// The agent's own rules (~/.llama-mui/rules.md); Settings → Agent.
-export interface Rules {
-  text: string;
-  // No file yet: this is the built-in default.
-  isDefault: boolean;
-}
-export const getRules = () => call<Rules>("GET", "/api/rules");
-export const saveRules = (text: string) => call<Rules>("PUT", "/api/rules", { text });
-export const resetRules = () => call<Rules>("DELETE", "/api/rules");
 
 // Using llama-mui from a phone (see server/phones.ts). Managing is for the
 // computer running it; a phone only ever calls pairDevice.

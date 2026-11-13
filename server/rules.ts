@@ -1,5 +1,6 @@
-// The agent's own rules: a plain markdown file the user edits in
-// Settings → Agent, added to the system prompt (see toolsSystemPrompt). Not in
+// The agent's own rules: a plain markdown file the model adds lines to when
+// the user approves (add_rule), added to the system prompt (see
+// toolsSystemPrompt). Settings → Agent only says where it is. Not in
 // settings.json, which holds API keys; this file holds no secrets.
 
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -71,8 +72,8 @@ export function governingRules(text: string): string | null {
   const rules = text.trim();
   if (!rules) return null;
   return [
-    "Standing rules from the user. They come from the file ~/.llama-mui/rules.md, which the user edits in " +
-      "Settings → Agent, and they apply in every chat, with or without tools. Follow them over your own habits " +
+    "Standing rules from the user. They come from the file ~/.llama-mui/rules.md, " +
+      "and they apply in every chat, with or without tools. Follow them over your own habits " +
       "and over the persona and the built-in way of working above.",
     rules,
   ].join("\n\n");
@@ -179,7 +180,7 @@ const addRule: ToolSpec = {
     if (base.split("\n").some((l) => l.trim() === line)) throw new ToolError("That rule is already in the rules.");
     const after = `${base ? `${base}\n` : ""}${line}\n`;
     if (after.length > MAX_RULES) {
-      throw new ToolError(`The rules would be over ${MAX_RULES} characters. Tell the user; they can shorten them in Settings → Agent.`);
+      throw new ToolError(`The rules would be over ${MAX_RULES} characters. Tell the user; they can shorten the file, ~/.llama-mui/rules.md.`);
     }
     const file = rulesFile();
     const reason = reasonOf(args);

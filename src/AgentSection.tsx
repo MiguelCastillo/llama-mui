@@ -1,19 +1,15 @@
 import { useEffect, useState } from "react";
-import { Alert, Box, Button, CircularProgress, Stack, TextField, Typography } from "@mui/material";
-import { type PersonaList, type Rules, getPersonas, getRules, resetRules, saveRules, setDefaultPersona } from "./api";
+import { Alert, Box, Stack, Typography } from "@mui/material";
+import { type PersonaList, getPersonas, setDefaultPersona } from "./api";
 import PersonaDefault from "./PersonaDefault";
 
-// Same limit as the server's, so the box can say so before Save.
-const MAX_CHARS = 20_000;
-
-// The agent's own rules, kept in ~/.llama-mui/rules.md.
+// Settings → Agent: the persona new chats start with, and where the user's own
+// rules are kept. The rules aren't edited here: the model proposes a line and
+// the user approves it (add_rule), and the file is plain text for anyone who
+// wants to change it by hand.
 export default function AgentSection() {
-  const [saved, setSaved] = useState<Rules | null>(null);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
   const [personas, setPersonas] = useState<PersonaList | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     getPersonas()
@@ -28,36 +24,9 @@ export default function AgentSection() {
       .catch((e) => setError(e.message));
   };
 
-  const show = (i: Rules) => {
-    setSaved(i);
-    setText(i.text);
-  };
-
-  useEffect(() => {
-    getRules()
-      .then(show)
-      .catch((e) => setError(e.message));
-  }, []);
-
-  const run = (action: Promise<Rules>) => {
-    setBusy(true);
-    setError(null);
-    action
-      .then(show)
-      .catch((e) => setError(e.message))
-      .finally(() => setBusy(false));
-  };
-
   return (
     <Stack spacing={2}>
-      <Box>
-        <Typography variant="h5">Agent</Typography>
-        <Typography color="text.secondary">
-          Your own rules for the model, in every chat. They tune its built-in way of working and win where they
-          differ. Plain text, kept in{" "}
-          <code>~/.llama-mui/rules.md</code>; empty means none. The model can propose a line to add, and you approve it.
-        </Typography>
-      </Box>
+      <Typography variant="h5">Agent</Typography>
 
       {error && (
         <Alert severity="error" onClose={() => setError(null)}>
@@ -75,32 +44,13 @@ export default function AgentSection() {
         />
       )}
 
-
-      {!saved ? (
-        <CircularProgress sx={{ alignSelf: "center" }} />
-      ) : (
-        <>
-          <TextField
-            label="Rules"
-            multiline
-            minRows={6}
-            maxRows={24}
-            fullWidth
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            error={text.length > MAX_CHARS}
-            helperText={`${text.length} / ${MAX_CHARS} characters. Changes apply from the next message.`}
-          />
-          <Stack direction="row" spacing={1}>
-            <Button variant="contained" disabled={busy || text === saved.text || text.length > MAX_CHARS} onClick={() => run(saveRules(text))}>
-              Save
-            </Button>
-            <Button disabled={busy || saved.isDefault} onClick={() => run(resetRules())}>
-              Reset to default
-            </Button>
-          </Stack>
-        </>
-      )}
+      <Box>
+        <Typography variant="h6">Your rules</Typography>
+        <Typography color="text.secondary">
+          Rules you've kept for every chat are in <code>~/.llama-mui/rules.md</code>. When you ask the model to
+          remember something, it proposes a line and you approve it.
+        </Typography>
+      </Box>
     </Stack>
   );
 }

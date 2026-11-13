@@ -609,16 +609,18 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   "Your action: …" lines. Behaviour every user would want belongs in the
   start or baseline, not in a rules file.
 - **Your rules** tune that and govern the model; tools are only
-  helpers under them. They are a plain file, `~/.llama-mui/rules.md`,
-  edited in Settings → Agent. They come right after the persona,
+  helpers under them. They are a plain file, `~/.llama-mui/rules.md`. When
+  you ask the model to remember something it proposes one line and you
+  approve it (`add_rule`); you can also edit the file by hand. Settings →
+  Agent only says where it is. They come right after the persona,
   under a heading that says they are your standing rules, where the
   file is, that they apply in every chat, with or without tools, and that they
   win over the persona and the built-in way of working. Clearing the context doesn't remove them: they aren't
   part of the history, and the file is read again on every message. Without
-  the file, or with an empty one, there are no rules of your own, and "Reset to default" deletes the file. The file
+  the file, or with an empty one, there are no rules of your own. The file
   used to be called `instructions.md`: if there is no `rules.md` the server
   copies that one over, once, and leaves the old file alone (so a server
-  still running the old code keeps working); "Reset to default" removes both.
+  still running the old code keeps working).
   Unlike the working directory they aren't fixed per session, so a change
   applies from the next message and makes the model reprocess the start of
   that chat once. The model can add a rule with `add_rule` (the
