@@ -160,7 +160,7 @@ import MarkdownRenderer from "./MarkdownRenderer";
 import RecentFolders from "./RecentFolders";
 import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
 import {
-  DO_IT_MESSAGE,
+  doItMessage,
   doItDisabled,
  doItPress,
   hasDoIt,
@@ -1845,7 +1845,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       const press = doItPress(now, at, box.note);
       if (!press.send) return;
       updateSession({ messages: press.messages });
-      void send(DO_IT_MESSAGE, undefined, () => {}, press.messages).then((went) => {
+      void send(doItMessage(box), undefined, () => {}, press.messages).then((went) => {
         if (!went && openId.current === id) updateSession((s) => ({ messages: setNoteDone(s.messages, at, box.note, false) }));
       });
     },
@@ -3182,7 +3182,7 @@ const MessageBubble = memo(function MessageBubble({
   // Session id, for building image URLs.
   sessionId?: string;
   // Whether any reply is streaming (the Do it button waits), and what the
-  // button does: send "yes, go ahead" as the next message.
+  // button does: send "Yes, go ahead with this: <the item's text>" as the next message.
   replyRunning?: boolean;
   onDoIt?: (parts: ChatMessage[], box: NoteBox) => void;
   // Mark a box done, or open again (Mark done / Reopen). Waits while a reply

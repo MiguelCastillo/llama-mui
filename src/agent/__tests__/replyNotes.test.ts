@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage, Todo, ToolCall } from "../../api";
 import { NOTE_KINDS } from "../../replyNoteKinds";
-import { addNote, DO_IT_MESSAGE, doItDisabled, doItPress, hasDoIt, hasDone, setNoteDone, ideaTodo, isNoteTool, noteBoxes, noteFromCall, noteLabel, notesOf, offersOf, planMessage, shownCalls, todoAdded, type NoteBox } from "../replyNotes";
+import { addNote, doItMessage, doItDisabled, doItPress, hasDoIt, hasDone, setNoteDone, ideaTodo, isNoteTool, noteBoxes, noteFromCall, noteLabel, notesOf, offersOf, planMessage, shownCalls, todoAdded, type NoteBox } from "../replyNotes";
 
 const call = (name: string, args: object): ToolCall => ({ id: "t", name, arguments: JSON.stringify(args) });
 const reply: ChatMessage = { role: "assistant", content: "Done." };
@@ -147,8 +147,8 @@ describe("the boxes' labels and button", () => {
     expect(hasDoIt(idea)).toBe(false);
   });
 
-  it("sends 'yes, go ahead' and is disabled while a reply streams", () => {
-    expect(DO_IT_MESSAGE).toBe("yes, go ahead");
+  it("sends a yes that quotes the item, and is disabled while a reply streams", () => {
+    expect(doItMessage(can)).toBe(`Yes, go ahead with this: ${can.text}`);
     expect(doItDisabled(true)).toBe(true);
     expect(doItDisabled(false)).toBe(false);
   });

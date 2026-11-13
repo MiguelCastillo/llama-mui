@@ -128,8 +128,9 @@ export function noteBoxes(parts: ChatMessage[]): NoteBox[] {
 // The label on a box.
 export const noteLabel = (box: NoteBox) => kindById(box.kind)?.label ?? box.kind;
 
-// What the "Do it" button sends as the next message.
-export const DO_IT_MESSAGE = "yes, go ahead";
+// What the "Do it" button sends as the next message: a yes that quotes the
+// box's own text, so the model knows which item was approved.
+export const doItMessage = (box: NoteBox) => `Yes, go ahead with this: ${box.text}`;
 
 // Whether a box has a "Do it" button, and whether it can be pressed now (not
 // while a reply streams: the server would refuse the message).
