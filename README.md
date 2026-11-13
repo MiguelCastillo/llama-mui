@@ -62,7 +62,14 @@ reply. Nothing is estimated or counted by the app.
 A reply that calls tools makes several requests; their counts are added up into
 one line for the turn, and a stopped or failed reply still logs what it used.
 The provider is the name of the connector the chat used. A server that reports
-no counts adds no line, so its use shows as zero. The context percentage under
+no counts adds no line, so its use shows as zero.
+
+A line also says what leaving old tool results out did (see "Old tool
+results" in the guide): `clearedResults` and `clearedTokens`, summed over the
+turn's requests, and `rereads`, the tool calls that asked again for a result
+that had been left out. On Anthropic the cleared counts are its own; on
+llama.cpp `clearedTokens` is estimated from the results' length, the one
+number here the app works out itself. The context percentage under
 the message box is separate: it shows the size of the latest request, not a
 running total.
 

@@ -229,3 +229,45 @@ describe("reading a settings object that may be older", () => {
     expect(readModelOptions(undefined)).toEqual({});
   });
 });
+
+describe("old tool results", () => {
+  const withClearing = readCapabilities({
+    capabilities: {
+      thinking: { types: { adaptive: { supported: true } } },
+      context_management: { supported: true, clear_tool_uses_20250919: { supported: true } },
+    },
+  });
+
+  it("Claude: read from the model's capabilities, and unknown when the API doesn't say", () => {
+    expect(withClearing.clearsToolResults).toBe(true);
+    expect(readCapabilities({ capabilities: {} }).clearsToolResults).toBeUndefined();
+  });
+
+  it("Claude: asks Anthropic to clear old results, keeping the count it's given, with the beta header, only when the model can and the chat is long", () => {
+    expect(claude.fields({}, PURPOSES[0], withClearing)).not.toHaveProperty("context_management");
+    const fields = claude.fields({}, PURPOSES[0], withClearing, 5) as any;
+    expect(fields.context_management).toEqual({
+      edits: [
+        {
+          type: "clear_tool_uses_20250919",
+          trigger: { type: "input_tokens", value: 1024 },
+          keep: { type: "tool_uses", value: 5 },
+        },
+      ],
+    });
+    expect(fields.context_management.edits[0]).not.toHaveProperty("clear_at_least");
+    expect(fields.context_management.edits[0]).not.toHaveProperty("exclude_tools");
+    // Given how many to keep (toolResultsToKeep), it sends that, even none.
+    const keep = (n: number) => (claude.fields({}, PURPOSES[0], withClearing, n) as any).context_management.edits[0].keep.value;
+    expect([0, 3, 12].map(keep)).toEqual([0, 3, 12]);
+    expect(claude.headers(withClearing)).toEqual({ "anthropic-beta": "context-management-2025-06-27" });
+    expect(claude.fields({}, PURPOSES[0], { adaptiveThinking: true, efforts: [] }, 5)).not.toHaveProperty("context_management");
+    expect(claude.headers(undefined)).toEqual({});
+    expect(claude.clearsToolResultsHere).toBe(false);
+  });
+
+  it("llama.cpp: no field or header; the app leaves them out itself", () => {
+    expect(llama.headers()).toEqual({});
+    expect(llama.clearsToolResultsHere).toBe(true);
+  });
+});

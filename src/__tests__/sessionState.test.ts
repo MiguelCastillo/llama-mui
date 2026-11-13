@@ -150,6 +150,7 @@ describe("sessionState", () => {
       promptDir: "/p",
       persona: "Reviewer",
       personaText: "Look, don't touch.",
+      toolResultCut: { from: 0, count: 10, lastRequestAt: 1 },
       usage: { total: 1 },
       failed: "boom",
       modelName: "Named",
@@ -207,7 +208,7 @@ describe("sessionState", () => {
     const all: Record<keyof Session, true> = {
       id: true, title: true, model: true, connectorId: true, messages: true, contextStart: true, attachments: true,
       workingDir: true, usage: true, failed: true, plan: true, planProposal: true, planContext: true,
-      planSummary: true, planAnchor: true, planId: true, pastPlans: true, promptDir: true, persona: true, personaText: true, modelName: true,
+      planSummary: true, planAnchor: true, planId: true, pastPlans: true, promptDir: true, persona: true, personaText: true, toolResultCut: true, modelName: true,
       userName: true, group: true, todos: true, parentId: true, threads: true, autoApprove: true,
       titleHint: true, planMovedIn: true, revision: true, run: true, queue: true, queuePaused: true,
     };

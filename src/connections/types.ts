@@ -38,6 +38,9 @@ export interface Capabilities {
   maxOutput?: number;
   deprecated?: boolean; // Anthropic has marked it deprecated
   retiresAt?: string; // when it stops answering, as the API gives it
+  // Claude's: Anthropic can clear old tool results on its side (context
+  // editing's clear_tool_uses), so the request asks it to (see toolResults.ts).
+  clearsToolResults?: boolean;
   // llama.cpp's: the reasoning_effort values its template renders distinctly,
   // lowest first. Not used for anything yet; empty for Qwen.
   reasoningEffortLevels?: string[];
@@ -85,8 +88,16 @@ export interface Connection {
   // values are checked for shape only.
   validate(raw: unknown, caps?: Capabilities): ModelOptions;
   // The request fields for these settings and this purpose. Settings may be
-  // missing (a background call has none).
-  fields(options: ModelOptions | undefined, purpose: Purpose, caps?: Capabilities): Record<string, unknown>;
+  // missing (a background call has none). `keepToolResults` is how many of the
+  // newest tool results the request sends whole (all but requestCount in
+  // toolResults.ts), for a server that clears the others itself; left out
+  // while nothing is cleared.
+  fields(options: ModelOptions | undefined, purpose: Purpose, caps?: Capabilities, keepToolResults?: number): Record<string, unknown>;
+  // Headers the request needs for those fields (a beta a field belongs to).
+  headers(caps?: Capabilities): Record<string, string>;
+  // Whether the app leaves old tool results out of the request itself (see
+  // clearOldToolResults in toolResults.ts). False where the server does it.
+  clearsToolResultsHere: boolean;
 }
 
 // Reads a settings object that may be older: before ModelOptions a message

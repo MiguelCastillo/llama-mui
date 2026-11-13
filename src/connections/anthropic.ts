@@ -1,3 +1,4 @@
+
 import { EFFORTS, type Capabilities, type Connection, type Effort, InvalidOptions, isEffort } from "./types.ts";
 
 // Anthropic's API. What a model takes comes from its own capabilities (the
@@ -16,6 +17,24 @@ import { EFFORTS, type Capabilities, type Connection, type Effort, InvalidOption
 //
 // Effort: output_config.effort, only when a level is set and the model
 // supports that level.
+//
+// Old tool results: Anthropic clears them on its side (context editing,
+// clear_tool_uses, a beta), because Claude's thinking signatures are bound to
+// the exact history and an edit by llama-mui would break them; Anthropic's
+// own clearing doesn't. Only for a model that reports the strategy, and only
+// when llama-mui has decided some results go (requestCount in toolResults.ts,
+// which also decides when the cut may move without breaking the cache).
+// `keep` is the rest. The trigger is far below any real prompt: measured, with
+// a trigger near the prompt's size Anthropic stops clearing once the prompt
+// is under it, so how many it clears drifts between requests; with a low one
+// it clears exactly all but `keep`. No exclude_tools, so Anthropic counts
+// exactly what toolResults.ts counts. No clear_at_least: when a request can't
+// clear that much, nothing is cleared for it at all. See docs/guide.md, "Old
+// tool results".
+
+// The beta context editing belongs to (docs: build-with-claude/context-editing).
+export const CONTEXT_EDITING_BETA = "context-management-2025-06-27";
+const CLEAR_TRIGGER_TOKENS = 1024;
 
 // A "supported" flag the API reports, or undefined when it doesn't say.
 const flag = (x: any): boolean | undefined => (typeof x?.supported === "boolean" ? x.supported : undefined);
@@ -41,6 +60,7 @@ export function readCapabilities(model: any): Capabilities {
   set("thinking", flag(c.thinking));
   set("contextSize", count(model?.max_input_tokens));
   set("maxOutput", count(model?.max_tokens));
+  set("clearsToolResults", flag(c.context_management?.clear_tool_uses_20250919));
   if (model?.lifecycle === "deprecated" || model?.lifecycle === "retired") out.deprecated = true;
   set("retiresAt", typeof model?.retires_at === "string" ? model.retires_at : undefined);
   return out;
@@ -81,13 +101,30 @@ export const anthropic: Connection = {
     return { effort: o.effort as Effort };
   },
 
-  fields(options, _purpose, caps) {
+  fields(options, _purpose, caps, keepToolResults) {
     return {
       ...(caps?.adaptiveThinking ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
       ...(options?.effort && caps?.efforts.includes(options.effort) ? { output_config: { effort: options.effort } } : {}),
       // Caches the conversation so far: each tool round resends it all, and
       // cached tokens cost a tenth.
       cache_control: { type: "ephemeral" },
+      ...(caps?.clearsToolResults && keepToolResults !== undefined
+        ? {
+            context_management: {
+              edits: [
+                {
+                  type: "clear_tool_uses_20250919",
+                  trigger: { type: "input_tokens", value: CLEAR_TRIGGER_TOKENS },
+                  keep: { type: "tool_uses", value: keepToolResults },
+                },
+              ],
+            },
+          }
+        : {}),
     };
   },
+
+  headers: (caps): Record<string, string> => (caps?.clearsToolResults ? { "anthropic-beta": CONTEXT_EDITING_BETA } : {}),
+  // Anthropic clears them (context_management in fields).
+  clearsToolResultsHere: false,
 };

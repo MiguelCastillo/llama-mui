@@ -230,6 +230,13 @@ describe("requests to a model server", () => {
 });
 
 describe("usageReader", () => {
+  it("reads what Anthropic's context editing cleared from the last message_delta", () => {
+    const r = usageReader();
+    r.feed('data: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":5,"output_tokens":1}}}\n');
+    r.feed('data: {"type":"message_delta","usage":{"output_tokens":9},"context_management":{"applied_edits":[{"type":"clear_tool_uses_20250919","cleared_tool_uses":8,"cleared_input_tokens":50000}]}}\n');
+    expect(r.result()).toMatchObject({ output: 9, clearedToolUses: 8, clearedTokens: 50000 });
+  });
+
   it("reads the counts however the stream is cut, one character at a time included", () => {
     const r = usageReader();
     for (const ch of MESSAGES_STREAM) r.feed(ch);

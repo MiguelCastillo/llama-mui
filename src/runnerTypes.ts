@@ -59,4 +59,11 @@ export interface TurnUsage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  // Old tool results left out of the turn's requests, summed over them (a
+  // result left out of three requests counts three times: it saved tokens
+  // three times), the tokens that saved, and the calls that asked again for
+  // one (see src/toolResults.ts).
+  clearedResults: number;
+  clearedTokens: number;
+  rereads: number;
 }

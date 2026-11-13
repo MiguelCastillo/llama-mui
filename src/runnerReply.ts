@@ -10,6 +10,7 @@ import { askForSessionName } from "./agent/sessionNaming.ts";
 import { splitAsides, weaveAsides } from "./asides.ts";
 import { withFrozenPersona } from "./persona.ts";
 import { threadsUpdate } from "./planThread.ts";
+import { requestCount, turnCount } from "./toolResults.ts";
 import type { RunnerHandle } from "./runnerTypes.ts";
 
 // The paths of the attachments, the extra files and folders the disk tools
@@ -78,6 +79,16 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     // of the message being sent (runTurn adds it to history later), read them
     // as base64, and build the map so streamChat gets the data (never saved).
     const history = before.slice(start);
+    // Old tool results this turn leaves out (src/toolResults.ts): decided once
+    // here, from where the cut stood after the chat's last turn, so every
+    // request of the turn starts as the one before it did. A plan step has a
+    // history of its own, and its requests decide for themselves.
+    const clearCount = planStep
+      ? undefined
+      : turnCount([...history, { role: "user", content: text }], first.toolResultCut, start, Date.now());
+    if (clearCount !== undefined) {
+      h.edit((s) => ({ ...s, toolResultCut: { from: start, count: clearCount, lastRequestAt: s.toolResultCut?.lastRequestAt ?? 0 } }));
+    }
     const imageMap: Record<string, string> = {};
     const refs = [...history.flatMap((m) => m.images ?? []), ...(images ?? [])];
     const tried = new Set<string>();
@@ -106,7 +117,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         return s.failed === f ? s : { ...s, failed: f };
       });
 
-    const consumed = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const consumed = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, clearedResults: 0, clearedTokens: 0, rereads: 0 };
     let counted = false;
 
     const callbacks: RunTurnCallbacks = {
@@ -118,13 +129,22 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
       },
       setUsage: (u) => {
         if (!u) return;
-        h.edit((s) => ({ ...s, usage: u }));
+        // A request has just finished: the cache lives five minutes from now.
+        h.edit((s) => ({
+          ...s,
+          usage: u,
+          ...(clearCount !== undefined && s.toolResultCut ? { toolResultCut: { ...s.toolResultCut, lastRequestAt: Date.now() } } : {}),
+        }));
         // A turn with tool calls makes several requests; add them up.
         if (u.inputTokens !== undefined || u.outputTokens !== undefined || u.cacheReadTokens !== undefined || u.cacheWriteTokens !== undefined) {
           consumed.input += u.inputTokens ?? 0;
           consumed.output += u.outputTokens ?? 0;
           consumed.cacheRead += u.cacheReadTokens ?? 0;
           consumed.cacheWrite += u.cacheWriteTokens ?? 0;
+          // What leaving old tool results out saved, and what it cost (toolResults.ts).
+          consumed.clearedResults += u.clearedResults ?? 0;
+          consumed.clearedTokens += u.clearedTokens ?? 0;
+          consumed.rereads += u.rereads ?? 0;
           counted = true;
         }
       },
@@ -194,9 +214,17 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         images,
         replyTo,
         imagesBase64: Object.keys(imageMap).length > 0 ? imageMap : undefined,
+        ...(clearCount !== undefined ? { clearCount } : {}),
       },
       callbacks,
     );
+
+    // Where the cut ended: further on if the turn was heavy on its own, so the
+    // next turn goes on from there instead of sending those results again.
+    if (clearCount !== undefined) {
+      const ended = requestCount(result.messages.slice(start), clearCount);
+      h.edit((s) => (s.toolResultCut && ended > s.toolResultCut.count ? { ...s, toolResultCut: { ...s.toolResultCut, count: ended } } : s));
+    }
 
     // One usage record per turn, even one that failed or was stopped: the
     // tokens were used. Nothing is written when the provider gave no counts.

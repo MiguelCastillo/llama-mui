@@ -17,8 +17,9 @@
 // A Messages API reply (`/v1/messages`, streamed) also gets the model and its
 // token counts, read from the stream's own usage events (see readUsage):
 // `tokens` is { input, cacheRead, cacheWrite, output }, which is what the bill
-// is made of (cacheWrite costs more than input, cacheRead much less). Nothing
-// of the reply's text is kept.
+// is made of (cacheWrite costs more than input, cacheRead much less), and
+// `cleared` says how many old tool results Anthropic left out of the request
+// and how many tokens that saved. Nothing of the reply's text is kept.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Readable } from "node:stream";
@@ -65,6 +66,10 @@ export interface Usage {
   cacheRead?: number;
   cacheWrite?: number;
   output?: number;
+  // What Anthropic's context editing left out of this request (old tool
+  // results, see src/toolResults.ts), when it did.
+  clearedToolUses?: number;
+  clearedTokens?: number;
 }
 // Only the lines that can carry usage are parsed; a content line can be long,
 // so a partial line longer than this is dropped rather than kept.
@@ -73,12 +78,18 @@ export function usageReader() {
   const usage: Usage = {};
   let partial = "";
   const take = (line: string) => {
-    if (!line.startsWith("data:") || !line.includes('"usage"')) return;
+    if (!line.startsWith("data:") || !(line.includes('"usage"') || line.includes('"applied_edits"'))) return;
     let e: any;
     try {
       e = JSON.parse(line.slice(5));
     } catch {
       return;
+    }
+    const edits = e?.type === "message_delta" ? e.context_management?.applied_edits : undefined;
+    if (Array.isArray(edits) && edits.length) {
+      const sum = (key: string) => edits.reduce((n: number, x: any) => n + (typeof x?.[key] === "number" ? x[key] : 0), 0);
+      usage.clearedToolUses = sum("cleared_tool_uses");
+      usage.clearedTokens = sum("cleared_input_tokens");
     }
     const u = e?.type === "message_start" ? e.message?.usage : e?.type === "message_delta" ? e.usage : undefined;
     if (e?.type === "message_start" && typeof e.message?.model === "string") usage.model = e.message.model;
@@ -168,6 +179,7 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
       ...(counted
         ? { tokens: { input: counted.input ?? 0, cacheRead: counted.cacheRead ?? 0, cacheWrite: counted.cacheWrite ?? 0, output: counted.output ?? 0 } }
         : {}),
+      ...(counted?.clearedToolUses ? { cleared: { toolUses: counted.clearedToolUses, tokens: counted.clearedTokens ?? 0 } } : {}),
       ...extra,
     });
   };

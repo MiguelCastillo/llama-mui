@@ -9,6 +9,7 @@ import OpenAI from "openai";
 import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 export { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 import { type Capabilities, type Effort, type ModelOptions, type Purpose, capabilitiesFromList, connection } from "./connections/index.ts";
+import { type Cleared, type CutState, clearOldToolResults, clearedBy, requestCount, rereads, resultCount } from "./toolResults.ts";
 export { EFFORTS, type Effort, isEffort, type ModelOptions, type Purpose, type Capabilities } from "./connections/index.ts";
 
 export type ModelStatus = "loaded" | "loading" | "unloaded" | string;
@@ -777,6 +778,10 @@ export interface Session {
   // fixed once the first message is sent (see src/persona.ts). Missing until
   // then, and in older chats, which use the default.
   persona?: string;
+  // Where the cut of old tool results stood after the last turn, and when the
+  // chat's last request went out (src/toolResults.ts). Missing until a chat
+  // is long; a Clear context starts it afresh.
+  toolResultCut?: CutState;
   // The persona's text as the system prompt has it: fixed at the first reply
   // and again after Clear context, like promptDir, so editing the file never
   // changes a running chat's prompt. Missing until then.
@@ -1040,6 +1045,13 @@ export interface Usage {
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  // Old tool results left out of this request (src/toolResults.ts): how many,
+  // and the tokens that saved (Anthropic's own count on Claude, an estimate on
+  // llama.cpp). Left out when nothing was.
+  clearedResults?: number;
+  clearedTokens?: number;
+  // The reply's tool calls that asked again for a result that was left out.
+  rereads?: number;
 }
 
 export interface StreamDelta {
@@ -1063,6 +1075,10 @@ export interface ChatRequest {
   // Image id → base64 data. Read per request from the server; never saved
   // into the session. Only meaningful on user messages.
   images?: Record<string, string>;
+  // How many of the oldest tool results this turn leaves out, decided once
+  // per turn from what the chat saved (turnCount in src/toolResults.ts). Left
+  // out, the request decides from its history alone.
+  clearCount?: number;
 }
 
 export interface ChatReply {
@@ -1079,12 +1095,34 @@ export interface ChatReply {
 // reject the request, so those are closed first.
 export async function streamChat(req: ChatRequest, onDelta: (d: StreamDelta) => void, signal: AbortSignal): Promise<ChatReply> {
   let repaired = { ...req, messages: closeOpenToolCalls(req.messages) };
+  // Old tool results aren't sent again (toolResults.ts): left out here, or by
+  // the server where it does that itself. The saved chat keeps them.
+  const here = connection(req.kind).clearsToolResultsHere;
+  const count = requestCount(repaired.messages, req.clearCount);
+  const cleared = clearedBy(repaired.messages, count, { skipSmall: here });
+  if (here) repaired = { ...repaired, messages: clearOldToolResults(repaired.messages, count) };
+  const keep = count > 0 ? resultCount(repaired.messages) - count : undefined;
   // A model that says it can't read images is never sent one, whatever the
   // chat holds (it was picked after the image went in, or is a plan's model).
   if (req.messages.some((m) => m.images?.length) && (await getCapabilities(req.connectorId, req.model, req.kind))?.images === false) {
     repaired = { ...repaired, messages: withoutImages(repaired.messages), images: undefined };
   }
-  return repaired.api === "openai" ? streamCompletions(repaired, onDelta, signal) : streamMessages(repaired, onDelta, signal);
+  const reply = await (repaired.api === "openai" ? streamCompletions(repaired, onDelta, signal) : streamMessages(repaired, onDelta, signal, keep));
+  return withClearing(reply, cleared, here);
+}
+
+// The reply's usage with what leaving old results out did (see Usage). On
+// Claude Anthropic's own counts win when it reported them.
+function withClearing(reply: ChatReply, cleared: Cleared, here: boolean): ChatReply {
+  if (!reply.usage) return reply;
+  const results = here ? cleared.results : (reply.usage.clearedResults ?? 0);
+  const tokens = here ? cleared.tokens : (reply.usage.clearedTokens ?? 0);
+  const again = rereads(cleared, reply.toolCalls);
+  const { clearedResults: _r, clearedTokens: _t, ...usage } = reply.usage;
+  return {
+    ...reply,
+    usage: { ...usage, ...(results ? { clearedResults: results, clearedTokens: tokens } : {}), ...(again ? { rereads: again } : {}) },
+  };
 }
 
 // The chat with each message's images taken out and a line saying so put in
@@ -1115,9 +1153,21 @@ function apiErrorMessage(e: InstanceType<typeof Anthropic.APIError>): string {
 // do. Without capabilities (the ask failed) a Claude request carries nothing
 // optional, so it can't be refused for a setting the model lacks.
 async function requestFields(connectorId: string, kind: Kind | undefined, model: string, options: ModelOptions | undefined, purpose: Purpose) {
+  return (await requestParts(connectorId, kind, model, options, purpose)).fields;
+}
+// The fields and the headers they need (a beta a field belongs to).
+// `keepToolResults`: how many of the newest tool results go whole (toolResults.ts).
+async function requestParts(
+  connectorId: string,
+  kind: Kind | undefined,
+  model: string,
+  options: ModelOptions | undefined,
+  purpose: Purpose,
+  keepToolResults?: number,
+) {
   const conn = connection(kind);
   const caps = conn.needsCapabilities ? await getCapabilities(connectorId, model, kind) : undefined;
-  return conn.fields(options, purpose, caps);
+  return { fields: conn.fields(options, purpose, caps, keepToolResults), headers: conn.headers(caps) };
 }
 
 // The SDK's key is a placeholder: the dev server's proxy replaces it with the
@@ -1126,6 +1176,8 @@ async function streamMessages(
   { connectorId, kind, model, messages, options, purpose, tools, images }: ChatRequest,
   onDelta: (d: StreamDelta) => void,
   signal: AbortSignal,
+  // How many of the newest tool results go whole, for a server that clears the rest.
+  keepToolResults?: number,
 ): Promise<ChatReply> {
   const client = new Anthropic({
     baseURL: `${originOf()}/api/c/${connectorId}`,
@@ -1136,13 +1188,14 @@ async function streamMessages(
     ...(kind === "anthropic" ? {} : { maxRetries: 0 }),
   });
   const { system, messages: wire } = toMessages(messages, images);
+  const extra = await requestParts(connectorId, kind, model, options, purpose, keepToolResults);
   const params = {
     model,
     max_tokens: MAX_TOKENS,
     messages: wire,
     ...(system ? { system } : {}),
     ...(tools?.length ? { tools: tools.map(toTool) } : {}),
-    ...(await requestFields(connectorId, kind, model, options, purpose)),
+    ...extra.fields,
   };
 
   const calls = new Map<number, ToolCall>();
@@ -1152,6 +1205,9 @@ async function streamMessages(
   let cacheRead = 0;
   let cacheWrite = 0;
   let output = 0;
+  // What Anthropic's context editing left out (old tool results).
+  let clearedResults = 0;
+  let clearedTokens = 0;
   try {
     final = await readStream(params);
   } catch (e) {
@@ -1164,7 +1220,7 @@ async function streamMessages(
   }
 
   async function readStream(body: object): Promise<Anthropic.Message> {
-    const stream = client.messages.stream(body as Anthropic.MessageStreamParams, { signal });
+    const stream = client.messages.stream(body as Anthropic.MessageStreamParams, { signal, headers: extra.headers });
     for await (const event of stream) {
       if (event.type === "message_start") {
         input = event.message.usage.input_tokens ?? 0;
@@ -1173,6 +1229,13 @@ async function streamMessages(
         cached = cacheRead + cacheWrite;
       } else if (event.type === "message_delta") {
         output = event.usage.output_tokens ?? output;
+        const edits = (event as any).context_management?.applied_edits;
+        if (Array.isArray(edits)) {
+          for (const e of edits) {
+            clearedResults += typeof e?.cleared_tool_uses === "number" ? e.cleared_tool_uses : 0;
+            clearedTokens += typeof e?.cleared_input_tokens === "number" ? e.cleared_input_tokens : 0;
+          }
+        }
       } else if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
         calls.set(event.index, { id: event.content_block.id, name: event.content_block.name, arguments: "" });
       } else if (event.type === "content_block_delta") {
@@ -1205,6 +1268,7 @@ async function streamMessages(
           outputTokens: output,
           cacheReadTokens: cacheRead,
           cacheWriteTokens: cacheWrite,
+          ...(clearedResults ? { clearedResults, clearedTokens } : {}),
         }
       : undefined,
     ...(signed ? { blocks: final.content as Anthropic.ContentBlockParam[] } : {}),

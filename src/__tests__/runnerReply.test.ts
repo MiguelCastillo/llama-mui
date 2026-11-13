@@ -280,6 +280,37 @@ describe("makeReply", () => {
     expect(cleared.session().personaText).toBe("Edited.");
   });
 
+  it("decides the cut of old tool results once per turn, passes it on, and saves where it stands", async () => {
+    // Two earlier replies of ten 6k-character reads each: long enough to cut.
+    const reads: ChatMessage[] = [];
+    for (let r = 0; r < 2; r++) {
+      reads.push(user(`message ${r}`));
+      for (let i = 0; i < 10; i++) {
+        const id = `c${r}${i}`;
+        reads.push({ role: "assistant", content: "", toolCalls: [{ id, name: "read_file", arguments: "{}" }] });
+        reads.push({ role: "tool", content: "x".repeat(6_000), toolCallId: id });
+      }
+      reads.push({ role: "assistant", content: `reply ${r}` });
+    }
+    let passed: number | undefined;
+    mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {
+      passed = config.clearCount;
+      cb.setUsage({ contextTokens: 10, inputTokens: 10 });
+      return { ok: true, messages: [...config.history, user(config.text)], attached: [] };
+    });
+    // Warm: the last request was a minute ago, and the cut stood at 0.
+    const warm = makeHandle({ messages: reads, toolResultCut: { from: 0, count: 0, lastRequestAt: Date.now() - 60_000 } });
+    await makeReply(warm.handle)("next", reads);
+    expect(passed).toBe(0);
+    expect(warm.session().toolResultCut).toMatchObject({ from: 0, count: 0 });
+    expect(warm.session().toolResultCut!.lastRequestAt).toBeGreaterThan(Date.now() - 5_000);
+    // Idle ten minutes: it moves to the replies before the last one.
+    const idle = makeHandle({ messages: reads, toolResultCut: { from: 0, count: 0, lastRequestAt: Date.now() - 600_000 } });
+    await makeReply(idle.handle)("next", reads);
+    expect(passed).toBe(10);
+    expect(idle.session().toolResultCut).toMatchObject({ from: 0, count: 10 });
+  });
+
   it("only sends a context update the model hasn't seen", async () => {
     const h = makeHandle();
     okTurn();
@@ -443,8 +474,8 @@ describe("makeReply", () => {
   describe("usage log", () => {
     const twoRequests = () =>
       mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {
-        cb.setUsage({ contextTokens: 10, inputTokens: 10, outputTokens: 5, cacheReadTokens: 100 });
-        cb.setUsage({ contextTokens: 30, inputTokens: 20, outputTokens: 7, cacheWriteTokens: 3 });
+        cb.setUsage({ contextTokens: 10, inputTokens: 10, outputTokens: 5, cacheReadTokens: 100, clearedResults: 4, clearedTokens: 9000 });
+        cb.setUsage({ contextTokens: 30, inputTokens: 20, outputTokens: 7, cacheWriteTokens: 3, clearedResults: 4, clearedTokens: 9000, rereads: 1 });
         return { ok: true, messages: [user(config.text)], attached: [] };
       });
 
@@ -458,6 +489,7 @@ describe("makeReply", () => {
       expect(recordUsage).toHaveBeenCalledTimes(1);
       expect(recordUsage).toHaveBeenCalledWith({
         sessionId: "a", provider: "Local llama", model: "m", input: 30, output: 12, cacheRead: 100, cacheWrite: 3,
+        clearedResults: 8, clearedTokens: 18000, rereads: 1,
       });
     });
 

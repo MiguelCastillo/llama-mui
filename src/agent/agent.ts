@@ -143,6 +143,9 @@ export interface RunTurnCallbacks {
 // Configuration needed for a single reply turn.
 export interface RunTurnConfig {
   connectorId: string;
+  // How many of the oldest tool results each request of this turn leaves
+  // out (turnCount in src/toolResults.ts); left out, each request decides.
+  clearCount?: number;
   kind?: Kind;
   api?: Api;
   model: string;
@@ -215,7 +218,7 @@ export async function runTurn(
     connectorId, kind, api, model, toolsOn, modelOptions, planning, planStep,
     systemPrompt, toolDefinitions, toolContextUpdate, seenUpdate,
     history: baseHistory, forgotten, attached: attachedBase,
-    chatId, controller, started, text, images, imagesBase64, replyTo,
+    chatId, controller, started, text, images, imagesBase64, replyTo, clearCount,
   } = config;
   const { setMessages, setError, setFailed, setUsage, setAbort, refreshModels, askUser, attach, setWorkingDir, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, setPlanSummary, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext, planSummary } = callbacks;
 
@@ -284,6 +287,7 @@ export async function runTurn(
           // src/connections): it is told why the request is made.
           options: modelOptions,
           purpose: turnPurpose(round, { planning, planStep: !!planStep, aside: !!config.aside }),
+          ...(clearCount !== undefined ? { clearCount } : {}),
           tools: toolsOn && !lastTurn ? toolDefinitions : undefined,
           images: imagesBase64,
         },

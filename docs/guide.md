@@ -1831,7 +1831,8 @@ steps, step checks, side questions, and the small background calls (naming a
 chat, a thread's report). Each request is billed for:
 
 - **Input**: everything sent, which is the whole conversation so far, the
-  system prompt, the tool descriptions and every tool result still in the chat.
+  system prompt, the tool descriptions and the tool results (old ones are
+  left out once the chat is long: see [Old tool results](#old-tool-results)).
   A reply with ten tool calls sends the conversation ten times. In a long chat
   this is usually most of the bill.
 - **Output**: the reply text, the tool calls, and **all** of Claude's
@@ -1878,6 +1879,121 @@ model and one Effort for a chat. Turning thinking off is not a saving: Claude
 then writes its reasoning into the reply instead, and once that is quoted back
 Anthropic refuses later requests (`reasoning_extraction`).
 
+### Old tool results
+
+Every request carries the whole chat since Clear context, and in a working
+chat most of that is tool results: whole files and command output. Replayed
+over the saved chats (November 2026), tool results were 50–90% of a long
+chat's history. The model needs a result while it acts on it; after that,
+its reply already says what mattered. So once a chat is long, old tool
+results are left out of what the model is sent, and a one-line note takes
+the place of each:
+
+> [Removed to save space: the result of read_file (84,312 characters). Call
+> the tool again if you need it.]
+
+The note says which tool and how long the result was, so the model reads it
+again instead of guessing. The chat you see and the saved chat keep
+everything; only the requests change. The code is `src/toolResults.ts`; the
+numbers below are its constants.
+
+**Which results.** Only once the chat's history is past about 30,000 tokens
+(`CLEAR_AFTER_TOKENS`, estimated as characters ÷ 4). Then the results of the
+replies *before the last one* may become notes. The last reply's results
+stay whole, for a follow-up like "fix that error", and so do the current
+reply's while it works. Only results are replaced: tool calls (what the
+model sent, such as a file it wrote), your messages, the replies and the
+thinking are never touched. On llama.cpp a result under 1,000 characters
+(`SMALL_RESULT_CHARS`) is never replaced, since a note would save nothing.
+Anthropic clears by count and can't skip short ones, but there a note costs
+about what a short result does.
+
+**When the cut moves: only when it's free.** A cache is reused only up to
+the first thing that differs from the last request; everything after that is
+written again (Anthropic, at 25 times the price of reading it) or processed
+again (llama.cpp, which costs time). Moving the cut changes the history
+partway in, so each move rewrites everything after it. The cut is therefore
+decided once per turn, saved with the chat (`toolResultCut` in
+`session.json`: how many old results are left out, and when the chat's last
+request went out), and moves only:
+
+- when the chat has been idle 5 minutes or more (`IDLE_MS`): Anthropic's
+  cache has expired, so the history is written again anyway, and a shorter
+  one is cheaper; or
+- when about 50,000 tokens of old results have piled up behind it
+  (`WARM_MOVE_TOKENS`), so a chat you answer quickly still gets room.
+
+Otherwise each request leaves out the same results as the last one and
+starts exactly as it did. Clear context starts the cut afresh. One turn
+whose own results are heavy (past about 30,000 tokens) also has its oldest
+results replaced, down to about 10,000 (`REPLY_HIGH_TOKENS`,
+`REPLY_LOW_TOKENS`). The gap between the two numbers keeps that cut from
+moving often. Plan steps and side questions start with short histories of
+their own and decide from their history alone.
+
+**What was measured** (Sonnet 5.5, November 2026, test requests through the
+proxy):
+
+| What | Cache write | Cache read |
+|---|---|---|
+| No cut: one more tool round | ~500 tokens (just the new call) | the rest |
+| Cut moving on every tool call | the whole prompt, every request | 0 |
+| Cut steady within a turn | ~500 tokens per round | the rest |
+| The request where the cut moves | the whole (shorter) history once | 0 |
+
+Two things about Anthropic's clearing (context editing's `clear_tool_uses`,
+a beta) that its docs don't say, found by measuring:
+
+- With the `trigger` near the prompt's size, Anthropic stops clearing as
+  soon as the prompt is under it, so how many it clears depends on sizes and
+  drifts from one request to the next, which breaks the cache. llama-mui
+  therefore decides when the chat is long itself, and sends the trigger far
+  below any real prompt (1,024 tokens), with `keep` set to exactly the
+  results it wants kept; Anthropic then clears all but `keep`, every time.
+- `clear_at_least` is left out: when a request can't clear that much,
+  nothing is cleared for it at all and the whole history goes again.
+
+**Why Anthropic does it on Claude, not llama-mui.** Claude's thinking blocks
+carry a signature bound to the exact conversation before them. Editing an
+earlier message would make every later thinking block fail that check:
+Anthropic drops them or refuses the request ("bound to a different
+conversation"). Anthropic's own clearing happens after the check, so
+llama-mui sends the history unchanged and Anthropic swaps in the notes. On
+llama.cpp, whose thinking isn't signed, llama-mui builds the shorter request
+itself.
+
+**Replayed over the saved chats** (31 Claude chats, 12 llama.cpp chats,
+about 1,900 requests; Sonnet 5.5 list prices; an estimate, since the
+messages have no timestamps, so two cases):
+
+| Rule | You reply within 5 min | You reply after 5 min |
+|---|---|---|
+| Nothing left out | $12.41 | $48.48 |
+| Cut moves at every message | $18.58 (worse) | $28.29 |
+| **Cut moves only when idle (now)** | **$11.39** | **$28.15** |
+
+Tokens sent on Claude went from 59.2M to 44.8M (quick replies) or 37.3M
+(slow ones). llama.cpp barely changed: its chats rarely get long enough
+(reprocessing 1.2M → 1.1M tokens). In 24 of 581 tool calls made while
+something was cleared (4%), the call's arguments held text found only in a
+cleared result, typically an edit whose "find this" came from a file read
+two replies earlier; each would have cost a read first.
+
+**Measuring it as you go.** Each turn's line in `~/.llama-mui/usage.jsonl`
+has `clearedResults` and `clearedTokens` (summed over the turn's requests:
+Anthropic's own counts on Claude, an estimate from length on llama.cpp) and
+`rereads`, the tool calls that asked again for a result that had been left
+out (same tool and arguments, compared by meaning, not spacing). On Claude
+the saving is roughly the cleared tokens at the cache-read price, less the
+history rewritten when the cut moves (the cache write of that turn's first
+request). Re-reads are what it cost. If they are often above 0, the cut is
+too eager. The server log's `cleared` field says the same per request.
+
+**What it doesn't do yet.** Tool *inputs* stay in, which can be 10–19% of a
+heavy chat. The 30,000-token start is an estimate from message text, so it
+ignores the system prompt and tool definitions. Server-side compaction
+(summarizing old turns) isn't used.
+
 ## The server's log
 
 llama-mui's server (the one `npm run prod` or `npm run dev` starts, not the page)
@@ -1904,7 +2020,9 @@ the `tail -f` command that follows it, when it starts. Each line has `t` (time),
   `model` and `tokens`: `{ input, cacheRead, cacheWrite, output }`, read from
   the stream's own usage events, which is what a Claude request is billed for
   (see [What a Claude chat costs](#what-a-claude-chat-costs); `output` includes
-  all the thinking). Nothing of the reply's text is kept. To add up a day:
+  all the thinking). When Anthropic left old tool results out of the request
+  (see [Old tool results](#old-tool-results)), `cleared` says how many and
+  the tokens that saved: `{ toolUses, tokens }`. Nothing of the reply's text is kept. To add up a day:
   `grep '"tokens"' ~/.llama-mui/logs/server-<day>.log`.
 - `llama.watch`, `llama.down`, `llama.up`, `llama.model`: every 15 seconds the
   server asks each llama server for its models and writes a line only when

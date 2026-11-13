@@ -12,6 +12,7 @@ import type {
 import type { Session } from "./api.ts";
 import { shownFailure } from "./agent/helpers.ts";
 import { cleanPersona } from "./persona.ts";
+import type { CutState } from "./toolResults.ts";
 import { withSessionDefaults } from "./sessionDefaults.ts";
 import { newId } from "./uuid.ts";
 
@@ -37,6 +38,9 @@ export interface SessionState {
   persona: string | undefined;
   // The persona's text as the prompt has it (see Session.personaText).
   personaText: string | undefined;
+  // Where the cut of old tool results stood, kept through the page's saves
+  // (see Session.toolResultCut).
+  toolResultCut: CutState | undefined;
   // Token count after the latest reply.
   usage: Usage | null;
   // Failure of the last reply only.
@@ -81,6 +85,7 @@ export function emptySessionState(): SessionState {
     promptDir: undefined,
     persona: undefined,
     personaText: undefined,
+    toolResultCut: undefined,
     usage: null,
     failed: null,
     modelName: null,
@@ -158,6 +163,7 @@ export function fromSession(
     promptDir: s.promptDir,
     persona: cleanPersona(s.persona),
     personaText: typeof s.personaText === "string" ? s.personaText : undefined,
+    toolResultCut: s.toolResultCut,
     usage: s.usage,
     failed: shownFailure(s.failed, running),
     modelName: s.modelName ?? null,
