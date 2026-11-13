@@ -16,7 +16,7 @@ export async function personaRoutes({ req, res, parts, method }: Route): Promise
     const { personas, problems } = await loadPersonas();
     const def = await resolveDefaultPersona((await load()).defaultPersona, personas.map((p) => p.name));
     sendJson(res, 200, {
-      personas: personas.map((p) => ({ name: p.name, description: p.description })),
+      personas: personas.map((p) => ({ name: p.name, description: p.description, tools: p.tools })),
       folder: personasDir(),
       problems: def.problem ? [...problems, def.problem] : problems,
       defaultPersona: def.name,

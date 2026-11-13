@@ -665,7 +665,10 @@ instead (for example, "base claims on what you have just checked").
 - **Where they live.** One file per persona, ending in `.md`, in the app's
   `personas` folder at the top of the project. They ship with the app and
   change with it, like its code: **Builder** (`personas/Builder.md`) is the
-  default, and a new persona is a new file there. Settings → Agent shows the
+  default, **Explainer** (`personas/Explainer.md`) explains how things work
+  without changing anything, **Reviewer** (`personas/Reviewer.md`) checks
+  finished work and reports what is wrong without changing it, and a new
+  persona is a new file there. Settings → Agent shows the
   exact place. If `Builder.md` is missing or broken, a chat without another
   persona gets no persona instructions (only the fixed start and the
   baseline), and Settings → Agent says why.
@@ -708,9 +711,37 @@ instead (for example, "base claims on what you have just checked").
   working directory and the session line. Your rules say they win over the
   persona. With tools off the persona is left out: personas are written for
   a model with tools.
+- **Limiting tools.** A persona can name the tools it may use in a `tools`
+  header line, separated by commas, for example
+  `tools: read_file, grep, run_command`. With no `tools` line the persona may
+  use every tool, as Builder does. Explainer has the read-only tools (listing
+  folders, reading files, finding files, searching files, locating a path,
+  searching the web, opening a page, and reading or summarizing a thread).
+  Reviewer has those plus running commands. A name that isn't a real tool is
+  dropped, with a plain message in Settings → Agent and under the picker, and
+  the persona still loads.
+  - **What happens on a refused tool.** The limit is applied when the model
+    calls a tool: a tool outside the persona's list returns a plain error
+    naming the persona and the tool, in the same way as a tool you turned
+    off in Settings. The persona's text is followed by one line naming the
+    tools it may use, so the model isn't surprised. A persona with no list
+    adds no such line.
+  - **Always allowed.** The two note tools, for ideas and action items, work
+    in every persona, because the baseline tells every persona to use them.
+  - **The model's tool list is not changed.** The list of tools sent to the
+    model stays the same for every persona, because it sits at the start of
+    every request and a change would make the model reprocess the chat. The
+    limit is only applied when a tool is called.
+  - **Limit of running commands.** The app can't tell whether a command
+    changes things. Reviewer may run commands, for example to run the tests,
+    and relies on your approval of each command to stop one that changes
+    something. Explainer has no command tool.
+  - **Needs tools.** A persona applies only with tools on. With tools off
+    the persona is left out of the prompt, and the picker says personas need
+    tools instead of offering a choice that would be ignored.
 - **Not built yet.** Customizing a persona outside the app's folder; a
-  persona limiting which tools the model may use or choosing its own model;
-  and personas from a project folder.
+  persona choosing its own model; named groups of tools in the `tools`
+  line; and personas from a project folder.
 
 ## How plans work
 

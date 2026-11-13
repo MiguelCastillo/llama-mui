@@ -22,9 +22,9 @@ import { FETCH_TOOLS } from "./fetch.ts";
 import { INSPECT_TOOLS } from "./inspect.ts";
 import { PLAN_TOOLS, planInstructions } from "./plan.ts";
 import { personaForChat } from "./personaChoice.ts";
-import { BUILDER_NAME, loadPersonas } from "./personas.ts";
+import { BUILDER_NAME, type Persona, loadPersonas, personaPromptText } from "./personas.ts";
 import { cleanPersona } from "../src/persona.ts";
-import { sessionFolder } from "./sessionFile.ts";
+import { readSession, sessionFolder } from "./sessionFile.ts";
 import { sessionHash } from "../src/sessionRoute.ts";
 import { THREAD_TOOLS, threadInstructions } from "./threads.ts";
 import { TODO_TOOLS, todoInstructions } from "./todos.ts";
@@ -168,6 +168,9 @@ const TOOLS: ToolSpec[] = [
   ...INSPECT_TOOLS,
 ];
 
+// Every tool name the app has, whether or not it is turned off in Settings.
+export const allToolNames = (): string[] => TOOLS.map((t) => t.name);
+
 const isOffered = (ctx: ToolContext, t: ToolSpec) => ctx.store.toolsEnabled && !ctx.store.disabledTools.includes(t.name);
 
 // The system prompt: what holds for the whole session. It never changes in a
@@ -296,11 +299,40 @@ type Outcome =
 const MISSING_PATH_ERRORS = 2;
 const missingPaths = new Map<string, number>();
 
-async function runTool(name: string, rawArgs: unknown, ctx: ToolContext): Promise<Outcome> {
+// Tools every persona may use, whatever its list says: the base instructions
+// tell every persona to use them.
+export const ALWAYS_ALLOWED_TOOLS = ["add_idea", "add_action_item"];
+
+// The persona a tool call is made under: the one saved with the chat's
+// session, else the default (the same choice the prompt makes). The chat id
+// may carry a suffix after ":" (a step's check runs under "<session>:check");
+// the session is the part before it. A session that can't be read, or has no
+// persona saved, uses the default.
+export async function personaForCall(chatId: string, defaultPersona: string): Promise<Persona> {
+  let saved: string | undefined;
+  try {
+    saved = cleanPersona((await readSession(chatId.split(":")[0]))?.persona);
+  } catch {
+    saved = undefined;
+  }
+  const { personas } = await loadPersonas();
+  return (await personaForChat(saved, defaultPersona, personas)).persona;
+}
+
+// The plain error for a tool outside the persona's list, or null if allowed.
+// A persona with no list may use every tool.
+export function personaRefusal(name: string, persona: Persona): string | null {
+  if (!persona.tools || persona.tools.includes(name) || ALWAYS_ALLOWED_TOOLS.includes(name)) return null;
+  return `Error: the ${name} tool is not available to the ${persona.name} persona this chat works as. Use one of its tools: ${persona.tools.join(", ")}.`;
+}
+
+async function runTool(name: string, rawArgs: unknown, ctx: ToolContext, persona: Persona | null = null): Promise<Outcome> {
   const text = (result: string) => ({ result });
   const tool = TOOLS.find((t) => t.name === name);
   if (!tool) return text(`Error: there is no tool named ${name}`);
   if (!isOffered(ctx, tool)) return text(`Error: the ${name} tool is turned off in Settings`);
+  const refusal = persona && personaRefusal(name, persona);
+  if (refusal) return text(refusal);
   let args: any;
   try {
     args = typeof rawArgs === "string" ? (rawArgs.trim() ? JSON.parse(rawArgs) : {}) : (rawArgs ?? {});
@@ -382,7 +414,7 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
       const { personas } = await loadPersonas();
       const chosen = await personaForChat(cleanPersona(body.persona), ctx.store.defaultPersona, personas);
       personaName = chosen.persona.name;
-      personaText = chosen.persona.instructions;
+      personaText = personaPromptText(chosen.persona);
       personaNote = chosen.note;
     }
     sendJson(res, 200, {
@@ -456,7 +488,10 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
 
   if (parts[1] === "call" && method === "POST") {
     const body = await readJson(req);
-    sendJson(res, 200, await runTool(String(body.name), body.arguments, await contextFor(body)));
+    const ctx = await contextFor(body);
+    // The chat's persona is fixed once it starts, so the saved session names it.
+    const persona = await personaForCall(ctx.chatId, ctx.store.defaultPersona);
+    sendJson(res, 200, await runTool(String(body.name), body.arguments, ctx, persona));
     return true;
   }
 

@@ -114,6 +114,26 @@ describe("the prompt's persona", () => {
   });
 });
 
+describe("a persona with a tools list", () => {
+  const LIMITED = "---\nname: Limited\ndescription: Few tools\ntools: read_file, grep\n---\nOnly look.";
+
+  it("adds one line naming its tools, right after its text, and fixes it in the text", async () => {
+    writePersona("Limited.md", LIMITED);
+    const c = await context({ persona: "Limited" });
+    expect(c.personaText).toBe(
+      "Only look.\nIn this chat you may use only these tools: read_file, grep, add_idea, add_action_item. Any other tool call is refused.",
+    );
+    expect(c.systemPrompt).toContain(c.personaText);
+  });
+
+  it("adds nothing for a persona with no list: Builder's text is its file's", async () => {
+    const builder = (await import("node:fs")).readFileSync(path.join(appPersonasDir(), "Builder.md"), "utf8");
+    const c = await context();
+    expect(c.personaText).not.toContain("you may use only these tools");
+    expect(builder).toContain(c.personaText);
+  });
+});
+
 describe("the persona text fixed with the prompt", () => {
   it("is used as it was fixed: an edited file doesn't change the prompt", async () => {
     writePersona("Reviewer.md", REVIEWER.replace("Look, don't touch.", "Edited since."));

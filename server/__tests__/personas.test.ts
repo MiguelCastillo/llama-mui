@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -26,10 +26,39 @@ describe("loadPersonas", () => {
   });
 
   it("takes quoted values and ignores header fields it doesn't know", async () => {
-    await put({ "Builder.md": good("Builder"), "a.md": "---\nname: \"A\"\ndescription: 'Reads'\nmodel: big\ntools: x\n---\nbody" });
+    await put({ "Builder.md": good("Builder"), "a.md": "---\nname: \"A\"\ndescription: 'Reads'\nmodel: big\n---\nbody" });
     const { personas, problems } = await loadPersonas(dir);
     expect(problems).toEqual([]);
     expect(personas.find((p) => p.name === "A")).toEqual({ name: "A", description: "Reads", instructions: "body", file: "a.md" });
+  });
+
+  it("no tools field means no limit: the persona has no tools list", async () => {
+    await put({ "Builder.md": good("Builder") });
+    const { personas } = await loadPersonas(dir);
+    expect(personas[0].tools).toBeUndefined();
+  });
+
+  it("reads a tools list of real tool names", async () => {
+    await put({ "Builder.md": good("Builder"), "a.md": good("A", "tools: read_file, grep\n") });
+    const { personas, problems } = await loadPersonas(dir);
+    expect(problems).toEqual([]);
+    expect(personas.find((p) => p.name === "A")?.tools).toEqual(["read_file", "grep"]);
+  });
+
+  it("drops an unknown tool name with a plain message, and the persona still loads", async () => {
+    await put({ "Builder.md": good("Builder"), "a.md": good("A", "tools: read_file, read_fyle\n") });
+    const { personas, problems } = await loadPersonas(dir);
+    expect(personas.find((p) => p.name === "A")?.tools).toEqual(["read_file"]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0].file).toBe("a.md");
+    expect(problems[0].message).toMatch(/"read_fyle".*doesn't have/);
+  });
+
+  it("ignores extra spaces, empty items and repeats in the tools list", async () => {
+    await put({ "Builder.md": good("Builder"), "a.md": good("A", "tools:   read_file ,, grep  ,read_file,\n") });
+    const { personas, problems } = await loadPersonas(dir);
+    expect(problems).toEqual([]);
+    expect(personas.find((p) => p.name === "A")?.tools).toEqual(["read_file", "grep"]);
   });
 
   it("skips a file with no header or no name, with a plain message", async () => {
@@ -79,6 +108,27 @@ describe("the app's personas folder", () => {
     expect(builder?.instructions).toContain("Standard:");
     expect(builder?.instructions).toContain("update_plan");
     expect(parsePersonaFile(await readFile(path.join(appPersonasDir(), "Builder.md"), "utf8"))?.fields.get("name")).toBe("Builder");
+  });
+
+  it("lists only real tool names in every shipped file, so a typo or a renamed tool fails here", async () => {
+    const { allToolNames } = await import("../tools.ts");
+    const real = new Set(allToolNames());
+    const files = (await readdir(appPersonasDir())).filter((n) => n.endsWith(".md"));
+    expect(files).toEqual(expect.arrayContaining(["Builder.md", "Explainer.md", "Reviewer.md"]));
+    for (const file of files) {
+      const field = parsePersonaFile(await readFile(path.join(appPersonasDir(), file), "utf8"))?.fields.get("tools");
+      const names = (field ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+      for (const name of names) expect(real.has(name), `${file} lists "${name}"`).toBe(true);
+      if (file === "Builder.md") expect(field).toBeUndefined();
+      else expect(names.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("gives Explainer the read-only tools and Reviewer the same plus run_command", async () => {
+    const { personas } = await loadPersonas(appPersonasDir());
+    const readOnly = ["list_directory", "read_file", "find_files", "grep", "locate_path", "web_search", "fetch_url", "read_thread", "summarize_thread"];
+    expect(personas.find((p) => p.name === "Explainer")?.tools).toEqual(readOnly);
+    expect(personas.find((p) => p.name === "Reviewer")?.tools).toEqual([...readOnly, "run_command"]);
   });
 
   it("is the one read, unless a test names its own", () => {

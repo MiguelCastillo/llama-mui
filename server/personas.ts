@@ -1,13 +1,16 @@
 // Personas: how the agent is told to work, one markdown file each in the
 // app's `personas` folder (at the project's top level), shipped with the app.
 // Builder.md is the default; a new persona is a new file there. A file starts
-// with a header between two lines of "---" (name and description), and the
-// rest of the file is the instructions. Fields the app doesn't know are
-// ignored, so later versions can add some without breaking older files.
+// with a header between two lines of "---" (name, description and an optional
+// tools list), and the rest of the file is the instructions. Fields the app
+// doesn't know are ignored, so later versions can add some without breaking
+// older files. No tools field means every tool; otherwise it is a
+// comma-separated list of tool names (names only for now).
 //
 //   ---
 //   name: Reviewer
 //   description: Reads the code and says what's wrong
+//   tools: read_file, grep
 //   ---
 //   Instructions for the model...
 
@@ -21,6 +24,8 @@ export type Persona = {
   instructions: string;
   // The file's name in the personas folder.
   file: string;
+  // The tools this persona may use, by name. Absent: no limit (every tool).
+  tools?: string[];
 };
 
 // A plain message about one file, for the user to read.
@@ -71,6 +76,12 @@ export function parsePersonaFile(text: string): Parsed {
   return { fields, body: lines.slice(end + 1).join("\n").trim() };
 }
 
+// The app's real tool names. Read when first needed, since the tools module
+// itself imports this one.
+async function knownTools(): Promise<Set<string>> {
+  return new Set((await import("./tools.ts")).allToolNames());
+}
+
 export type LoadedPersonas = { personas: Persona[]; problems: PersonaProblem[] };
 
 // All the personas in the folder (the app's unless a test passes another). A
@@ -97,6 +108,16 @@ export async function loadPersonas(dir: string = personasDir()): Promise<LoadedP
       continue;
     }
     const persona: Persona = { name, description: parsed.fields.get("description") ?? "", instructions: parsed.body, file };
+    const toolsField = parsed.fields.get("tools");
+    if (toolsField !== undefined) {
+      const known = await knownTools();
+      const listed = [...new Set(toolsField.split(",").map((t) => t.trim()).filter(Boolean))];
+      const unknown = listed.filter((t) => !known.has(t));
+      for (const t of unknown) {
+        problems.push({ file, message: `${file} lists a tool called "${t}", which the app doesn't have, so it was left out.` });
+      }
+      persona.tools = listed.filter((t) => known.has(t));
+    }
     seen.set(name.toLowerCase(), persona);
     personas.push(persona);
   }
@@ -107,6 +128,16 @@ export async function loadPersonas(dir: string = personasDir()): Promise<LoadedP
     });
   }
   return { personas, problems };
+}
+
+// The persona's text for the system prompt: its instructions, then, when it has
+// a tools list, one plain line naming the tools it may use, so a refused call
+// isn't a surprise. No list adds nothing (Builder's text is its file's).
+export function personaPromptText(persona: Persona): string {
+  if (!persona.tools) return persona.instructions;
+  const names = [...persona.tools, "add_idea", "add_action_item"].filter((t, i, all) => all.indexOf(t) === i);
+  const line = `In this chat you may use only these tools: ${names.join(", ")}. Any other tool call is refused.`;
+  return persona.instructions ? `${persona.instructions}\n${line}` : line;
 }
 
 // What a chat gets when the persona it needs isn't there: no instructions,
