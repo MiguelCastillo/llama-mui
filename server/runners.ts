@@ -56,6 +56,7 @@ import { HttpError } from "./http.ts";
 import * as hub from "./runHub.ts";
 import { readSession, revisionOf } from "./sessionFile.ts";
 import { type AskReport, askModel, reportToParent } from "./threadReport.ts";
+import { appendUsage } from "./usageLog.ts";
 
 export interface RunnerDeps {
   // Runs the plan; runPlan unless a test passes a fake.
@@ -571,6 +572,7 @@ async function launch(
     planRunningRef: planRunning,
     planRef,
     readImage: resolved.readImage,
+    recordUsage: (rec) => appendUsage({ ...rec }),
   };
 
   const reply = resolved.reply(e.handle);

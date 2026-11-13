@@ -43,4 +43,20 @@ export interface RunnerHandle {
   // Reads an image file from disk, for base64 encoding in the reply (see
   // runnerReply.ts). Injected by the runner so src/ is shared with the browser.
   readImage?: (sessionId: string, imageId: string) => Promise<Buffer>;
+  // Adds one line to the token usage log for a finished turn (see
+  // server/usageLog.ts). Injected by the server's runner; a handle without it
+  // records nothing. It never throws: a log that can't be written is skipped.
+  recordUsage?: (rec: TurnUsage) => void | Promise<void>;
+}
+
+// What one finished turn consumed, summed over its requests to the model.
+export interface TurnUsage {
+  sessionId: string;
+  // The configured provider's name.
+  provider: string;
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }

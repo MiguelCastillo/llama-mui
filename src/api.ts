@@ -644,6 +644,24 @@ export interface PhoneInfo {
 export const getPhone = () => call<PhoneInfo>("GET", "/api/phone");
 export const createPairing = () => call<{ token: string; expiresAt: number }>("POST", "/api/phone/pairing");
 export const removeDevice = (id: string) => call<{ id: string }>("DELETE", `/api/phone/devices/${id}`);
+// Token totals (server/usageRoutes.ts). dailyTokenLimit 0 means no limit.
+export interface UsageTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  turns: number;
+}
+export interface UsageReport {
+  byProvider: Record<string, UsageTotals>;
+  byDay: { day: string; totals: UsageTotals }[];
+  session?: UsageTotals;
+  today: UsageTotals;
+  dailyTokenLimit: number;
+}
+export const getUsage = (sessionId?: string) =>
+  call<UsageReport>("GET", `/api/usage${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`);
 export const pairDevice = (token: string) => call<{ ok: true; name: string }>("POST", "/api/pair", { token });
 
 // Something a tool wants to do that the user approves first: a change to a
@@ -1015,6 +1033,13 @@ export interface Usage {
   // Tokens the server read fresh this turn (not from its cache): roughly what
   // was added since the previous turn, e.g. tool results.
   promptTokens?: number;
+  // What this one reply consumed, for usage tracking. Input is the fresh
+  // prompt tokens (cache hits are counted apart). Each is left out when the
+  // provider didn't report it.
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 export interface StreamDelta {
@@ -1124,6 +1149,8 @@ async function streamMessages(
   let final: Anthropic.Message | undefined;
   let input = 0;
   let cached = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
   let output = 0;
   try {
     final = await readStream(params);
@@ -1141,7 +1168,9 @@ async function streamMessages(
     for await (const event of stream) {
       if (event.type === "message_start") {
         input = event.message.usage.input_tokens ?? 0;
-        cached = (event.message.usage.cache_read_input_tokens ?? 0) + (event.message.usage.cache_creation_input_tokens ?? 0);
+        cacheRead = event.message.usage.cache_read_input_tokens ?? 0;
+        cacheWrite = event.message.usage.cache_creation_input_tokens ?? 0;
+        cached = cacheRead + cacheWrite;
       } else if (event.type === "message_delta") {
         output = event.usage.output_tokens ?? output;
       } else if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
@@ -1169,7 +1198,15 @@ async function streamMessages(
   const signed = final.content.some((b) => b.type === "redacted_thinking" || (b.type === "thinking" && b.signature));
   return {
     toolCalls: [...calls.values()].map((c, i) => ({ ...c, id: c.id || `call_${i}`, arguments: c.arguments || "{}" })),
-    usage: input || cached || output ? { contextTokens: input + cached + output, promptTokens: input } : undefined,
+    usage: input || cached || output ? {
+          contextTokens: input + cached + output,
+          promptTokens: input,
+          inputTokens: input,
+          outputTokens: output,
+          cacheReadTokens: cacheRead,
+          cacheWriteTokens: cacheWrite,
+        }
+      : undefined,
     ...(signed ? { blocks: final.content as Anthropic.ContentBlockParam[] } : {}),
   };
 }
@@ -1206,18 +1243,30 @@ function toWire(m: ChatMessage, images?: Record<string, string>) {
 // llama.cpp puts a timings block on the last chunk: cache_n tokens reused,
 // prompt_n read this turn, predicted_n generated. OpenAI-style usage is the
 // fallback for servers that send that instead.
-function readUsage(chunk: any): Usage | undefined {
+export function readUsage(chunk: any): Usage | undefined {
   const t = chunk.timings;
   if (t && typeof t.prompt_n === "number") {
     return {
       contextTokens: (t.cache_n ?? 0) + t.prompt_n + (t.predicted_n ?? 0),
       tokensPerSecond: t.predicted_per_second,
       promptTokens: t.prompt_n,
+      inputTokens: t.prompt_n,
+      outputTokens: t.predicted_n ?? 0,
+      cacheReadTokens: t.cache_n ?? 0,
     };
   }
   const u = chunk.usage;
   if (u && typeof u.prompt_tokens === "number") {
-    return { contextTokens: u.prompt_tokens + (u.completion_tokens ?? 0) };
+    // OpenAI counts cache hits inside prompt_tokens; take them out so input
+    // means fresh tokens here as for the other providers.
+    const cached = u.prompt_tokens_details?.cached_tokens;
+    const hit = typeof cached === "number" ? cached : 0;
+    return {
+      contextTokens: u.prompt_tokens + (u.completion_tokens ?? 0),
+      inputTokens: Math.max(0, u.prompt_tokens - hit),
+      outputTokens: u.completion_tokens ?? 0,
+      ...(typeof cached === "number" ? { cacheReadTokens: hit } : {}),
+    };
   }
   return undefined;
 }

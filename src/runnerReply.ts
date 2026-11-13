@@ -106,6 +106,9 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         return s.failed === f ? s : { ...s, failed: f };
       });
 
+    const consumed = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    let counted = false;
+
     const callbacks: RunTurnCallbacks = {
       setMessages: (messages) => h.edit((s) => ({ ...s, messages: asides.length ? weaveAsides(messages, asides) : messages })),
       setError: h.setError,
@@ -114,7 +117,16 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         syncFailed();
       },
       setUsage: (u) => {
-        if (u) h.edit((s) => ({ ...s, usage: u }));
+        if (!u) return;
+        h.edit((s) => ({ ...s, usage: u }));
+        // A turn with tool calls makes several requests; add them up.
+        if (u.inputTokens !== undefined || u.outputTokens !== undefined || u.cacheReadTokens !== undefined || u.cacheWriteTokens !== undefined) {
+          consumed.input += u.inputTokens ?? 0;
+          consumed.output += u.outputTokens ?? 0;
+          consumed.cacheRead += u.cacheReadTokens ?? 0;
+          consumed.cacheWrite += u.cacheWriteTokens ?? 0;
+          counted = true;
+        }
       },
       setAbort: (c) => {
         streaming = c !== null;
@@ -185,6 +197,16 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
       },
       callbacks,
     );
+
+    // One usage record per turn, even one that failed or was stopped: the
+    // tokens were used. Nothing is written when the provider gave no counts.
+    if (counted && h.recordUsage) {
+      try {
+        await h.recordUsage({ sessionId: h.sessionId, provider: connector.name, model, ...consumed });
+      } catch {
+        // The log is not worth failing a reply for.
+      }
+    }
 
     // After a successful reply, ask the model to name the session if it has
     // no name yet. The name goes into the run's session, which the run saves

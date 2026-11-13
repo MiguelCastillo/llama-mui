@@ -1,4 +1,5 @@
 import { Fragment, memo, useCallback, type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import ChatUsageButton from "./ChatUsageButton";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import { isImageFile, prepareImage, revokePreview } from "./images";
 import { attachButton, refusedImages, unsentImages } from "./imageRule";
@@ -119,6 +120,7 @@ import {
   ApiError,
   MAX_REPLY_QUOTE,
 } from "./api";
+import UsageWarning from "./UsageWarning";
 import PersonaPicker, { PERSONA_PICKER_IN_CHAT } from "./PersonaPicker";
 import { personaIsFixed, withChosenPersona } from "./persona";
 import { useShowSteps } from "./showSteps";
@@ -495,6 +497,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const runActive = !!runnerView && runnerView.status !== "stopped";
   const turnRunning = runActive && runnerView?.kind === "turn";
   const planRunning = runActive && !turnRunning;
+  // Bumped each time a run ends, so the usage button loads its numbers again.
+  const [usageKey, setUsageKey] = useState(0);
+  const wasRunActive = useRef(false);
+  useEffect(() => {
+    if (wasRunActive.current && !runActive) setUsageKey((k) => k + 1);
+    wasRunActive.current = runActive;
+  }, [runActive]);
   // While a plan runs, the message box either asks a side question (the
   // default: answered beside the plan, which never sees it) or tells the plan
   // (a note the next step sees). `asideRunning`: one is being answered.
@@ -2494,6 +2503,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
       <Paper square elevation={0} sx={{ py: narrow ? 1 : 2, bgcolor: "transparent" }}>
         <Container maxWidth={false} sx={{ maxWidth: CHAT_MAX_WIDTH, ...(narrow && { px: 1 }) }}>
+          <UsageWarning refreshKey={turnRunning} sx={{ mb: 1 }} />
           <Composer
             box={box}
             enterSends={!narrow}
@@ -2546,14 +2556,18 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             approvals={<ApprovalsMarker autoApprove={autoApprove} onChange={changeAutoApprove} />}
             context={
               showIndicator && (
-                <ContextIndicator
-                  usage={usage}
-                  contextSize={models.find((m) => m.id === model)?.contextSize}
-                  onClear={clearContext}
-                  onCompact={compactSession}
-                  canCompact={contextStart > 0}
-                  disabled={runActive}
-                />
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                  {/* Hidden on the empty new-chat screen: there is nothing to count yet. */}
+                  {loaded && messages.length > 0 && <ChatUsageButton sessionId={sessionId} refreshKey={usageKey} />}
+                  <ContextIndicator
+                    usage={usage}
+                    contextSize={models.find((m) => m.id === model)?.contextSize}
+                    onClear={clearContext}
+                    onCompact={compactSession}
+                    canCompact={contextStart > 0}
+                    disabled={runActive}
+                  />
+                </Box>
               )
             }
           />

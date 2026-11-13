@@ -38,6 +38,45 @@ isn't touched by edits to the source.
 
 Then open Settings (the gear icon) → Connectors and add your server.
 
+## Token usage
+
+Every finished chat turn adds one line (time, chat, provider, model, input,
+output and cache tokens) to `~/.llama-mui/usage.jsonl`. The usage view shows
+totals for the chat, today, each provider and each day. Each open chat also
+has a usage button showing its token count; click it for details.
+
+### Where the numbers come from
+
+The counts are the ones the model server itself reports at the end of each
+reply. Nothing is estimated or counted by the app.
+
+- **llama.cpp servers:** the timing block on the last chunk of the stream.
+  Fresh prompt tokens are input, generated tokens are output, and tokens the
+  server reused from its cache are cache reads.
+- **OpenAI-style servers:** the usage block of the reply. Cached prompt tokens
+  are taken out of input and counted as cache reads, so input always means
+  fresh tokens.
+- **Anthropic-style servers:** the usage fields of the streamed reply: input,
+  output, cache read and cache write.
+
+A reply that calls tools makes several requests; their counts are added up into
+one line for the turn, and a stopped or failed reply still logs what it used.
+The provider is the name of the connector the chat used. A server that reports
+no counts adds no line, so its use shows as zero. The context percentage under
+the message box is separate: it shows the size of the latest request, not a
+running total.
+
+To get a warning, set a daily token limit (0 or unset means off). There is no
+settings field for it yet; send it to the running server:
+
+```
+curl -X PUT localhost:5173/api/usage/limit \
+  -H 'content-type: application/json' -d '{"dailyTokenLimit": 500000}'
+```
+
+A warning shows at 80% of the limit and a stronger notice at 100%. Sending is
+never blocked.
+
 ## More
 
 - [The full guide](docs/guide.md): every feature, how plans work, and what the

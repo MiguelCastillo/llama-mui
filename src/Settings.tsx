@@ -32,6 +32,7 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import DnsOutlinedIcon from "@mui/icons-material/DnsOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import BarChartOutlinedIcon from "@mui/icons-material/BarChartOutlined";
 import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
 import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
 import ChatOutlinedIcon from "@mui/icons-material/ChatOutlined";
@@ -55,6 +56,7 @@ import ModelsSection from "./ModelsSection";
 import PhoneSection from "./PhoneSection";
 import { StatusIcon } from "./StatusMark";
 import ToolsSection from "./ToolsSection";
+import UsageSection from "./UsageSection";
 import { hasWelcomeMarker, WELCOME_HASH, afterSave, setWelcomeHidden, settingsHash, welcomeBannerStep } from "./welcomeState";
 
 // Settings sections, shown in the left nav. Add new ones here.
@@ -65,6 +67,7 @@ const SECTIONS = [
   { id: "agent", label: "Agent", icon: <SmartToyOutlinedIcon />, Component: AgentSection },
   { id: "chat", label: "Chat", icon: <ChatOutlinedIcon />, Component: ChatSection },
   { id: "phone", label: "Phone", icon: <SmartphoneOutlinedIcon />, Component: PhoneSection },
+  { id: "usage", label: "Usage", icon: <BarChartOutlinedIcon />, Component: UsageSection },
 ];
 
 export default function Settings({

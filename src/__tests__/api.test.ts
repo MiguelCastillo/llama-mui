@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { modelAnswer } from "./capabilityFixtures";
-import { type Effort, streamChat, toMessages, type ChatMessage, type ImageRef, type StreamDelta, type ToolCall } from "../api";
+import { type Effort, readUsage, streamChat, toMessages, type ChatMessage, type ImageRef, type StreamDelta, type ToolCall } from "../api";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -519,7 +519,14 @@ describe("streamChat with the Messages API", () => {
     expect(text).toBe("Reading it.");
     expect(reasoning).toBe("Need the file.");
     expect(r.toolCalls).toEqual([{ id: "t1", name: "read_file", arguments: '{"path":"README.md"}' }]);
-    expect(r.usage).toEqual({ contextTokens: 105, promptTokens: 10 });
+    expect(r.usage).toEqual({
+      contextTokens: 105,
+      promptTokens: 10,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 90,
+      cacheWriteTokens: 0,
+    });
   });
 
   it("keeps no blocks for a llama.cpp reply, whose thinking is unsigned", async () => {
@@ -617,7 +624,32 @@ describe("streamChat with the Chat Completions API", () => {
     expect(reasoning).toBe("Need the file.");
     expect(reply.blocks).toBeUndefined();
     expect(reply.toolCalls).toEqual([{ id: "t1", name: "read_file", arguments: '{"path":"README.md"}' }]);
-    expect(reply.usage).toEqual({ contextTokens: 105, tokensPerSecond: 42, promptTokens: 10 });
+    expect(reply.usage).toEqual({
+      contextTokens: 105,
+      tokensPerSecond: 42,
+      promptTokens: 10,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 90,
+    });
+  });
+
+  it("reads OpenAI-style usage, taking cache hits out of the input", () => {
+    expect(readUsage({ usage: { prompt_tokens: 100, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 60 } } })).toEqual({
+      contextTokens: 107,
+      inputTokens: 40,
+      outputTokens: 7,
+      cacheReadTokens: 60,
+    });
+  });
+
+  it("reads OpenAI-style usage without cache details, and nothing from a chunk without counts", () => {
+    expect(readUsage({ usage: { prompt_tokens: 12, completion_tokens: 3 } })).toEqual({
+      contextTokens: 15,
+      inputTokens: 12,
+      outputTokens: 3,
+    });
+    expect(readUsage({ choices: [] })).toBeUndefined();
   });
 
   it("posts to the connector's /v1/chat/completions with the tools as they are", async () => {

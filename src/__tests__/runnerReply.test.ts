@@ -440,6 +440,44 @@ describe("makeReply", () => {
     expect(mockRunTurn).not.toHaveBeenCalled();
   });
 
+  describe("usage log", () => {
+    const twoRequests = () =>
+      mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {
+        cb.setUsage({ contextTokens: 10, inputTokens: 10, outputTokens: 5, cacheReadTokens: 100 });
+        cb.setUsage({ contextTokens: 30, inputTokens: 20, outputTokens: 7, cacheWriteTokens: 3 });
+        return { ok: true, messages: [user(config.text)], attached: [] };
+      });
+
+    it("records one line for a finished turn, summed over its requests", async () => {
+      const h = makeHandle();
+      const recordUsage = vi.fn();
+      h.handle.recordUsage = recordUsage;
+      h.handle.env = { ...env, connector: { ...env.connector!, name: "Local llama" } };
+      twoRequests();
+      await makeReply(h.handle)("go", []);
+      expect(recordUsage).toHaveBeenCalledTimes(1);
+      expect(recordUsage).toHaveBeenCalledWith({
+        sessionId: "a", provider: "Local llama", model: "m", input: 30, output: 12, cacheRead: 100, cacheWrite: 3,
+      });
+    });
+
+    it("records nothing when the provider gave no counts", async () => {
+      const h = makeHandle();
+      const recordUsage = vi.fn();
+      h.handle.recordUsage = recordUsage;
+      okTurn();
+      await makeReply(h.handle)("go", []);
+      expect(recordUsage).not.toHaveBeenCalled();
+    });
+
+    it("still finishes the reply when the log can't be written", async () => {
+      const h = makeHandle();
+      h.handle.recordUsage = vi.fn().mockRejectedValue(new Error("disk full"));
+      twoRequests();
+      expect((await makeReply(h.handle)("go", [])).ok).toBe(true);
+    });
+  });
+
   describe("naming the session", () => {
     it("names it after the first good reply, in the run's session", async () => {
       mockName.mockResolvedValue("Fix the login");

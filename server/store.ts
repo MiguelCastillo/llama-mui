@@ -72,6 +72,9 @@ export interface Store {
   // The persona a new chat starts with, by name (see server/personas.ts). Not a
   // secret. A name that no longer exists falls back to Builder when it's used.
   defaultPersona: string;
+  // The most tokens (input + output) to use in a day before the app warns.
+  // 0 means no limit. It only warns; nothing is blocked (see server/usageRoutes.ts).
+  dailyTokenLimit: number;
 }
 
 // Exported so the file tools can refuse to read it: it holds API keys.
@@ -101,6 +104,7 @@ const empty = (): Store => ({
   models: {},
   checkCommands: {},
   defaultPersona: "Builder",
+  dailyTokenLimit: 0,
 });
 
 // Ids of connectors whose saved key wouldn't open when a store was loaded, by
