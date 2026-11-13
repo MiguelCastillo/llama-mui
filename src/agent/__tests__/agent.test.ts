@@ -154,7 +154,7 @@ describe("ASIDE_TOOLS", () => {
   it("is the explicit read-only list", () => {
     expect([...ASIDE_TOOLS].sort()).toEqual(
       [
-        "fetch_url", "find_files", "grep", "list_directory", "locate_path",
+        "fetch_url", "find_files", "grep", "list_directory", "load_skill", "locate_path",
         "read_file", "read_thread", "summarize_thread", "web_search",
       ].sort(),
     );

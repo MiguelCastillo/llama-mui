@@ -25,6 +25,7 @@ import { personaForChat } from "./personaChoice.ts";
 import { BUILDER_NAME, type Persona, loadPersonas, personaPromptText } from "./personas.ts";
 import { cleanPersona } from "../src/persona.ts";
 import { readSession, sessionFolder } from "./sessionFile.ts";
+import { SKILL_TOOLS, loadSkills, skillsPromptText } from "./skills.ts";
 import { sessionHash } from "../src/sessionRoute.ts";
 import { THREAD_TOOLS, threadInstructions } from "./threads.ts";
 import { TODO_TOOLS, todoInstructions } from "./todos.ts";
@@ -83,6 +84,15 @@ const GROUPS: Group[] = [
       "When a plan runs in its own session (a thread), the chat that started it gets a short report. This lets " +
       "the model ask the thread's own model for a fuller summary when you ask about the result.",
     instructions: threadInstructions,
+  },
+  {
+    id: "skills",
+    label: "Skills",
+    description:
+      "Lets the model open a skill (a folder of instructions in ~/.llama-mui/skills) when a task matches it. " +
+      "Only the skill's name and description are in the prompt; this reads the rest. It changes nothing.",
+    // The skill list, with its own sentence about load_skill, is added to the prompt by skillsPromptText.
+    instructions: "",
   },
   {
     id: "disk",
@@ -159,6 +169,7 @@ const TOOLS: ToolSpec[] = [
   ...TODO_TOOLS,
   ...REPLY_NOTE_TOOLS,
   ...THREAD_TOOLS,
+  ...SKILL_TOOLS,
   ...DISK_TOOLS,
   ...WRITE_TOOLS,
   ...WORKTREE_TOOLS,
@@ -202,6 +213,7 @@ function toolsSystemPrompt(
   withTools: boolean,
   sessionLine: string | null = null,
   personaText = "",
+  skillsText = "",
 ): string {
   // The built-in way of working comes first (the same for everyone), then the
   // user's rules, which tune it; the tools' help, the home folder and the
@@ -212,7 +224,8 @@ function toolsSystemPrompt(
   return [
     ...start,
     "You have tools. Use one when it helps answer the question; otherwise answer directly.",
-    ...GROUPS.map((g) => g.instructions),
+    ...GROUPS.map((g) => g.instructions).filter(Boolean),
+    ...(skillsText ? [skillsText] : []),
     `The user's home folder is ${os.homedir()}.`,
     promptDir ? `Working directory: ${promptDir}` : "There's no working directory: use absolute paths.",
     ...(sessionLine ? [sessionLine] : []),
@@ -426,6 +439,7 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
         offered.length > 0,
         offered.includes("inspect_page") ? sessionNote(ctx.chatId, req.headers?.host) : null,
         personaText,
+        skillsPromptText((await loadSkills()).skills),
       ),
       offered,
       persona: personaName,

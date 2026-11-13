@@ -26,6 +26,7 @@ export const ASIDE_TOOLS: ReadonlySet<string> = new Set([
   "fetch_url",
   "read_thread",
   "summarize_thread",
+  "load_skill",
 ]);
 // A note: an instruction for one turn, sent after the message's text (see
 // docs/guide.md, "What the model is told"). A question comes first: led by "only

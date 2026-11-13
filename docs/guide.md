@@ -743,6 +743,31 @@ instead (for example, "base claims on what you have just checked").
   persona choosing its own model; named groups of tools in the `tools`
   line; and personas from a project folder.
 
+### Skills
+
+A skill is a folder of instructions the model can open when a task matches.
+You write them; the app only reads them.
+
+- **Layout.** Each skill is a folder with a file named `SKILL.md` inside
+  `~/.llama-mui/skills`, for example `~/.llama-mui/skills/pdf-forms/SKILL.md`.
+  The folder can hold other files for the instructions to point at.
+- **Header.** `SKILL.md` starts with a block between two lines of `---` with
+  a `name` and a `description`. Everything after it is the instructions.
+  Other header fields are ignored.
+- **A file that can't be used** (no header, no name, no description, or a name
+  another skill already has) is skipped, and Settings says why. The first
+  folder in the list wins a duplicate name. A missing skills folder just means
+  no skills.
+- **How the model uses them.** The system prompt lists only each skill's name
+  and description. When a task matches, the model opens the skill with the
+  `load_skill` tool, which needs no approval and returns the instructions and
+  the skill's folder so it can read the other files there. With no skills, the
+  prompt is unchanged.
+- **Where to see them.** Settings has a read-only Skills list with the folder
+  and any skipped files.
+- **Not built yet.** More skill folders (the list is ready for them), running
+  scripts from a skill, and MCP.
+
 ## How plans work
 
 Small models often say they're done when they aren't. A plan makes the work

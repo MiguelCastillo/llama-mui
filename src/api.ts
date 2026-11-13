@@ -498,6 +498,15 @@ export interface PersonaList {
   // The app's personas folder, where the files are.
   folder?: string;
 }
+// Skills: folders of instructions the model can open (read-only here).
+export interface SkillList {
+  skills: { name: string; description: string }[];
+  problems: { file: string; message: string }[];
+  // Where skills are looked for.
+  folder: string;
+  folders?: string[];
+}
+export const getSkills = () => call<SkillList>("GET", "/api/skills");
 export const getPersonas = () => call<PersonaList>("GET", "/api/personas");
 export const setDefaultPersona = (name: string) => call<{ defaultPersona: string }>("PUT", "/api/personas/default", { name });
 

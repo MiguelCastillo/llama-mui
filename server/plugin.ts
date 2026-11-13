@@ -12,6 +12,7 @@ import { eventRoutes } from "./events.ts";
 import { HttpError, type Route, sendJson } from "./http.ts";
 import { imageRoutes } from "./images.ts";
 import { personaRoutes } from "./personaRoutes.ts";
+import { skillRoutes } from "./skillRoutes.ts";
 import { ruleRoutes } from "./rules.ts";
 import { modelSettingRoutes } from "./models.ts";
 import { isAllowed, isPairing, phoneRoutes, setListenAddress } from "./phones.ts";
@@ -38,6 +39,7 @@ async function route(r: Route) {
   if (await sessionRoutes(r)) return;
   if (await ruleRoutes(r)) return;
   if (await personaRoutes(r)) return;
+  if (await skillRoutes(r)) return;
   if (await imageRoutes(r)) return;
   throw new HttpError(404, "Not found");
 }

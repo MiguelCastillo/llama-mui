@@ -18,6 +18,8 @@ through it step by step, so you review instead of doing it yourself.
   before it touches anything. You review it, adjust any step, and set it
   running. It works through the steps one at a time and checks each, so you step
   in to review and redirect, not to do the work. Rerun any step.
+- **Skills.** Drop a folder with a `SKILL.md` into `~/.llama-mui/skills` and the model
+  opens it when a task matches.
 - **Work on a branch, not your checkout.** Ask for a git worktree and the model
   works on its own copy, so your repo stays as you left it.
 - **Sessions that stay put.** Every session is saved, named for you, and
