@@ -16,6 +16,9 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 const { DEFAULT_RULES, MAX_RULES, ruleRoutes, workingRules } = await import("../rules.ts");
+const { appPersonasDir, loadPersonas } = await import("../personas.ts");
+// The chat's default persona is the app's Builder.md.
+const builderText = (await loadPersonas(appPersonasDir())).personas.find((p) => p.name === "Builder")!.instructions;
 const { toolRoutes } = await import("../tools.ts");
 const { RULE_TOOLS } = await import("../rules.ts");
 const { ApprovalNeeded } = await import("../toolkit.ts");
@@ -101,7 +104,7 @@ describe("the system prompt", () => {
   it("opens with the built-in way of working, then the labelled rules, the tools' help, the home folder, and the working directory last", async () => {
     await invoke("PUT", { text: "Be brief." });
     const parts = (await prompt()).split("\n\n");
-    expect(parts[0]).toBe(workingRules(true));
+    expect(parts[0]).toBe(workingRules(true, builderText));
     expect(parts[1]).toMatch(/^Standing rules from the user\..*~\/\.llama-mui\/rules\.md.*with or without tools.*built-in/s);
     expect(parts[2]).toBe("Be brief.");
     expect(parts[3]).toMatch(/^You have tools/);
@@ -115,18 +118,28 @@ describe("the system prompt", () => {
     for (const set of [() => invoke("DELETE"), () => invoke("PUT", { text: "  \n" })]) {
       await set();
       const parts = (await prompt()).split("\n\n");
-      expect(parts[0]).toBe(workingRules(true));
+      expect(parts[0]).toBe(workingRules(true, builderText));
       expect(parts[1]).toMatch(/^You have tools/);
       expect(parts.some((p) => p.startsWith("Standing rules"))).toBe(false);
     }
   });
 
-  it("tells a model with tools to use the note tools and show commits, and one without to write plain lines", () => {
+  it("tells a model with tools to use the note tools, Builder to check docs and show commits, and one without tools to write plain lines", () => {
     expect(workingRules(true)).toMatch(/add_action_item/);
-    expect(workingRules(true)).toMatch(/prices, limits or API behaviour.*don't answer from memory/);
-    expect(workingRules(true)).toContain("git --no-pager show --stat --oneline HEAD");
-    expect(workingRules(false)).not.toMatch(/add_action_item|add_idea|tool/);
+    expect(workingRules(true, builderText)).toMatch(/prices, limits or API behaviour.*don't answer from memory/);
+    expect(workingRules(true, builderText)).toContain("git --no-pager show --stat --oneline HEAD");
+    expect(workingRules(false, builderText)).not.toMatch(/add_action_item|add_idea|tool/);
     expect(workingRules(false)).toMatch(/"Your action: …", in bold/);
+  });
+
+  it("puts the persona after the harness and the baseline, and leaves it out with tools off", () => {
+    const text = workingRules(true, "- Be an explainer.");
+    expect(text.endsWith("- Be an explainer.")).toBe(true);
+    expect(text).not.toContain("git --no-pager show");
+    expect(text.indexOf("add_action_item")).toBeLessThan(text.indexOf("If the user's message is a question"));
+    expect(text.indexOf("If the user's message is a question")).toBeLessThan(text.indexOf("Be an explainer"));
+    expect(workingRules(false, "- Be an explainer.")).not.toContain("Be an explainer");
+    expect(workingRules(true)).not.toContain("Finish the work");
   });
 
   it("is the same for every session except the last line", async () => {

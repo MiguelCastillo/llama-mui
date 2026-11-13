@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Box, Button, CircularProgress, Stack, TextField, Typography } from "@mui/material";
-import { type Rules, getRules, resetRules, saveRules } from "./api";
+import { type PersonaList, type Rules, getPersonas, getRules, resetRules, saveRules, setDefaultPersona } from "./api";
+import PersonaDefault from "./PersonaDefault";
 
 // Same limit as the server's, so the box can say so before Save.
 const MAX_CHARS = 20_000;
@@ -11,6 +12,21 @@ export default function AgentSection() {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [personas, setPersonas] = useState<PersonaList | null>(null);
+
+  useEffect(() => {
+    getPersonas()
+      .then(setPersonas)
+      .catch((e) => setError(e.message));
+  }, []);
+
+  const choosePersona = (name: string) => {
+    setError(null);
+    setDefaultPersona(name)
+      .then((r) => setPersonas((p) => (p ? { ...p, defaultPersona: r.defaultPersona } : p)))
+      .catch((e) => setError(e.message));
+  };
 
   const show = (i: Rules) => {
     setSaved(i);
@@ -48,6 +64,17 @@ export default function AgentSection() {
           {error}
         </Alert>
       )}
+
+      {personas && (
+        <PersonaDefault
+          personas={personas.personas}
+          chosen={personas.defaultPersona}
+          problems={personas.problems.map((p) => `${p.file}: ${p.message}`)}
+          folder={personas.folder}
+          onChoose={choosePersona}
+        />
+      )}
+
 
       {!saved ? (
         <CircularProgress sx={{ alignSelf: "center" }} />

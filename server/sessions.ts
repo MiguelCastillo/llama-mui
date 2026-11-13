@@ -12,6 +12,7 @@ import { sessionsDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
 import { descendantIds } from "../src/sessionTree.ts";
+import { personaToSave } from "../src/persona.ts";
 import { worktreeStatuses } from "./worktreeStatus.ts";
 import { convertWorkingDir, deleteSession, queueFieldsOf, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
 
@@ -121,7 +122,23 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
         // before a message was queued or sent must not bring it back or lose it.
         // A new session has none, whatever the body says.
         const queue = queueFieldsOf(old);
-        return { ...rest, ...connection, id, title, modelName, userName, group, ...queue, createdAt: old?.createdAt ?? now, updatedAt: now };
+        // The persona's name is fixed once the chat has started: a save can
+        // choose it before then, never change it after (see personaToSave).
+        const { persona: _sentPersona, ...others } = rest;
+        const persona = personaToSave(old, _sentPersona);
+        return {
+          ...others,
+          ...connection,
+          ...(persona ? { persona } : {}),
+          id,
+          title,
+          modelName,
+          userName,
+          group,
+          ...queue,
+          createdAt: old?.createdAt ?? now,
+          updatedAt: now,
+        };
       },
       sent,
     );

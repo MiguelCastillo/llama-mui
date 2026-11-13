@@ -100,6 +100,8 @@ import {
   getModelSettings,
   getPreferences,
   getToolContext,
+  getPersonas,
+  type PersonaList,
   listModels,
   loadModel,
   unloadModel,
@@ -117,6 +119,8 @@ import {
   ApiError,
   MAX_REPLY_QUOTE,
 } from "./api";
+import PersonaPicker from "./PersonaPicker";
+import { personaIsFixed, withChosenPersona } from "./persona";
 import { useShowSteps } from "./showSteps";
 import { connection, optionsFor } from "./connections/index";
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
@@ -388,6 +392,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     attachments,
     workingDir,
     promptDir: fixedPromptDir,
+    persona,
+    personaText,
     usage,
     failed,
     modelName,
@@ -1110,6 +1116,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .catch((e) => showGlobalError(e.message));
   }, [visible]);
 
+  // The personas on offer for the picker (see PersonaPicker). Read again when
+  // the chat is shown, so a file added in Settings' folder appears.
+  const [personaList, setPersonaList] = useState<PersonaList | null>(null);
+  useEffect(() => {
+    if (!visible) return;
+    getPersonas()
+      .then(setPersonaList)
+      .catch(() => setPersonaList(null));
+  }, [visible]);
+
   // Bumped to fetch the tool context again, after a check command changes.
   const [contextVersion, setContextVersion] = useState(0);
   // Settings → Tools or the attachments may have changed what's available.
@@ -1117,10 +1133,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (!visible) return;
     // The session this was asked for: a failure that arrives later belongs to it.
     const askedFor = sessionId;
-    getToolContext(workingDir, attachedPaths(attachments), promptDir)
+    getToolContext(workingDir, attachedPaths(attachments), promptDir, undefined, persona, personaText)
       .then(setToolContext)
       .catch((e) => showSessionError(askedFor, e.message));
-  }, [visible, attachments, workingDir, promptDir, contextVersion]);
+  }, [visible, attachments, workingDir, promptDir, persona, personaText, contextVersion]);
 
   // On only when the user wants tools and some are ready in this chat.
   const toolsOn = toolContext.offered.length > 0;
@@ -1985,8 +2001,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     updateSession((s) => ({ contextStart: s.messages.length, usage: null }));
     // The model reprocesses its history from here anyway, so this is the cheap
     // moment to bring the system prompt up to date: it names the working
-    // directory as it is now, and the next reply's update lists the attachments.
-    updateSession({ promptDir: undefined });
+    // directory as it is now, the persona's text as its file is now (the
+    // persona itself stays), and the next reply's update lists the attachments.
+    updateSession({ promptDir: undefined, personaText: undefined });
   };
 
   // A click on the empty chat's suggestions: a starter is sent as the first
@@ -2514,6 +2531,17 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 }
               />
             }
+            persona={
+              personaList && (personaList.personas.length > 1 || personaList.problems.length > 0) && (
+                <PersonaPicker
+                  personas={personaList.personas}
+                  chosen={persona ?? toolContext.persona ?? personaList.defaultPersona}
+                  fixed={personaIsFixed({ messages, promptDir: fixedPromptDir })}
+                  problems={personaList.problems.map((p) => `${p.file}: ${p.message}`)}
+                  onChoose={(name) => updateSession((s) => ({ persona: withChosenPersona(s, name).persona }))}
+                />
+              )
+            }
             approvals={<ApprovalsMarker autoApprove={autoApprove} onChange={changeAutoApprove} />}
             context={
               showIndicator && (
@@ -2553,6 +2581,7 @@ function Composer({
   onStop,
   disabled,
   folder,
+  persona,
   approvals,
   context,
   enterSends,
@@ -2604,6 +2633,8 @@ function Composer({
   onStopAside?: () => void;
   // The folder chip, the approvals marker and the context ring, drawn in the bottom row.
   folder: ReactNode;
+  // The persona picker, or its read-only label once the chat has started.
+  persona: ReactNode;
   approvals: ReactNode;
   context: ReactNode;
 }) {
@@ -2995,6 +3026,7 @@ function Composer({
           </span>
         </Tooltip>
         <Box sx={{ minWidth: 0, flexShrink: 1 }}>{folder}</Box>
+        <Box sx={{ minWidth: 0, flexShrink: 1 }}>{persona}</Box>
         <Box sx={{ flexGrow: 1 }} />
         {approvals}
         {context}

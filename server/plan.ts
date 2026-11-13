@@ -11,9 +11,9 @@ export const MAX_STEP_CHARS = 600;
 export const MAX_SUMMARY_CHARS = 80;
 const MAX_PLAN_SUMMARY_CHARS = 200;
 
+// When to plan is a matter of working style, so it is the persona's to say
+// (personas/Builder.md says it); the mechanics below stay fixed.
 export const planInstructions =
-  "For a task that changes files, first call update_plan with the steps, then stop and wait: " +
-  "the user reviews the plan and runs it. " +
   "Before calling update_plan, write two or three plain sentences to the user, as if to someone who hasn't read the code: " +
   "what is wrong or missing as they see it, what will look or work differently afterwards, and what stays the same. " +
   "Use no file names or internal names unless the user used them. " +
@@ -21,7 +21,6 @@ export const planInstructions =
   "Each step is one change you can make in one turn, written so " +
   "someone could check it from the diff alone. When a message says \"Do step N\", do only that step, then " +
   "reply with one line saying what you changed. Call update_plan again only if the plan itself has to change. " +
-  "Questions that don't change files need no plan. " +
   "You may also include a `context` field: a brief description of the decisions, constraints, and other details from the conversation that each step needs (each step starts without the chat). Keep it short. " +
   "Give every step a `summary`: a to-do line the user reads, a short imperative phrase of at most about 8 words " +
   "saying what gets done in everyday words, with no file paths unless the step is about one. " +

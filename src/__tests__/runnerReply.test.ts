@@ -232,6 +232,54 @@ describe("makeReply", () => {
     expect(bare.session().promptDir).toBeNull();
   });
 
+  it("saves the prompt's persona by name at the first reply, and never changes it", async () => {
+    const withPersona = (name: string): RunnerEnv => ({ ...env, toolContext: { ...env.toolContext, persona: name } });
+    const h = makeHandle();
+    okTurn();
+    h.handle.env = withPersona("Builder");
+    const reply = makeReply(h.handle);
+    await reply("one", []);
+    expect(h.session().persona).toBe("Builder");
+
+    // The default changes later; the chat keeps the persona it started with.
+    h.handle.env = withPersona("Reviewer");
+    await reply("two", []);
+    expect(h.session().persona).toBe("Builder");
+
+    // A persona chosen on the empty chat is kept, not replaced by the default.
+    const chosen = makeHandle({ persona: "Reviewer" });
+    chosen.handle.env = withPersona("Builder");
+    await makeReply(chosen.handle)("one", []);
+    expect(chosen.session().persona).toBe("Reviewer");
+  });
+
+  it("fixes the persona's text at the first reply, until Clear context empties it", async () => {
+    const withText = (personaText: string | undefined): RunnerEnv => ({ ...env, toolContext: { ...env.toolContext, personaText } });
+    const h = makeHandle();
+    okTurn();
+    h.handle.env = withText("Look, don't touch.");
+    const reply = makeReply(h.handle);
+    await reply("one", []);
+    expect(h.session().personaText).toBe("Look, don't touch.");
+
+    // The file was edited since: the chat keeps the text its prompt has.
+    h.handle.env = withText("Edited.");
+    await reply("two", []);
+    expect(h.session().personaText).toBe("Look, don't touch.");
+
+    // A server that predates personas sends no text: nothing is fixed.
+    const older = makeHandle();
+    older.handle.env = withText(undefined);
+    await makeReply(older.handle)("one", []);
+    expect(older.session().personaText).toBeUndefined();
+
+    // After Clear context (personaText emptied) the next reply fixes it again.
+    const cleared = makeHandle({ personaText: undefined, messages: [], contextStart: 0 });
+    cleared.handle.env = withText("Edited.");
+    await makeReply(cleared.handle)("three", []);
+    expect(cleared.session().personaText).toBe("Edited.");
+  });
+
   it("only sends a context update the model hasn't seen", async () => {
     const h = makeHandle();
     okTurn();

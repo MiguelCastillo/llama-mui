@@ -65,12 +65,12 @@ export function buildSessionTree(summaries: SessionSummary[]): SessionNode[] {
 }
 
 // An empty session nested under `parent`. It starts from the parent's model
-// and connection, working directory and attachments but none of its messages, plan or todos.
+// and connection, working directory, attachments and persona but none of its messages, plan or todos.
 // The attachments are copied, so changing one session's never changes the
 // other's. Tools on/off is a global setting, not part of a session, so it
 // needs no copying: the new session follows it like every other.
 export function nestedSessionFrom(
-  parent: Pick<Session, "id" | "model" | "connectorId" | "attachments" | "workingDir">,
+  parent: Pick<Session, "id" | "model" | "connectorId" | "attachments" | "workingDir" | "persona">,
   id: string,
 ): Session {
   return withSessionDefaults({
@@ -82,6 +82,8 @@ export function nestedSessionFrom(
     contextStart: 0,
     attachments: parent.attachments.map((a) => ({ ...a })),
     workingDir: parent.workingDir ?? null,
+    // The parent's persona by name; the thread fixes its text at its own first reply.
+    ...(parent.persona ? { persona: parent.persona } : {}),
     usage: null,
     failed: null,
     plan: null,

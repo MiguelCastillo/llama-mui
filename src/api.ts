@@ -484,6 +484,22 @@ export interface Preferences {
 export const getPreferences = () => call<Preferences>("GET", "/api/preferences");
 export const updatePreferences = (changes: Partial<Preferences>) => call<Preferences>("PATCH", "/api/preferences", changes);
 
+// Personas: how the agent is told to work. `problems` are plain messages about
+// persona files that couldn't be used, or a default that no longer exists.
+export interface PersonaInfo {
+  name: string;
+  description: string;
+}
+export interface PersonaList {
+  personas: PersonaInfo[];
+  problems: { file: string; message: string }[];
+  defaultPersona: string;
+  // The app's personas folder, where the files are.
+  folder?: string;
+}
+export const getPersonas = () => call<PersonaList>("GET", "/api/personas");
+export const setDefaultPersona = (name: string) => call<{ defaultPersona: string }>("PUT", "/api/personas/default", { name });
+
 // An image that was uploaded to a session: a reference to a file on disk.
 // The base64 data is never saved into the session; it is read per request and
 // passed to the model API, then discarded.
@@ -557,6 +573,11 @@ export interface ToolContext {
   systemPrompt: string | null;
   // The tools that are on.
   offered: string[];
+  // The name of the persona the prompt was built for: the one asked for, or the
+  // default when none was. Missing from a server that predates personas.
+  persona?: string;
+  // The persona text the prompt was built with. The chat fixes it at its first reply.
+  personaText?: string;
   // What's attached and what's off, for a ChatMessage's `update`.
   update: string;
   // The working directory's check command, by folder; empty if it has none.
@@ -585,9 +606,25 @@ export const runCheckCommand = (workingDir: string | null, attachments: string[]
 // files and folders (not including it). `promptDir`: the working directory the
 // session's system prompt names. `chatId`: the session the prompt is for; with
 // it, the prompt says where that session shows in a browser (see sessionNote
-// in server/tools.ts).
-export const getToolContext = (workingDir: string | null, attachments: string[], promptDir: string | null, chatId?: string) =>
-  call<ToolContext>("POST", "/api/tools/context", { workingDir, attachments, promptDir, ...(chatId ? { chatId } : {}) });
+// in server/tools.ts). `persona`: the persona's name saved with the session, if
+// any; left out, the server uses the default. `personaText`: the text fixed at
+// the first reply; left out, the persona's file is read.
+export const getToolContext = (
+  workingDir: string | null,
+  attachments: string[],
+  promptDir: string | null,
+  chatId?: string,
+  persona?: string,
+  personaText?: string,
+) =>
+  call<ToolContext>("POST", "/api/tools/context", {
+    workingDir,
+    attachments,
+    promptDir,
+    ...(chatId ? { chatId } : {}),
+    ...(persona ? { persona } : {}),
+    ...(personaText !== undefined ? { personaText } : {}),
+  });
 // The agent's own rules (~/.llama-mui/rules.md); Settings → Agent.
 export interface Rules {
   text: string;
@@ -726,6 +763,15 @@ export interface Session {
   // first message so the system prompt never changes (see Chat.tsx). Missing
   // until then, and in older chats.
   promptDir?: string | null;
+  // The persona's name (see server/personas.ts), never a copy of its text.
+  // Chosen on the empty chat, or set from the default at the first reply, and
+  // fixed once the first message is sent (see src/persona.ts). Missing until
+  // then, and in older chats, which use the default.
+  persona?: string;
+  // The persona's text as the system prompt has it: fixed at the first reply
+  // and again after Clear context, like promptDir, so editing the file never
+  // changes a running chat's prompt. Missing until then.
+  personaText?: string;
   // The name the model gave the session on its first reply (if any).
   // The user can override it with a rename. Displayed title is userName,
   // else modelName, else title (first message). Never overwritten by save.

@@ -169,6 +169,13 @@ describe("nestedSessionFrom", () => {
     expect("connectorId" in nestedSessionFrom(parent, "child")).toBe(false);
   });
 
+  it("takes the parent's persona by name, but not its fixed text", () => {
+    const s = nestedSessionFrom({ ...parent, persona: "Reviewer", personaText: "Look." } as any, "child");
+    expect(s.persona).toBe("Reviewer");
+    expect(s.personaText).toBeUndefined();
+    expect("persona" in nestedSessionFrom(parent, "child")).toBe(false);
+  });
+
   it("does not share the attachments array with the parent", () => {
     const s = nestedSessionFrom(parent, "child");
     expect(s.attachments).not.toBe(attachments);

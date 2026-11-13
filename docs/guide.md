@@ -558,7 +558,7 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
 
 | Layer | What it holds | When it's sent | How long it holds |
 |---|---|---|---|
-| **System prompt** | What holds for the whole session: the built-in way of working first, then your standing rules, then how to use each tool group, the plan rules, your home folder, the working directory | First in every request, and never changed in a session, except when you clear the context | The whole session |
+| **System prompt** | What holds for the whole session: the fixed start, the common baseline, the chat's persona, then your standing rules, then how to use each tool group, the plan rules, your home folder, the working directory (see [Personas](#personas)) | First in every request, and never changed in a session, except when you clear the context | The whole session |
 | **Chat update** | Facts about the session that changed since: other attachments, a new working directory, tools turned off | After your next message, only when the facts changed | Until the next chat update replaces it |
 | **Note** | An instruction for one turn: the planning note (see [How plans work](#how-plans-work)) | After the message it's for | That turn only |
 
@@ -597,22 +597,23 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   if you pick another one later, a chat update says so. Clearing the context
   makes the model reprocess its history anyway, so that is when the prompt is
   brought up to date: it names the working directory as it is then.
-- **The built-in way of working** (`workingRules` in `server/rules.ts`) opens
-  the system prompt, the same for every user: answer a question instead of
-  turning it into a plan; finish and check the work without asking permission
-  for its steps, and say what wasn't checked; look with a tool before saying
-  something doesn't exist or can't be done; don't ask again after a refusal;
-  after a commit, show which files went in; and put ideas and things left for
-  you in the note tools, not in the reply. With tools off it keeps only what
-  still applies, and ideas and actions become plain "Idea: …" and bold
-  "Your action: …" lines. Behaviour every user would want belongs here, not
-  in a rules file.
+- **The built-in way of working** opens the system prompt and is now in
+  three parts, the same for every user unless a persona replaces the third:
+  a fixed start (how the tools, the plan mechanics, the note tools and a
+  refused tool are handled: don't ask again after a refusal, and put ideas
+  and things left for you in the note tools, not in the reply); a common
+  baseline for every persona (answer a question instead of turning it into a
+  plan, and say what you couldn't check); and the persona's own working style
+  (see [Personas](#personas)). With tools off it keeps only what still
+  applies, and ideas and actions become plain "Idea: …" and bold
+  "Your action: …" lines. Behaviour every user would want belongs in the
+  start or baseline, not in a rules file.
 - **Your rules** tune that and govern the model; tools are only
   helpers under them. They are a plain file, `~/.llama-mui/rules.md`,
-  edited in Settings → Agent. They come right after the built-in way of
-  working, under a heading that says they are your standing rules, where the
+  edited in Settings → Agent. They come right after the persona,
+  under a heading that says they are your standing rules, where the
   file is, that they apply in every chat, with or without tools, and that they
-  win over the built-in way of working. Clearing the context doesn't remove them: they aren't
+  win over the persona and the built-in way of working. Clearing the context doesn't remove them: they aren't
   part of the history, and the file is read again on every message. Without
   the file, or with an empty one, there are no rules of your own, and "Reset to default" deletes the file. The file
   used to be called `instructions.md`: if there is no `rules.md` the server
@@ -640,6 +641,64 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   144 tokens processed.
 - To see what was sent with one of your messages, click the note icon under
   it.
+
+### Personas
+
+A persona is a way of working the model is told to follow in one chat, kept
+as a plain text file you can edit. It is the part of the built-in way of
+working that suits one kind of job, such as checking your work and planning
+before changing files, so it can differ from one persona to another. Tone
+and personal preferences still belong in your own rules.
+
+- **Where they live.** One file per persona, ending in `.md`, in the app's
+  `personas` folder at the top of the project. They ship with the app and
+  change with it, like its code: **Builder** (`personas/Builder.md`) is the
+  default, and a new persona is a new file there. Settings → Agent shows the
+  exact place. If `Builder.md` is missing or broken, a chat without another
+  persona gets no persona instructions (only the fixed start and the
+  baseline), and Settings → Agent says why.
+- **The file.** It starts with a header between two lines of `---`, then the
+  instructions for the model:
+
+  ```
+  ---
+  name: Reviewer
+  description: Reads the code and says what's wrong
+  ---
+  Instructions for the model, in plain sentences.
+  ```
+
+  `name` is required and must be different in each file. `description` is
+  what the picker shows. Header lines the app doesn't know are ignored, so
+  files written for a later version still load. A file with no header, no
+  name or a name already taken is skipped, with a plain message in
+  Settings → Agent and under the picker.
+- **Picking one.** When there is more than one persona, a small picker on an
+  empty chat, in the message box's bottom row, lists them with their
+  descriptions, starting on your default. With only Builder there is nothing
+  to choose, so it doesn't show. Settings → Agent has the control for the
+  default, which starts as Builder; if the default names a persona that no
+  longer exists, Builder is used and a message says so.
+- **Fixed once the chat starts.** The persona is saved with the chat by name
+  and can't change once the first message is sent; the picker becomes a
+  read-only label. In a long chat much of what was said depends on the
+  persona, so a different one would no longer make sense. To work another
+  way, start a new chat. A thread that runs a plan takes its chat's persona.
+- **Edits wait for Clear context.** At the first reply the chat also keeps
+  the persona's text as the system prompt has it. Changing the file then
+  doesn't change a running chat's prompt, which would make the model
+  reprocess the whole chat (and, on Claude, write it to the cache again).
+  The change reaches a chat after Clear context, which brings the prompt up
+  to date anyway, or in a new chat. If the persona's file is gone by then, a
+  chat update says the chat now works as Builder.
+- **Order in the system prompt.** The fixed start, the common baseline, the
+  persona, your standing rules, then the tool help, your home folder, the
+  working directory and the session line. Your rules say they win over the
+  persona. With tools off the persona is left out: personas are written for
+  a model with tools.
+- **Not built yet.** Customizing a persona outside the app's folder; a
+  persona limiting which tools the model may use or choosing its own model;
+  and personas from a project folder.
 
 ## How plans work
 

@@ -36,7 +36,7 @@ export function isFreshPlan(steps: PlanStep[] | null | undefined, messages: Chat
 const TITLE_MAX = 80;
 
 // Moves the parent's fresh plan into a new nested session with id `childId`.
-// The child starts from the parent's model, connection and folders (nestedSessionFrom),
+// The child starts from the parent's model, connection, folders and persona (nestedSessionFrom),
 // not its history: its first message is the request that led to the plan, and
 // it holds a copy of the plan, its context and summary, anchored after that
 // message. planMovedIn tells the child that Run there runs the plan in place

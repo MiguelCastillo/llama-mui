@@ -18,6 +18,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type Connector, type Model, type Session, type ToolContext, getConnectors, getToolContext, listModels } from "../src/api.ts";
+import { cleanPersona } from "../src/persona.ts";
 import { isFreshPlan, planToThread } from "../src/planThread.ts";
 import { attachedPaths } from "../src/runnerReply.ts";
 import type { RunnerEnv } from "../src/runnerTypes.ts";
@@ -57,7 +58,14 @@ export async function buildEnv(session: any, options: RunOptions): Promise<Runne
   const models: Model[] = await ask(`couldn't ask ${connector.name} for its models`, listModels(connector.id));
   const toolContext: ToolContext = await ask(
     "couldn't read the tools",
-    getToolContext(workingDir, attachedPaths(attachments), promptDir, typeof session.id === "string" ? session.id : undefined),
+    getToolContext(
+      workingDir,
+      attachedPaths(attachments),
+      promptDir,
+      typeof session.id === "string" ? session.id : undefined,
+      cleanPersona(session.persona),
+      typeof session.personaText === "string" ? session.personaText : undefined,
+    ),
   );
   return {
     connector,

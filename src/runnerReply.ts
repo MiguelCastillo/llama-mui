@@ -8,6 +8,7 @@ import { type RunPlanCallbacks, type RunTurnCallbacks, runTurn } from "./agent/a
 import { INTERRUPTED } from "./agent/helpers.ts";
 import { askForSessionName } from "./agent/sessionNaming.ts";
 import { splitAsides, weaveAsides } from "./asides.ts";
+import { withFrozenPersona } from "./persona.ts";
 import { threadsUpdate } from "./planThread.ts";
 import type { RunnerHandle } from "./runnerTypes.ts";
 
@@ -62,6 +63,12 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     if (!(await modelLoaded(h))) return { ok: false, messages: before };
     // Fixed for the session's first reply, so its system prompt never changes.
     h.edit((s) => (s.promptDir === undefined ? { ...s, promptDir: s.workingDir ?? null } : s));
+    // The persona the prompt was built for is saved by name the same way, unless
+    // one was chosen already; after this nothing changes it (see persona.ts).
+    h.edit((s) => withFrozenPersona(s, toolContext.persona));
+    // The persona's text too, so editing its file waits for Clear context or a new chat.
+    const fixedText = toolContext.personaText;
+    h.edit((s) => (s.personaText === undefined && typeof fixedText === "string" ? { ...s, personaText: fixedText } : s));
     const forgotten = before.slice(0, start);
     // Attachments and tools that are off go the same way, as `update`, and
     // only when they changed since the last one the model saw.

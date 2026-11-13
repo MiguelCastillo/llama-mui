@@ -69,6 +69,9 @@ export interface Store {
   // folder's path; chat runs it after each plan step. See docs/guide.md,
   // "Running a plan".
   checkCommands: Record<string, string>;
+  // The persona a new chat starts with, by name (see server/personas.ts). Not a
+  // secret. A name that no longer exists falls back to Builder when it's used.
+  defaultPersona: string;
 }
 
 // Exported so the file tools can refuse to read it: it holds API keys.
@@ -97,6 +100,7 @@ const empty = (): Store => ({
   preferences: { showContextMeter: true, renderMarkdown: true, freshPlanSteps: true, showModelName: false },
   models: {},
   checkCommands: {},
+  defaultPersona: "Builder",
 });
 
 // Ids of connectors whose saved key wouldn't open when a store was loaded, by

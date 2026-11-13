@@ -148,6 +148,8 @@ describe("sessionState", () => {
       attachments: [{ path: "/a", kind: "file" }],
       workingDir: "/w",
       promptDir: "/p",
+      persona: "Reviewer",
+      personaText: "Look, don't touch.",
       usage: { total: 1 },
       failed: "boom",
       modelName: "Named",
@@ -205,7 +207,7 @@ describe("sessionState", () => {
     const all: Record<keyof Session, true> = {
       id: true, title: true, model: true, connectorId: true, messages: true, contextStart: true, attachments: true,
       workingDir: true, usage: true, failed: true, plan: true, planProposal: true, planContext: true,
-      planSummary: true, planAnchor: true, planId: true, pastPlans: true, promptDir: true, modelName: true,
+      planSummary: true, planAnchor: true, planId: true, pastPlans: true, promptDir: true, persona: true, personaText: true, modelName: true,
       userName: true, group: true, todos: true, parentId: true, threads: true, autoApprove: true,
       titleHint: true, planMovedIn: true, revision: true, run: true, queue: true, queuePaused: true,
     };

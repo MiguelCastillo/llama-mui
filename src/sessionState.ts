@@ -11,6 +11,7 @@ import type {
 } from "./api.ts";
 import type { Session } from "./api.ts";
 import { shownFailure } from "./agent/helpers.ts";
+import { cleanPersona } from "./persona.ts";
 import { withSessionDefaults } from "./sessionDefaults.ts";
 import { newId } from "./uuid.ts";
 
@@ -31,6 +32,11 @@ export interface SessionState {
   // The working directory the system prompt names, fixed by the session's
   // first message. undefined until then: it follows workingDir.
   promptDir: string | null | undefined;
+  // The persona's name, fixed once the first message is sent (see persona.ts).
+  // undefined until chosen or set from the default at the first reply.
+  persona: string | undefined;
+  // The persona's text as the prompt has it (see Session.personaText).
+  personaText: string | undefined;
   // Token count after the latest reply.
   usage: Usage | null;
   // Failure of the last reply only.
@@ -73,6 +79,8 @@ export function emptySessionState(): SessionState {
     attachments: [],
     workingDir: null,
     promptDir: undefined,
+    persona: undefined,
+    personaText: undefined,
     usage: null,
     failed: null,
     modelName: null,
@@ -148,6 +156,8 @@ export function fromSession(
     attachments: s.attachments,
     workingDir: s.workingDir ?? null,
     promptDir: s.promptDir,
+    persona: cleanPersona(s.persona),
+    personaText: typeof s.personaText === "string" ? s.personaText : undefined,
     usage: s.usage,
     failed: shownFailure(s.failed, running),
     modelName: s.modelName ?? null,

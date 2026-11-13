@@ -21,6 +21,9 @@ import {
 import { FETCH_TOOLS } from "./fetch.ts";
 import { INSPECT_TOOLS } from "./inspect.ts";
 import { PLAN_TOOLS, planInstructions } from "./plan.ts";
+import { personaForChat } from "./personaChoice.ts";
+import { BUILDER_NAME, loadPersonas } from "./personas.ts";
+import { cleanPersona } from "../src/persona.ts";
 import { sessionFolder } from "./sessionFile.ts";
 import { sessionHash } from "../src/sessionRoute.ts";
 import { THREAD_TOOLS, threadInstructions } from "./threads.ts";
@@ -189,12 +192,19 @@ const isOffered = (ctx: ToolContext, t: ToolSpec) => ctx.store.toolsEnabled && !
 // one line no other session shares, so it is last: the working directory is
 // shared by every session in a project, and a session reuses another's cache
 // up to the first line that differs.
-function toolsSystemPrompt(promptDir: string | null, rulesText: string, withTools: boolean, sessionLine: string | null = null): string {
+// personaText is the chat's persona instructions (personas/*.md).
+function toolsSystemPrompt(
+  promptDir: string | null,
+  rulesText: string,
+  withTools: boolean,
+  sessionLine: string | null = null,
+  personaText = "",
+): string {
   // The built-in way of working comes first (the same for everyone), then the
   // user's rules, which tune it; the tools' help, the home folder and the
   // working directory follow, and only when there are tools.
   const rules = governingRules(rulesText);
-  const start = [workingRules(withTools), ...(rules ? [rules] : [])];
+  const start = [workingRules(withTools, personaText), ...(rules ? [rules] : [])];
   if (!withTools) return start.join("\n\n");
   return [
     ...start,
@@ -237,13 +247,14 @@ export function sessionNote(chatId: string, host: unknown): string | null {
 // (see `update` on ChatMessage). The working directory, if it's not the one
 // the system prompt names; the attachments (the working directory is not one);
 // and tools that are off.
-async function chatUpdate(ctx: ToolContext, promptDir: string | null): Promise<string> {
+async function chatUpdate(ctx: ToolContext, promptDir: string | null, personaNote: string | null = null): Promise<string> {
   const dir = ctx.workingDir;
   const others = ctx.attachments;
   const off = TOOLS.filter((t) => !isOffered(ctx, t)).map((t) => t.name);
   return [
     "Chat update:",
     ...(dir !== promptDir ? [dir ? `The working directory is now ${dir}.` : "There's no working directory now."] : []),
+    ...(personaNote ? [personaNote] : []),
     others.length ? `Also attached:\n${others.map((d) => `- ${d}`).join("\n")}` : "Nothing else is attached.",
     ...(!ctx.store.toolsEnabled
       ? ["Tools are turned off in Settings, so calls to any of them fail."]
@@ -354,6 +365,26 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
     // first message (see promptDir in Chat.tsx), so it can differ from now's.
     const promptDir = typeof body.promptDir === "string" ? body.promptDir : null;
     const offered = TOOLS.filter((t) => isOffered(ctx, t)).map((t) => t.name);
+    // The persona: its name is the chat's saved one, or the default when none
+    // is saved yet (see personaForChat). Its text is fixed with the prompt at
+    // the first reply and again after Clear context, like promptDir, so
+    // editing a persona file never changes a running chat's prompt: the page
+    // sends the fixed text back as `personaText`,
+    // and only an unfixed chat has the files read.
+    const fixedText: string | undefined = typeof body.personaText === "string" ? body.personaText : undefined;
+    let personaName: string;
+    let personaText: string;
+    let personaNote: string | null = null;
+    if (fixedText !== undefined) {
+      personaName = cleanPersona(body.persona) ?? (ctx.store.defaultPersona || BUILDER_NAME);
+      personaText = fixedText;
+    } else {
+      const { personas } = await loadPersonas();
+      const chosen = await personaForChat(cleanPersona(body.persona), ctx.store.defaultPersona, personas);
+      personaName = chosen.persona.name;
+      personaText = chosen.persona.instructions;
+      personaNote = chosen.note;
+    }
     sendJson(res, 200, {
       definitions: TOOLS.map((t) => t.definition),
       // The user's rules go out with or without tools; the rest only with them.
@@ -362,9 +393,13 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
         (await readRules()).text,
         offered.length > 0,
         offered.includes("inspect_page") ? sessionNote(ctx.chatId, req.headers?.host) : null,
+        personaText,
       ),
       offered,
-      update: await chatUpdate(ctx, promptDir),
+      persona: personaName,
+      // The text the prompt was built with, for the chat to fix at its first reply.
+      personaText,
+      update: await chatUpdate(ctx, promptDir, personaNote),
       // The working directory's only: attachments have none (see SessionSettings).
       checkCommands: ctx.workingDir && ctx.store.checkCommands[ctx.workingDir]
         ? { [ctx.workingDir]: ctx.store.checkCommands[ctx.workingDir] }
