@@ -33,6 +33,21 @@ describe("persona picker on an empty chat", () => {
   });
 });
 
+describe("persona picker with tools off", () => {
+  it("says personas need tools instead of offering a choice", () => {
+    const html = render({ toolsOn: false });
+    expect(html).toContain("Personas need tools");
+    expect(html).not.toContain('data-testid="persona-picker"');
+    expect(html).not.toContain("<input");
+  });
+
+  it("says the same on a chat that has started", () => {
+    const html = render({ toolsOn: false, fixed: true });
+    expect(html).toContain("Personas need tools");
+    expect(html).not.toContain('data-testid="persona-label"');
+  });
+});
+
 describe("persona picker after the first message", () => {
   it("is a read-only label naming the persona", () => {
     const html = render({ fixed: true, chosen: "Reviewer" });

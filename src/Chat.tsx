@@ -119,7 +119,7 @@ import {
   ApiError,
   MAX_REPLY_QUOTE,
 } from "./api";
-import PersonaPicker from "./PersonaPicker";
+import PersonaPicker, { PERSONA_PICKER_IN_CHAT } from "./PersonaPicker";
 import { personaIsFixed, withChosenPersona } from "./persona";
 import { useShowSteps } from "./showSteps";
 import { connection, optionsFor } from "./connections/index";
@@ -2532,10 +2532,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               />
             }
             persona={
-              personaList && (personaList.personas.length > 1 || personaList.problems.length > 0) && (
+              PERSONA_PICKER_IN_CHAT && personaList && (personaList.personas.length > 1 || personaList.problems.length > 0) && (
                 <PersonaPicker
                   personas={personaList.personas}
                   chosen={persona ?? toolContext.persona ?? personaList.defaultPersona}
+                  toolsOn={toolsOn}
                   fixed={personaIsFixed({ messages, promptDir: fixedPromptDir })}
                   problems={personaList.problems.map((p) => `${p.file}: ${p.message}`)}
                   onChoose={(name) => updateSession((s) => ({ persona: withChosenPersona(s, name).persona }))}
