@@ -20,14 +20,17 @@ describe("workPolicy", () => {
 });
 
 describe("planningNote", () => {
-  it("contains the default work policy", () => {
-    expect(PLANNING_NOTE).toContain(DEFAULT_WORK_POLICY);
+  it("is only the question line by default", () => {
+    expect(PLANNING_NOTE).toBe(
+      "If this message is a question or otherwise doesn't change files, just answer it, and don't mention plans.",
+    );
     expect(planningNote()).toBe(PLANNING_NOTE);
   });
 
-  it("puts the policy after the question sentence", () => {
-    expect(PLANNING_NOTE.endsWith(DEFAULT_WORK_POLICY)).toBe(true);
-    expect(PLANNING_NOTE.indexOf("don't mention plans.")).toBeLessThan(PLANNING_NOTE.indexOf(DEFAULT_WORK_POLICY));
+  it("no longer repeats the size rule, which Builder holds", () => {
+    expect(PLANNING_NOTE).not.toContain(DEFAULT_WORK_POLICY);
+    expect(PLANNING_NOTE).not.toContain("Decide by size");
+    expect(PLANNING_NOTE).not.toContain("update_plan");
   });
 
   it("no longer tells the model to only plan or not to change files", () => {
@@ -35,9 +38,11 @@ describe("planningNote", () => {
     expect(PLANNING_NOTE).not.toContain("Don't change any files");
   });
 
-  it("uses a custom text instead of the default", () => {
+  it("puts custom text after the question line, instead of the default rule", () => {
     const note = planningNote("Never run commands.");
-    expect(note).toContain("Never run commands.");
+    expect(note.startsWith(QUESTION_START)).toBe(true);
+    expect(note.endsWith("Never run commands.")).toBe(true);
+    expect(note.indexOf("don't mention plans.")).toBeLessThan(note.indexOf("Never run commands."));
     expect(note).not.toContain(DEFAULT_WORK_POLICY);
   });
 
@@ -45,7 +50,7 @@ describe("planningNote", () => {
     expect(planningNote("   ")).toBe(PLANNING_NOTE);
   });
 
-  it("still starts with the question sentence", () => {
+  it("always starts with the question sentence", () => {
     expect(PLANNING_NOTE.startsWith(QUESTION_START)).toBe(true);
     expect(planningNote("Custom.").startsWith(QUESTION_START)).toBe(true);
   });

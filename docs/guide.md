@@ -728,8 +728,8 @@ vitest (`npm test`).
   Tools** (it is by default); there is no switch for it in chat.
 - With it on, nothing forces a planning turn and no reply is limited to
   reading. **The model decides by size**: simple work that can be done in one
-  go (one small change, or a command or two) is done right in the chat, and
-  you approve each change or command; work that needs several steps, touches
+  go (one small change, or a command or two) is done right in the chat; work
+  that needs several steps, touches
   several files or needs checking along the way becomes a plan. If the model
   starts and finds the work bigger than it looked, it stops and makes a plan.
   Questions need no plan. On llama.cpp a main-chat reply still skips
@@ -750,17 +750,27 @@ vitest (`npm test`).
   starts small and grows over several rounds; the rule says to stop and make
   a plan once that is clear. If this needs tightening, the rule can be given
   concrete limits (for example, more than three commands or edits means a
-  plan) in `workPolicy`, and Make plan is the way to correct a call in the
-  moment.
-- Your message gets a note, sent to the model after it but not shown. It
-  starts: "If this message is a question or otherwise doesn't change files,
-  just answer it, and don't mention plans." Then comes the rule text from
-  `workPolicy` (`src/agent/workPolicy.ts`): decide by size, do simple work in
-  the chat, make a plan for work that needs several steps. The question case
-  comes first: led by "only plan", the model began its answers with "This is
-  a question, not a file change request", replying to a note you never see.
-  The rule's wording lives in that one file, so it can later be made
-  configurable; nothing reads a custom value yet.
+  plan) in the Builder persona's file, and Make plan is the way to correct a
+  call in the moment.
+- **Where the size rule lives.** The rule is part of the Builder persona, so
+  the model reads it in the system prompt at the start of the chat, not with
+  each message. It names two levels. **Light** is simple work that can be done
+  in one go (one small change, or a command or two): the model does it in the
+  chat, unless you asked for a plan. **Standard** is work that needs
+  several steps, touches several files or needs checking along the way: the
+  model writes a plan and stops. If a Light job turns out bigger than it
+  looked, the model stops and makes a plan. Since
+  the persona is fixed for the chat, the rule is too, and the start of the
+  prompt stays the same from message to message. A persona can set its own
+  rule by saying it in its own file; another persona may size work
+  differently or not at all.
+- Your message gets a short note, sent to the model after it but not shown.
+  It only says: "If this message is a question or otherwise doesn't change
+  files, just answer it, and don't mention plans." It no longer repeats the
+  size rule. The question case is said on its own: led by "only plan", the
+  model began its answers with "This is a question, not a file change
+  request", replying to a note you never see. The app can still add custom
+  rule text after that line, but nothing supplies any yet.
 - The model is offered every tool in the main chat, and none is refused for
   being a write. Commands and file changes reach the normal approval prompt,
   so nothing runs or changes without you. A **side question** asked while a plan runs

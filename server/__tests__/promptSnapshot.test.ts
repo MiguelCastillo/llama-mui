@@ -7,6 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 // Pins the exact full system prompt of a chat on Builder (personas/Builder.md). The
 // snapshot files live in __snapshots__ and are meant to be read: when the
 // wording changes on purpose, review the diff and update them (vitest -u).
+//
+// Change log:
+// - Builder's last line ("For a task that changes files, first call
+//   update_plan...") became the size rule as two levels, Light and Standard.
+//   Only the tools-on snapshots change; the tools-off ones have no persona text.
 
 // The modules read the home folder when they load, so it's pointed at a temp
 // one first: these tests must never touch the real ~/.llama-mui.

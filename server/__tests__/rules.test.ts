@@ -126,7 +126,7 @@ describe("the system prompt", () => {
 
   it("tells a model with tools to use the note tools, Builder to check docs and show commits, and one without tools to write plain lines", () => {
     expect(workingRules(true)).toMatch(/add_action_item/);
-    expect(workingRules(true, builderText)).toMatch(/prices, limits or API behaviour.*don't answer from memory/);
+    expect(workingRules(true, builderText)).toMatch(/Base claims about a provider's prices, limits or API behaviour on its own docs/);
     expect(workingRules(true, builderText)).toContain("git --no-pager show --stat --oneline HEAD");
     expect(workingRules(false, builderText)).not.toMatch(/add_action_item|add_idea|tool/);
     expect(workingRules(false)).toMatch(/"Your action: …", in bold/);

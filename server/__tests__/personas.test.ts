@@ -75,7 +75,9 @@ describe("the app's personas folder", () => {
     const builder = personas.find((p) => p.name === "Builder");
     expect(builder?.description).toBeTruthy();
     expect(builder?.instructions).toMatch(/^- Finish the work the user asked for/);
-    expect(builder?.instructions).toContain("first call update_plan");
+    expect(builder?.instructions).toContain("Light:");
+    expect(builder?.instructions).toContain("Standard:");
+    expect(builder?.instructions).toContain("update_plan");
     expect(parsePersonaFile(await readFile(path.join(appPersonasDir(), "Builder.md"), "utf8"))?.fields.get("name")).toBe("Builder");
   });
 

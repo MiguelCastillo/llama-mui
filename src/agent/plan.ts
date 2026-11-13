@@ -31,12 +31,13 @@ export const ASIDE_TOOLS: ReadonlySet<string> = new Set([
 // docs/guide.md, "What the model is told"). A question comes first: led by "only
 // plan", the model opened its answers to questions with "This is a question,
 // not a file change request", replying to a note the user never sees.
-// It ends with the rule about deciding by size (see workPolicy.ts).
+// The size rule is not repeated here: it lives in the persona (Builder.md), in
+// the system prompt. Only custom policy text, if any is passed, follows the
+// question line.
+const QUESTION_LINE = "If this message is a question or otherwise doesn't change files, just answer it, and don't mention plans.";
 export function planningNote(customPolicy?: string): string {
-  return (
-    "If this message is a question or otherwise doesn't change files, just answer it, and don't mention plans. " +
-    workPolicy(customPolicy)
-  );
+  const custom = customPolicy?.trim();
+  return custom ? `${QUESTION_LINE} ${workPolicy(custom)}` : QUESTION_LINE;
 }
 export const PLANNING_NOTE = planningNote();
 
