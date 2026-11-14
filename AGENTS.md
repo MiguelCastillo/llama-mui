@@ -84,6 +84,16 @@ need a secure context without a fallback: `crypto.randomUUID` (use `newId` in
   with it; and MUI's breakpoints, which the library takes in px. A new
   drawing follows the same pattern; anything else is new, so ask.
 
+## Before designing a change
+
+- Read the section of `docs/guide.md` for the area first, and search the code
+  by the problem ("what already shrinks what is sent?"), not only by the words
+  in the request: the code may name the same thing differently (what the UI
+  calls compacting, `src/toolResults.ts` calls clearing and the cut).
+- Say in your first message what already exists and how the change fits it.
+  When a rule of the same kind is there, extend it or reuse its constants
+  instead of adding a second one.
+
 ## Working here
 
 - Check with `npx tsc --noEmit -p . && npx vitest run`.
