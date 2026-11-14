@@ -70,7 +70,7 @@ export default function PhoneSection() {
       .catch((e) => setError(e.message));
 
   const left = code ? code.expiresAt - now : 0;
-  const url = code && info ? `http://${address}:${info.port}/#/pair/${code.token}` : "";
+  const url = code && info ? `${location.protocol}//${address}:${info.port}/#/pair/${code.token}` : "";
 
   return (
     <Stack spacing={3}>

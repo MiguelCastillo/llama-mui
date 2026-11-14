@@ -157,3 +157,21 @@ describe("/api", () => {
     expect(r.status).toBe(403);
   });
 });
+
+// On https (self-signed, for the microphone) the server's own calls to its /api
+// (plans run on the server use src/api.ts) go to a plain http listener on
+// loopback, which Node's fetch can reach without trusting the certificate.
+describe("https", () => {
+  it("lets code on the server reach its own /api", async () => {
+    const { getConnectors } = await import("../../src/api.ts");
+    const server = createApp(dist, { https: true });
+    await listen(server);
+    try {
+      // The loopback listener starts once the https one is listening.
+      await vi.waitFor(() => getConnectors(), { timeout: 5000, interval: 50 });
+      await expect(getConnectors()).resolves.toBeTruthy();
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});

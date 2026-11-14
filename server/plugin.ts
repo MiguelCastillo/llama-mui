@@ -2,7 +2,7 @@
 // options, the llama proxy, and the model's tools. It runs in both `vite` (dev) and
 // `vite preview`.
 
-import type { Server } from "node:http";
+import { createServer as createHttpServer, type RequestListener, type Server } from "node:http";
 import type { Connect, Plugin } from "vite";
 import { setApiOrigin } from "../src/api.ts";
 import { prepareLoginEnv } from "./terminal.ts";
@@ -92,19 +92,40 @@ export const handler: Connect.NextHandleFunction = (req, res) => {
 };
 
 // What a server does when it starts. Plans run on the server call its own /api over http (see setApiOrigin), so
-// once the server is listening it tells the client code where that is. Plain
-// http only: a server started with https would need to trust its own certificate.
-export function whenServing(httpServer: Server | null) {
+// once the server is listening it tells the client code where that is.
+//
+// A server on https has a self-signed certificate (the browser needs https for
+// the microphone), which Node's fetch would refuse. So it also gets a plain
+// http listener on this computer's loopback only, on a port of its own, serving
+// the same app (`app`), and the server's own calls go there. Loopback with no
+// proxy header is what isAllowed lets in, so nothing else changes for them.
+export function whenServing(httpServer: Server | null, app?: RequestListener) {
   // A run that was going when the last server stopped is marked as interrupted
   // (see restart.ts); this server's own runs end if it is closed meanwhile.
   void recoverOnce();
   httpServer?.once("close", () => void stopAllRuns());
-  if (!httpServer || "setSecureContext" in httpServer) return;
+  if (!httpServer) return;
+  const secure = "setSecureContext" in httpServer;
   const set = () => {
     const address = httpServer.address();
     setListenAddress(address);
-    const origin = selfOrigin(address);
-    if (origin) setApiOrigin(origin);
+    if (!secure) {
+      const origin = selfOrigin(address);
+      if (origin) setApiOrigin(origin);
+      return;
+    }
+    if (!app) return;
+    const loopback = createHttpServer(app);
+    loopback.requestTimeout = 0;
+    loopback.listen(0, "127.0.0.1", () => {
+      const origin = selfOrigin(loopback.address());
+      if (origin) setApiOrigin(origin);
+    });
+    httpServer.once("close", () => {
+      setApiOrigin(null);
+      loopback.close();
+      loopback.closeAllConnections();
+    });
   };
   if (httpServer.listening) set();
   else httpServer.once("listening", set);
@@ -127,12 +148,12 @@ export function api(): Plugin {
     name: "llama-mui-api",
     configureServer(server) {
       server.middlewares.use("/api", handler);
-      whenServing(server.httpServer as Server | null);
+      whenServing(server.httpServer as Server | null, server.middlewares as unknown as RequestListener);
       prepareLoginEnv();
     },
     configurePreviewServer(server) {
       server.middlewares.use("/api", handler);
-      whenServing(server.httpServer as Server | null);
+      whenServing(server.httpServer as Server | null, server.middlewares as unknown as RequestListener);
       prepareLoginEnv();
     },
   };

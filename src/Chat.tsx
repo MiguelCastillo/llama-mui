@@ -73,6 +73,7 @@ import DnsOutlinedIcon from "@mui/icons-material/DnsOutlined";
 import CloseIcon from "@mui/icons-material/Close";
 import InsertDriveFileOutlinedIcon from "@mui/icons-material/InsertDriveFileOutlined";
 import ReplyOutlinedIcon from "@mui/icons-material/ReplyOutlined";
+import MicIcon from "@mui/icons-material/Mic";
 import { keyframes } from "@mui/material/styles";
 import {
   type ChatMessage,
@@ -140,6 +141,7 @@ import { stepSummary } from "./stepSummary";
 import { groupRounds } from "./stepGroups";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import { createMessageBox, type MessageBox, type PendingDocument, type PendingImage } from "./messageBox";
+import { useSpeechRecognition } from "./useSpeechRecognition";
 import { composeMessage, isDocumentFile, prepareDocument, splitMessage } from "./documents";
 import EditButton from "./EditButton";
 import { submitDraft } from "./submitDraft";
@@ -2699,6 +2701,19 @@ function Composer({
   }, [documentError]);
   const noImagesRef = useRef(noImages);
   noImagesRef.current = noImages;
+  // Web Speech Recognition: starts with the box's current text, appends final
+  // and interim results, and stops on send, chat switch, or unmount.
+  const speech = useSpeechRecognition();
+  // Keep the box updated with the combined transcription as interim results arrive.
+  useEffect(() => {
+    if (!speech.isListening) return;
+    const combined = speech.startText + speech.finalTranscript + speech.interimText;
+    box.setText(combined);
+  }, [speech.isListening, speech.startText, speech.finalTranscript, speech.interimText, box]);
+  // Stop recording when a new chat is opened (sessionId on the box changes).
+  useEffect(() => {
+    speech.stopListening();
+  }, [box.sessionId(), speech.stopListening]);
   const addImages = useCallback(async (files: FileList) => {
     const images: PendingImage[] = [];
     const documents: PendingDocument[] = [];
@@ -2766,6 +2781,8 @@ function Composer({
     [addImages],
   );
   const send = async () => {
+    // Stop recording before sending so the final transcript is preserved in the box.
+    speech.stopListening();
     const t = text.trim();
     // Images in the box stay there when the model can't read them: the text
     // goes alone, and the box said so (see unsentImages).
@@ -3004,7 +3021,7 @@ function Composer({
         placeholder={placeholder}
         inputRef={inputRef}
         value={text}
-        slotProps={{ htmlInput: { readOnly: sending }, input: { disableUnderline: true } }}
+        slotProps={{ htmlInput: { readOnly: sending || speech.isListening }, input: { disableUnderline: true } }}
         onChange={(e) => box.setText(e.target.value)}
         onKeyDown={(e) => {
           // Enter sends on a wide screen; Shift+Enter makes a new line. On a phone
@@ -3050,6 +3067,44 @@ function Composer({
             </IconButton>
           </span>
         </Tooltip>
+        {/* Microphone button: records speech and appends it to the box. Only on secure contexts. */}
+        {speech.isSupported && (
+          <Tooltip title={speech.isListening ? "Stop recording" : "Record voice message"}>
+            <span>
+              <IconButton
+                aria-label={speech.isListening ? "Stop recording" : "Record voice message"}
+                size="small"
+                onClick={() => {
+                  if (speech.isListening) {
+                    speech.stopListening();
+                  } else {
+                    speech.startListening(text);
+                  }
+                }}
+                disabled={sending || disabled}
+                sx={{
+                  color: "text.secondary",
+                  ml: -1,
+                  ...(speech.isListening
+                    ? {
+                        color: "error.main",
+                        animation: `${micPulse} 1.5s infinite`,
+                        "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+                      }
+                    : {}),
+                }}
+              >
+                <MicIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {/* Insecure context note: only show on non-iOS browsers where the user might expect the mic to work. iOS browsers always hide it silently since the API is not available. */}
+        {!speech.isSupported && !/iPhone|iPad|iPod/.test(window.navigator.userAgent) && (
+          <Typography variant="caption" color="text.secondary" sx={{ alignSelf: "flex-end" }}>
+            Voice input requires a secure connection (HTTPS or localhost)
+          </Typography>
+        )}
         <Box sx={{ minWidth: 0, flexShrink: 1 }}>{folder}</Box>
         <Box sx={{ minWidth: 0, flexShrink: 1 }}>{persona}</Box>
         <Box sx={{ flexGrow: 1 }} />
@@ -3884,6 +3939,13 @@ function MakePlanButton({ title, onClick }: { title: string; onClick: () => void
 const typingDot = keyframes({
   "0%, 80%, 100%": { transform: "scale(0.4)", opacity: 0.4 },
   "40%": { transform: "scale(1)", opacity: 1 },
+});
+
+// A red pulse that signals the mic is recording.
+const micPulse = keyframes({
+  "0%": { boxShadow: `0 0 0 0 rgba(244,67,54,0.5)` },
+  "70%": { boxShadow: `0 0 0 8px rgba(244,67,54,0)` },
+  "100%": { boxShadow: `0 0 0 0 rgba(244,67,54,0)` },
 });
 
 function TypingDots({ label = "Waiting for a reply" }: { label?: string }) {

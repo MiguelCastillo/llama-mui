@@ -3,8 +3,12 @@
 // isn't restarted when a source file changes, so replies streaming from a llama
 // server (and runs) survive edits to llama-mui's own files. Run it with
 // `npm run prod` or `npm run prod:lan`; HOST and PORT come from the environment.
+// HTTPS is on by default, generated at startup with selfsigned so no static
+// cert files are needed. Set HTTPS=0 to disable.
 
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type RequestListener, type Server, type ServerResponse } from "node:http";
+import { createServer as createSecureServer } from "node:https";
+import { selfSignedCert } from "./cert.ts";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,9 +100,9 @@ async function serveStatic(dist: string, req: IncomingMessage, res: ServerRespon
 }
 
 // The server, not yet listening. `dist` is where the built client is.
-export function createApp(dist: string = defaultDist): Server {
+export function createApp(dist: string = defaultDist, options: { https?: boolean } = {}): Server {
   const root = path.resolve(dist);
-  const server = createServer((req, res) => {
+  const app: RequestListener = (req, res) => {
     const url = req.url ?? "/";
     if (url === "/api" || url.startsWith("/api/") || url.startsWith("/api?")) {
       // Mounted at /api the way connect does it, so the handler sees the path under it.
@@ -110,13 +114,14 @@ export function createApp(dist: string = defaultDist): Server {
       if (res.headersSent) return void res.end();
       plain(res, 500, `Couldn't serve that: ${e?.message ?? e}`);
     });
-  });
+  };
+  const server = options.https ? createSecureServer(selfSignedCert(), app) : createServer(app);
   // Replies stream for minutes: no cap on a request, and a keep-alive that
   // outlives the gap between a page's requests.
   server.requestTimeout = 0;
   server.headersTimeout = 60_000;
   server.keepAliveTimeout = 65_000;
-  whenServing(server);
+  whenServing(server, app);
   return server;
 }
 
@@ -127,7 +132,8 @@ function main() {
   prepareLoginEnv();
   const host = process.env.HOST || "127.0.0.1";
   const port = Number(process.env.PORT ?? 5173);
-  const server = createApp();
+  const https = process.env.HTTPS !== "0";
+  const server = createApp(undefined, { https });
   logServing(server, "prod");
 
   let open = 0;
@@ -145,7 +151,7 @@ function main() {
   server.listen(port, host, () => {
     const a = server.address();
     const where = a && typeof a === "object" ? `${a.address}:${a.port}` : `${host}:${port}`;
-    console.log(`llama-mui listening on http://${where} (pid ${process.pid})`);
+    console.log(`llama-mui listening on ${https ? "https" : "http"}://${where} (pid ${process.pid})`);
   });
 
   let closing = false;
