@@ -25,6 +25,7 @@ import { toolRoutes } from "./tools.ts";
 import { modelAdminRoutes } from "./modelAdmin.ts";
 import { recoverOnce } from "./restart.ts";
 import { stopAllRuns } from "./runners.ts";
+import { whisperRoutes } from "./whisper.ts";
 
 async function route(r: Route) {
   if (await phoneRoutes(r)) return;
@@ -42,6 +43,7 @@ async function route(r: Route) {
   if (await personaRoutes(r)) return;
   if (await skillRoutes(r)) return;
   if (await imageRoutes(r)) return;
+  if (await whisperRoutes(r)) return;
   throw new HttpError(404, "Not found");
 }
 

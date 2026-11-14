@@ -141,7 +141,7 @@ import { stepSummary } from "./stepSummary";
 import { groupRounds } from "./stepGroups";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import { createMessageBox, type MessageBox, type PendingDocument, type PendingImage } from "./messageBox";
-import { useSpeechRecognition } from "./useSpeechRecognition";
+import { useVoiceRecorder } from "./useVoiceRecorder";
 import { composeMessage, isDocumentFile, prepareDocument, splitMessage } from "./documents";
 import EditButton from "./EditButton";
 import { submitDraft } from "./submitDraft";
@@ -2699,21 +2699,30 @@ function Composer({
     const t = setTimeout(() => setDocumentError(null), 8000);
     return () => clearTimeout(t);
   }, [documentError]);
+  // Voice transcription error: shown briefly under the box.
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!voiceError) return;
+    const t = setTimeout(() => setVoiceError(null), 8000);
+    return () => clearTimeout(t);
+  }, [voiceError]);
   const noImagesRef = useRef(noImages);
   noImagesRef.current = noImages;
-  // Web Speech Recognition: starts with the box's current text, appends final
-  // and interim results, and stops on send, chat switch, or unmount.
-  const speech = useSpeechRecognition();
-  // Keep the box updated with the combined transcription as interim results arrive.
+  // Voice recording: records audio via MediaRecorder, sends to whisper, inserts
+  // the transcribed text into the box. Stops on send, chat switch, or unmount.
+  const voice = useVoiceRecorder({
+    onTranscribed: (text) => {
+      box.setText(text);
+    },
+  });
+  // Mirror the hook's error into the component's error state for display.
   useEffect(() => {
-    if (!speech.isListening) return;
-    const combined = speech.startText + speech.finalTranscript + speech.interimText;
-    box.setText(combined);
-  }, [speech.isListening, speech.startText, speech.finalTranscript, speech.interimText, box]);
+    setVoiceError(voice.error);
+  }, [voice.error]);
   // Stop recording when a new chat is opened (sessionId on the box changes).
   useEffect(() => {
-    speech.stopListening();
-  }, [box.sessionId(), speech.stopListening]);
+    voice.stopRecording();
+  }, [box.sessionId(), voice.stopRecording]);
   const addImages = useCallback(async (files: FileList) => {
     const images: PendingImage[] = [];
     const documents: PendingDocument[] = [];
@@ -2781,8 +2790,8 @@ function Composer({
     [addImages],
   );
   const send = async () => {
-    // Stop recording before sending so the final transcript is preserved in the box.
-    speech.stopListening();
+    // Stop recording before sending so the mic is released.
+    voice.stopRecording();
     const t = text.trim();
     // Images in the box stay there when the model can't read them: the text
     // goes alone, and the box said so (see unsentImages).
@@ -2982,6 +2991,11 @@ function Composer({
           {documentError}
         </Typography>
       )}
+      {voiceError && (
+        <Typography variant="caption" color="error.main" role="status">
+          {voiceError}
+        </Typography>
+      )}
       {/* Hidden file picker, triggered by the attach button. */}
       <input
         ref={fileInputRef}
@@ -3021,7 +3035,7 @@ function Composer({
         placeholder={placeholder}
         inputRef={inputRef}
         value={text}
-        slotProps={{ htmlInput: { readOnly: sending || speech.isListening }, input: { disableUnderline: true } }}
+        slotProps={{ htmlInput: { readOnly: sending || voice.isRecording || voice.isTranscribing }, input: { disableUnderline: true } }}
         onChange={(e) => box.setText(e.target.value)}
         onKeyDown={(e) => {
           // Enter sends on a wide screen; Shift+Enter makes a new line. On a phone
@@ -3067,25 +3081,25 @@ function Composer({
             </IconButton>
           </span>
         </Tooltip>
-        {/* Microphone button: records speech and appends it to the box. Only on secure contexts. */}
-        {speech.isSupported && (
-          <Tooltip title={speech.isListening ? "Stop recording" : "Record voice message"}>
+        {/* Microphone button: records audio, sends to whisper, inserts transcription. Only on secure contexts. */}
+        {voice.isSupported && (
+          <Tooltip title={voice.isRecording ? "Stop recording" : voice.isTranscribing ? "Transcribing…" : "Record voice message"}>
             <span>
               <IconButton
-                aria-label={speech.isListening ? "Stop recording" : "Record voice message"}
+                aria-label={voice.isRecording ? "Stop recording" : "Record voice message"}
                 size="small"
                 onClick={() => {
-                  if (speech.isListening) {
-                    speech.stopListening();
+                  if (voice.isRecording) {
+                    voice.stopRecording();
                   } else {
-                    speech.startListening(text);
+                    voice.startRecording();
                   }
                 }}
-                disabled={sending || disabled}
+                disabled={sending || disabled || voice.isTranscribing}
                 sx={{
                   color: "text.secondary",
                   ml: -1,
-                  ...(speech.isListening
+                  ...(voice.isRecording
                     ? {
                         color: "error.main",
                         animation: `${micPulse} 1.5s infinite`,
@@ -3099,8 +3113,8 @@ function Composer({
             </span>
           </Tooltip>
         )}
-        {/* Insecure context note: only show on non-iOS browsers where the user might expect the mic to work. iOS browsers always hide it silently since the API is not available. */}
-        {!speech.isSupported && !/iPhone|iPad|iPod/.test(window.navigator.userAgent) && (
+        {/* Insecure context note: only show on non-iOS browsers where the user might expect the mic to work. iOS browsers always hide it silently since MediaRecorder requires a secure context there too. */}
+        {!voice.isSupported && !/iPhone|iPad|iPod/.test(window.navigator.userAgent) && (
           <Typography variant="caption" color="text.secondary" sx={{ alignSelf: "flex-end" }}>
             Voice input requires a secure connection (HTTPS or localhost)
           </Typography>
