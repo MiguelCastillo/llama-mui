@@ -66,8 +66,8 @@ one line for the turn, and a stopped or failed reply still logs what it used.
 The provider is the name of the connector the chat used. A server that reports
 no counts adds no line, so its use shows as zero.
 
-A line also says what leaving old tool results out did (see "Old tool
-results" in the guide): `clearedResults` and `clearedTokens`, summed over the
+A line also says what leaving old tool results out did (see "Tool result
+trimming" in the guide): `clearedResults` and `clearedTokens`, summed over the
 turn's requests, and `rereads`, the tool calls that asked again for a result
 that had been left out. On Anthropic the cleared counts are its own; on
 llama.cpp `clearedTokens` is estimated from the results' length, the one

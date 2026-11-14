@@ -1041,7 +1041,7 @@ vitest (`npm test`).
     as if it had agreed.
 - **Recovery rounds**: a step that's still not done after the retry may be
   blocked by something outside it (a merge stopped by an uncommitted edit, a
-  wrong branch), so the model gets up to 2 more turns (`MAX_RECOVERY_ROUNDS`;
+  wrong branch), so the model gets up to 2 more rounds (`MAX_RECOVERY_ROUNDS`;
   `recoveryPrompt` in `src/agent/plan.ts`). The prompt says what the check
   found missing and gives the last ~3,000 characters of what the step's
   commands printed, and asks it to work out why from that and fix it with safe,
@@ -1663,7 +1663,7 @@ step that was running when the page closed comes back as pending.
   its model, but doesn't load it.
 - Streaming replies with a Stop button (on a phone) or Esc (wide screens).
 - **Show steps** (Settings → Chat) turns all of this on, and it is off until
-  you do: with it off a reply shows each round's note and the answer, and no
+  you do: with it off a reply shows each round's text before its tool calls and the answer, and no
   steps lines; while it runs, the waiting dots and the elapsed time show
   instead of the live line. A reply that was only steps (say, stopped in the
   middle of a tool call) says so, and where to turn them on. The choice is
@@ -1672,12 +1672,12 @@ step that was running when the page closed comes back as pending.
   is only known once settings load, which made steps flash and then vanish on
   reload). The description below is of a reply with steps shown.
 - A reply reads in the order the model worked. Each round (one trip to the
-  model) shows its short note first, and below it that round's steps (its
+  model) shows the short text it wrote before its tool calls first, and below it that round's steps (its
   thinking and its tool calls) folded into one grey line, for example
-  "3 steps". Then comes the next round's note and line, ending with the
-  answer. The model sometimes skips the note and goes straight to more steps;
+  "3 steps". Then comes the next round's text and line, ending with the
+  answer. The model sometimes skips that text and goes straight to more steps;
   such a round joins the line above it, so two lines never sit side by side
-  with no note between them (the count adds up and the step rows inside stay
+  with no text between them (the count adds up and the step rows inside stay
   in order). Whether the model meant a new round or more steps of the same one
   isn't shown. The last round has no tool calls, so its thinking line (if it
   has any) sits above the answer, and it doesn't join the line above. Each
@@ -1863,7 +1863,7 @@ chat, a thread's report). Each request is billed for:
 
 - **Input**: everything sent, which is the whole conversation so far, the
   system prompt, the tool descriptions and the tool results (old ones are
-  left out once the chat is long: see [Old tool results](#old-tool-results)).
+  left out once the chat is long: see [Tool result trimming](#tool-result-trimming)).
   A reply with ten tool calls sends the conversation ten times. In a long chat
   this is usually most of the bill.
 - **Output**: the reply text, the tool calls, and **all** of Claude's
@@ -1910,7 +1910,10 @@ model and one Effort for a chat. Turning thinking off is not a saving: Claude
 then writes its reasoning into the reply instead, and once that is quoted back
 Anthropic refuses later requests (`reasoning_extraction`).
 
-### Old tool results
+### Tool result trimming
+
+Tool result trimming is what the code calls clearing, and the point it has
+reached is the cut.
 
 Every request carries the whole chat, and in a working
 chat most of that is tool results: whole files and command output. Replayed
@@ -2051,11 +2054,14 @@ usage: null
 
 ### Words used here
 
-- **Message**: one entry in the chat: yours, a reply, or a tool result.
+- **Message**: one entry in the chat: yours, one from the model, or a tool result.
   `session.json` holds one flat list of them, in the order they happened.
 - **Turn**: your message, the tool runs and the reply. Only a way of grouping
   messages: the page does it when it draws the chat, and the file has no turns.
   Compaction is a turn of its own: the request and the summary.
+- **Reply**: the model's side of a turn, from its first round to its final answer.
+- **Round**: one trip to the model inside a reply: it answers, or asks for tools
+  and gets their results.
 - **History start** (`contextStart` in `session.json`): the 0-based position in
   the message list of the first message the model is sent. It always points at
   the first message of a turn, but it is stored as a plain number.
@@ -2146,8 +2152,8 @@ of the list the model is sent: from `contextStart` on.
   new to summarize. A message sent while a compaction runs waits in the queue
   like any other and starts after it, from the new history start.
 - **Also on success:** the system prompt is made again for the next reply
-  (working directory, persona text), the saved cut of old tool results (see Old
-  tool results above) starts afresh, and the model's record of which files it
+  (working directory, persona text), the saved cut of old tool results (see Tool result
+  trimming above) starts afresh, and the model's record of which files it
   has read is cleared, so it reads a file again before changing it: it no longer
   remembers their contents.
   On Claude the compaction turn's replies also lose their signed thinking: it was
@@ -2214,7 +2220,7 @@ the `tail -f` command that follows it, when it starts. Each line has `t` (time),
   the stream's own usage events, which is what a Claude request is billed for
   (see [What a Claude chat costs](#what-a-claude-chat-costs); `output` includes
   all the thinking). When Anthropic left old tool results out of the request
-  (see [Old tool results](#old-tool-results)), `cleared` says how many and
+  (see [Tool result trimming](#tool-result-trimming)), `cleared` says how many and
   the tokens that saved: `{ toolUses, tokens }`. Nothing of the reply's text is kept. To add up a day:
   `grep '"tokens"' ~/.llama-mui/logs/server-<day>.log`.
 - `llama.watch`, `llama.down`, `llama.up`, `llama.model`: every 15 seconds the
