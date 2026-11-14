@@ -12,6 +12,7 @@ import { logServing } from "./lifecycle.ts";
 import { log } from "./log.ts";
 import { handler, whenServing } from "./plugin.ts";
 import { stopAllRuns } from "./runners.ts";
+import { prepareLoginEnv } from "./terminal.ts";
 import { openRequests } from "./upstreamLog.ts";
 
 const TYPES: Record<string, string> = {
@@ -122,6 +123,8 @@ export function createApp(dist: string = defaultDist): Server {
 const GRACE_MS = 5_000;
 
 function main() {
+  // Read now, so a slow or broken login profile shows up at startup (see terminal.ts).
+  prepareLoginEnv();
   const host = process.env.HOST || "127.0.0.1";
   const port = Number(process.env.PORT ?? 5173);
   const server = createApp();

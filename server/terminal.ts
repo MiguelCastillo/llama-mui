@@ -6,6 +6,7 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { resolveAllowed } from "./disk.ts";
+import { log } from "./log.ts";
 import { type ToolContext, ToolError, type ToolSpec, fn, reasonOf, requireApproval } from "./toolkit.ts";
 
 const TIMEOUT_MS = 2 * 60 * 1000;
@@ -25,27 +26,76 @@ async function workingDir(ctx: ToolContext, raw: unknown): Promise<string> {
 
 const SHELL = process.env.SHELL || "/bin/zsh";
 
-// The environment of the user's login shell (PATH with Homebrew and the like),
-// read once. Commands then run with it in a plain shell, so whatever the login
-// profile prints (ssh-add's "Identity added", say) doesn't land in every result.
-let loginEnvPromise: Promise<NodeJS.ProcessEnv> | null = null;
-function loginEnv(): Promise<NodeJS.ProcessEnv> {
-  loginEnvPromise ??= new Promise((resolve) => {
-    const child = spawn(SHELL, ["-lc", "env -0"], { stdio: ["ignore", "pipe", "ignore"] });
+// How long the login profile gets to run before its environment is given up on.
+const LOGIN_ENV_TIMEOUT_MS = 5000;
+
+// Reads the environment of the user's login shell (PATH with Homebrew and the
+// like). The shell runs detached, in a session of its own with no terminal, so
+// nothing in the profile can stop to ask for input: a prompt that opens
+// /dev/tty (ssh-add asking for a passphrase) fails at once instead of waiting
+// on the terminal the server was started from, and ssh-add is told not to show
+// a window instead. A profile that still takes longer than the time limit, or
+// fails, is killed with all it started, and the server's own environment is
+// used: a command then can't find a tool at worst, and nothing hangs.
+export function readLoginEnv(shell: string, timeoutMs: number): Promise<{ env: NodeJS.ProcessEnv; fallback: string | null }> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (env: NodeJS.ProcessEnv, fallback: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ env, fallback });
+    };
+    const child = spawn(shell, ["-lc", "env -0"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      detached: true,
+      env: { ...process.env, SSH_ASKPASS_REQUIRE: "never" },
+    });
+    const timer = setTimeout(() => {
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+      done(process.env, `the login profile took longer than ${timeoutMs / 1000} seconds`);
+    }, timeoutMs);
     let out = "";
     child.stdout.on("data", (c: Buffer) => (out += c.toString("utf8")));
-    child.on("error", () => resolve(process.env));
+    child.on("error", (e) => done(process.env, `the login shell didn't start: ${e.message}`));
     child.on("close", (code) => {
-      if (code !== 0) return resolve(process.env);
+      if (code !== 0) return done(process.env, `the login shell exited with code ${code}`);
       const env: NodeJS.ProcessEnv = {};
       for (const entry of out.split("\0")) {
         const eq = entry.indexOf("=");
         if (eq > 0) env[entry.slice(0, eq)] = entry.slice(eq + 1);
       }
-      resolve(env);
+      done(env, null);
     });
   });
+}
+
+// Read once per server, starting when the server does (prepareLoginEnv), so a
+// slow or broken profile shows up in the log at startup rather than in a chat.
+// Commands then run with it in a plain shell, so whatever the login profile
+// prints (ssh-add's "Identity added", say) doesn't land in every result.
+let loginEnvPromise: Promise<NodeJS.ProcessEnv> | null = null;
+function loginEnv(): Promise<NodeJS.ProcessEnv> {
+  if (!loginEnvPromise) {
+    const started = Date.now();
+    loginEnvPromise = readLoginEnv(SHELL, LOGIN_ENV_TIMEOUT_MS).then(({ env, fallback }) => {
+      if (fallback) log("terminal.loginEnvFallback", { reason: fallback, ms: Date.now() - started });
+      else log("terminal.loginEnv", { ms: Date.now() - started });
+      return env;
+    });
+  }
   return loginEnvPromise;
+}
+
+// Called once the server starts (see whenServing in plugin.ts): reads the
+// login environment in the background. A command that comes before it is done
+// waits for it, at most the time limit.
+export function prepareLoginEnv(): void {
+  void loginEnv();
 }
 
 // The message when the caller gave up on a command (Stop everything).

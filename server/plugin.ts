@@ -5,6 +5,7 @@
 import type { Server } from "node:http";
 import type { Connect, Plugin } from "vite";
 import { setApiOrigin } from "../src/api.ts";
+import { prepareLoginEnv } from "./terminal.ts";
 import { commandRoutes } from "./commands.ts";
 import { connectorRoutes } from "./connectors.ts";
 import { attachmentRoutes } from "./disk.ts";
@@ -109,16 +110,30 @@ export function whenServing(httpServer: Server | null) {
   else httpServer.once("listening", set);
 }
 
+// The Vite plugin: how `npm run dev` (configureServer) and `vite preview`
+// (configurePreviewServer) serve /api. Those servers are Vite's own and never
+// go through main.ts, which starts only `prod`, so what a server does at startup
+// is repeated here.
+//
+// That includes prepareLoginEnv: run_command's environment is read as the
+// server starts (see terminal.ts), so a slow or broken login profile shows up
+// in the log at startup, not in the middle of a chat. main() calls it for
+// `prod`; these two calls are the same for dev and preview. Without them a dev
+// server would read it at the first command instead. It isn't in whenServing,
+// which all three share, because tests start servers with createApp, which
+// calls whenServing, and tests must never run the user's own login profile.
 export function api(): Plugin {
   return {
     name: "llama-mui-api",
     configureServer(server) {
       server.middlewares.use("/api", handler);
       whenServing(server.httpServer as Server | null);
+      prepareLoginEnv();
     },
     configurePreviewServer(server) {
       server.middlewares.use("/api", handler);
       whenServing(server.httpServer as Server | null);
+      prepareLoginEnv();
     },
   };
 }

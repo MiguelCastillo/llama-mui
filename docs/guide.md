@@ -522,6 +522,12 @@ if you approve exactly that. It runs as you, with your login shell's
 environment (PATH and so on), network and credentials: the model can't reach GitHub, but a `git push`
 it suggests can. Commands get no input (git won't prompt for a password) and
 are stopped after 2 minutes; the output and exit code go back to the model.
+That environment is read once, when the server starts, from a login shell run with no
+terminal, so a profile line that asks for something (`ssh-add` wanting a
+passphrase) fails instead of waiting. A profile that takes longer than 5
+seconds is stopped, the server's own environment is used, and the server's log
+says so (`terminal.loginEnvFallback`). Holding Stop offers Stop everything,
+which also stops a command that is running.
 
 The **Web** group (`server/web.ts`) has `web_search`, which sends the model's
 query to DuckDuckGo and returns titles, links and snippets. DuckDuckGo has no
