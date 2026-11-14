@@ -1,6 +1,7 @@
 // A React hook around the MediaRecorder API that records audio, sends it to
-// POST /api/whisper as WAV, and returns the transcribed text. Shows a red
-// pulsing indicator while recording and a brief loading state while transcribing.
+// POST /api/whisper/stream as WAV, and streams the transcribed text back via
+// Server-Sent Events. Shows a red pulsing indicator while recording and a
+// brief loading state while transcribing.
 
 import { useRef, useState, useCallback, useEffect } from "react";
 
@@ -134,6 +135,7 @@ export function useVoiceRecorder({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const isSupported = typeof window !== "undefined"
     && typeof navigator.mediaDevices !== "undefined"
@@ -182,33 +184,62 @@ export function useVoiceRecorder({
     setIsRecording(false);
   }, []);
 
-  // Transcribe the recorded blob: decode to PCM, encode as WAV, POST to whisper.
+  // Transcribe the recorded blob: decode to PCM, encode as WAV, POST to
+  // whisper/stream and consume the SSE stream. Each SSE event carries
+  // { text: 'accumulated transcription so far' }, so the box updates
+  // progressively as the server processes the audio.
   async function transcribeRecordedAudio(blob: Blob) {
     setIsTranscribing(true);
     setError(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const samples = await decodeAudio(blob);
       const wavBlob = floatToWav(samples, 16000);
-      const response = await fetch("/api/whisper", {
+      const response = await fetch("/api/whisper/stream", {
         method: "POST",
         headers: { "Content-Type": "audio/wav" },
         body: wavBlob,
+        signal: controller.signal,
       });
       if (!response.ok) {
         const text = await response.text().catch(() => "");
         throw new Error(`Transcription failed (${response.status}): ${text || response.statusText}`);
       }
-      const data = await response.json();
-      onTranscribed(data.text);
+      // Consume the SSE stream. Each line is "data: { text: '...' }".
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n");
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const { text } = JSON.parse(line.slice(6)) as { text: string };
+            accumulated = text;
+            onTranscribed(text);
+          } catch {
+            // skip malformed events
+          }
+        }
+      }
+      // Final call with whatever was accumulated (the last event may not
+      // have ended with \n).
+      if (accumulated) onTranscribed(accumulated);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Transcription failed";
       setError(message);
     } finally {
       setIsTranscribing(false);
+      abortRef.current = null;
     }
   }
 
-  // Stop recording on unmount so the browser mic indicator goes away.
+  // Stop recording on unmount so the browser mic indicator goes away, and
+  // abort any in-flight transcription.
   useEffect(() => {
     return () => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -217,6 +248,7 @@ export function useVoiceRecorder({
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
       }
+      abortRef.current?.abort();
     };
   }, []);
 
