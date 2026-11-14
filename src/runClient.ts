@@ -426,7 +426,7 @@ export async function sendMessage(id: string, text: string): Promise<{ step: num
 export async function sendChat(
   id: string,
   text: string,
-  options: RunOptions & { planning: boolean; images?: ImageRef[]; replyTo?: string },
+  options: RunOptions & { planning: boolean; images?: ImageRef[]; replyTo?: string; compact?: boolean },
 ): Promise<{ queued: boolean }> {
   const before = generation.get(id) ?? 0;
   const r = await sendCommand(id, "message", { text, ...options });

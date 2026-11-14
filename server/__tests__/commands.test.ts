@@ -440,6 +440,29 @@ describe("message with no run: one chat reply, run here", () => {
     expect(chat).toHaveBeenLastCalledWith("a", "again", expect.objectContaining({ planning: false }));
   });
 
+  it("asks for a compaction when the page says compact, and only then", async () => {
+    saved("a");
+    const chat = vi.fn(async () => {});
+    const r = await command("a", "message", { ...chatOptions, text: "", compact: true }, "POST", { ...deps, chat });
+    expect(r.status).toBe(200);
+    expect(chat).toHaveBeenCalledWith("a", "", expect.objectContaining({ compact: true, planning: false }));
+    await command("a", "message", { ...chatOptions, text: "hello" }, "POST", { ...deps, chat });
+    expect((chat.mock.calls.at(-1) as any)[2]).not.toHaveProperty("compact");
+    await command("a", "message", { ...chatOptions, text: "hello", compact: false }, "POST", { ...deps, chat });
+    expect((chat.mock.calls.at(-1) as any)[2]).not.toHaveProperty("compact");
+  });
+
+  it("refuses a compact that isn't true or false", async () => {
+    saved("a");
+    const chat = vi.fn(async () => {});
+    for (const bad of ["yes", 1, null]) {
+      const r = await command("a", "message", { ...chatOptions, text: "", compact: bad }, "POST", { ...deps, chat });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/compact must be true or false/);
+    }
+    expect(chat).not.toHaveBeenCalled();
+  });
+
   it("hands the starter the response being replied to, cut short if very long, and ignores a blank one", async () => {
     saved("a");
     const chat = vi.fn(async () => {});
@@ -574,6 +597,18 @@ describe("message while a chat reply streams: it waits in the session's queue", 
     return turn;
   }
   const queueOf = (id = "a") => (fileOf(id).queue ?? []) as any[];
+
+  it("refuses a compaction while the reply streams, and never queues it", async () => {
+    const turn = await startReply();
+    const chat = vi.fn(async () => {});
+    const r = await command("a", "message", { ...chatOptions, text: "", compact: true }, "POST", { ...deps, chat });
+    expect(r.status).toBe(409);
+    expect(r.body.reason).toBe("reply running");
+    expect(chat).not.toHaveBeenCalled();
+    expect(queueOf()).toEqual([]);
+    release(true);
+    await turn.done;
+  });
 
   it("queues it with the choices it was typed with, and starts no second reply", async () => {
     const turn = await startReply();

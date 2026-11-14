@@ -106,7 +106,7 @@ export interface CommandDeps {
   start: (id: string, options: RunOptions) => Promise<{ sessionId: string } | void>;
   // Starts one chat reply for the saved session (a message to a session with
   // no run). Tests pass a fake.
-  chat?: (id: string, text: string, options: RunOptions & { planning: boolean; replyTo?: string }) => Promise<void>;
+  chat?: (id: string, text: string, options: RunOptions & { planning: boolean; replyTo?: string; compact?: boolean }) => Promise<void>;
   // Starts a side question in a session whose plan runs (see aside.ts); answers
   // once it has begun. Tests pass a fake.
   aside?: (id: string, text: string, options: RunOptions) => Promise<void>;
@@ -311,6 +311,12 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
         // No run: one chat reply, run here. While a reply streams: the message
         // waits in the session's queue (see queueMessage).
         if (body.planning !== undefined && typeof body.planning !== "boolean") throw new HttpError(400, "planning must be true or false");
+        if (body.compact !== undefined && typeof body.compact !== "boolean") throw new HttpError(400, "compact must be true or false");
+        // The Compact session button: the model is asked for a summary (src/compact.ts).
+        // It waits for a reply that is streaming; it is never put in the queue.
+        if (body.compact === true && replyRunning) {
+          throw new HttpError(409, "A reply is still running. Wait for it to finish, then compact.", { reason: "reply running" });
+        }
         if (replyRunning && !text.trim()) {
           throw new HttpError(400, "Add some text to the message to send it while a reply is running. Your message is still in the box.");
         }
@@ -323,7 +329,7 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
           extra = { queued: true, messageId: queued };
         } else {
           // (A reply that ended while the message was on its way is no reason to queue it.)
-          await deps.chat(id, text, { ...options, planning: body.planning === true, images: validated, replyTo });
+          await deps.chat(id, text, { ...options, planning: body.planning === true, images: validated, replyTo, ...(body.compact === true ? { compact: true } : {}) });
         }
       }
       break;

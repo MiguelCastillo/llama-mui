@@ -18,6 +18,12 @@ export function markRead(chatId: string, file: string, text: string) {
   files.set(file, hash(text));
 }
 
+// Forgets what the model has read in a chat: after a compaction it no longer
+// remembers the files' contents, so it has to read them again before a change.
+export function forget(chatId: string) {
+  seen.delete(chatId);
+}
+
 // Throws unless the model has read the file and it hasn't changed since.
 export function requireRead(chatId: string, file: string, text: string) {
   const last = seen.get(chatId)?.get(file);

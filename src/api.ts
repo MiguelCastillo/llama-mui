@@ -137,6 +137,9 @@ export interface ChatMessage {
   // apart from it (server/aside.ts). They are in the chat, but no plan step
   // sees them; a chat turn after the plan does.
   aside?: boolean;
+  // On the message that asks the model for a compaction summary, and on its
+  // reply (see src/compact.ts). The chat's history start points at the request.
+  compaction?: boolean;
   // On a user message: the response it replies to (its text). Shown in the
   // chat, so the history keeps what was answered; never sent to the model,
   // which only gets the message's own text.

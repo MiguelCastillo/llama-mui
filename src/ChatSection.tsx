@@ -11,7 +11,7 @@ const OPTIONS: { key: keyof Preferences; label: string; summary: string }[] = [
     key: "showContextMeter",
     label: "Show context meter",
     summary:
-      "Show how much context is left under the Send button. Click it for token counts, speed and Clear context; turning this off hides Clear context too.",
+      "Show how much context is left under the Send button. Click it for token counts and speed.",
   },
   {
     key: "renderMarkdown",

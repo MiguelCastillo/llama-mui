@@ -48,11 +48,14 @@ import { randomUUID } from "node:crypto";
 import { type RunPlanCallbacks, runPlan } from "../src/agent/agent.ts";
 import type { ChatMessage, PlanStep, QueuedMessage, Session } from "../src/api.ts";
 import { type AsideGroup, plainCount, splitAsides, weaveAsides, withoutAsides } from "../src/asides.ts";
+import { COMPACT_FAILED, MAX_COMPACT_TRIES, mustCompactFirst, needsCompaction, summaryOf } from "../src/compact.ts";
 import { planRequestFor } from "../src/planThread.ts";
 import { attachedPaths, makeReply, modelLoaded } from "../src/runnerReply.ts";
 import type { Answer, Ask, RunnerEnv, RunnerHandle } from "../src/runnerTypes.ts";
 import { autoApproves } from "../src/autoApprove.ts";
+import { compactInstruction } from "./compactInstruction.ts";
 import { HttpError } from "./http.ts";
+import { forget as forgetReads } from "./reads.ts";
 import * as hub from "./runHub.ts";
 import { readSession, revisionOf } from "./sessionFile.ts";
 import { type AskReport, askModel, reportToParent } from "./threadReport.ts";
@@ -100,6 +103,10 @@ interface Entry {
   // way to resolve it. Only {id, kind, details} reaches the hub.
   ask: { id: string; ask: Ask; decide: (answer: Answer) => void } | null;
   error: string | null;
+  // Something to tell the user when the run ends that is not the run's failure: a
+  // compaction that didn't work, while the reply they waited for went through.
+  // Unlike `error` it doesn't pause the queue.
+  notice: string | null;
   // Messages from the user that no step has seen yet (see sendNote). They are
   // part of the run record, so a page that connects later shows them.
   notes: hub.RunNote[];
@@ -446,6 +453,11 @@ export function abortAside(id: string): boolean {
 
 // ── the run ──────────────────────────────────────────────────────────────────
 
+// How many compactions in a row failed, by session, in memory: a restart forgets
+// it, and a try that works (or a reply that leaves the chat under the threshold)
+// clears it.
+const compactTries = new Map<string, number>();
+
 // Starts the plan of a saved session (its open steps, in order) and answers
 // once the hub has marked the session as running. `env` is what the run needs
 // besides the session: the connector (without its key), the model, the tools.
@@ -472,7 +484,7 @@ export function startRunner(
 export function startTurn(
   id: string,
   env: RunnerEnv,
-  turn: { text: string; planning: boolean; images?: { id: string; mediaType: string }[]; replyTo?: string },
+  turn: { text: string; planning: boolean; images?: { id: string; mediaType: string }[]; replyTo?: string; compact?: boolean },
   deps: RunnerDeps = {},
 ): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
   return launch(id, env, deps, turn);
@@ -482,7 +494,7 @@ async function launch(
   id: string,
   env: RunnerEnv,
   deps: RunnerDeps,
-  turn: { text: string; planning: boolean; images?: { id: string; mediaType: string }[]; replyTo?: string } | null,
+  turn: { text: string; planning: boolean; images?: { id: string; mediaType: string }[]; replyTo?: string; compact?: boolean } | null,
 ): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
   if (store.has(id)) throw turn ? busy() : alreadyRunning();
   const disk = await readSession(id);
@@ -519,6 +531,7 @@ async function launch(
     deps: resolved,
     ask: null,
     error: null,
+    notice: null,
     notes: [],
     asides: groups,
     aside: null,
@@ -584,11 +597,56 @@ async function launch(
   const reply = resolved.reply(e.handle);
 
   if (turn) {
+    // One more reply in this run, asking the model for a compaction summary (see
+    // src/compact.ts). Without a usable summary the chat is put back as it was,
+    // so a failed try leaves nothing behind; it is tried again after the next
+    // reply, MAX_COMPACT_TRIES times in a row. The run itself doesn't fail over
+    // it: the reply the user waited for went through.
+    const compactReply = async () => {
+      const before = e.session.messages;
+      const usageBefore = e.session.usage;
+      let instruction: string;
+      try {
+        instruction = await compactInstruction();
+      } catch (err: any) {
+        // The file can't be read: no request is made, and it counts as a failed try.
+        compactTries.set(id, (compactTries.get(id) ?? 0) + 1);
+        console.warn(`Compaction of session ${id} wasn't tried: ${err?.message ?? err}`);
+        e.notice = COMPACT_FAILED;
+        return;
+      }
+      await reply(instruction, before, { compact: true });
+      const done = summaryOf(e.session.messages);
+      if (done && e.session.contextStart === done.at) {
+        compactTries.delete(id);
+        forgetReads(id);
+        return;
+      }
+      // Stop during the summary is the user's choice, not a failed try.
+      if (!e.stopRequested) {
+        e.notice = COMPACT_FAILED;
+        compactTries.set(id, (compactTries.get(id) ?? 0) + 1);
+        console.warn(`Compaction of session ${id} didn't get a summary (${e.error ?? "no text"}); try ${compactTries.get(id)}.`);
+      }
+      change(e, (s) => ({ ...s, messages: s.messages.length >= before.length ? before : s.messages, usage: usageBefore, failed: null }));
+      e.handle.setError(null);
+    };
+    const triesLeft = () => (compactTries.get(id) ?? 0) < MAX_COMPACT_TRIES;
     e.done = (async () => {
       if (e.stopRequested) return;
+      // The button: compact now, whatever came before.
+      if (turn.compact) return compactReply();
+      // No room left for another message: summarize before sending it.
+      if (mustCompactFirst(e.session.usage, env.models, env.model) && triesLeft()) await compactReply();
+      if (e.stopRequested) return;
       // The reply streams into the session as it goes (makeReply's callbacks),
-      // and says how it ended through the error and `failed`; nothing to keep.
-      await reply(turn.text, e.session.messages, { planning: turn.planning, images: turn.images, replyTo: turn.replyTo });
+      // and says how it ended through the error and `failed`.
+      const sent = await reply(turn.text, e.session.messages, { planning: turn.planning, images: turn.images, replyTo: turn.replyTo });
+      // The chat is past the threshold now, with the server's memory of this
+      // conversation fresh: summarize it while that is cheap. A chat that is
+      // under the threshold again starts counting tries from zero.
+      if (!needsCompaction(e.session.usage, env.models, env.model)) compactTries.delete(id);
+      else if (sent.ok && !e.stopRequested && !e.error && triesLeft()) await compactReply();
     })()
       .catch((err) => {
         if (!e.stopRequested) e.handle.setError(String(err?.message ?? err));
@@ -679,7 +737,7 @@ async function end(e: Entry) {
   clearSaveTimers(e);
   store.delete(e.id);
   try {
-    await hub.endRun(e.id, { error: e.error });
+    await hub.endRun(e.id, { error: e.error ?? e.notice });
   } catch (err) {
     console.warn(`Couldn't finish the run of session ${e.id}: ${err}`);
   }
@@ -802,6 +860,7 @@ export async function stopAllRuns() {
 export async function resetRunners() {
   const entries = [...store.values()];
   store.clear();
+  compactTries.clear();
   for (const e of entries) {
     e.stopRequested = true;
     e.ended = true;

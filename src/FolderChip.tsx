@@ -95,7 +95,7 @@ export default function FolderChip({
       <Tooltip
         title={
           workingDir
-            ? `${workingDir}${frozen ? " (fixed for this chat; Clear context lets you change it)" : ""}`
+            ? `${workingDir}${frozen ? " (fixed for this chat)" : ""}`
             : "No working directory: the model uses absolute paths"
         }
       >
@@ -141,7 +141,7 @@ export default function FolderChip({
                 {workingDir ?? "None: the model uses absolute paths."}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Fixed once the chat has started. Clear context lets you choose another.
+                Fixed once the chat has started. Start a new chat to choose another.
               </Typography>
             </Box>
           ) : (

@@ -138,7 +138,7 @@ async function startInThread(
 export async function startTurnFromOptions(
   id: string,
   text: string,
-  options: RunOptions & { planning: boolean; replyTo?: string },
+  options: RunOptions & { planning: boolean; replyTo?: string; compact?: boolean },
   deps: RunnerDeps = {},
 ): Promise<void> {
   const disk = await readSession(id);
@@ -163,7 +163,7 @@ export async function startTurnFromOptions(
         },
         deps,
       ));
-  await startTurn(id, env, { text, planning: options.planning, images: options.images, replyTo: options.replyTo }, { ...deps, next });
+  await startTurn(id, env, { text, planning: options.planning, images: options.images, replyTo: options.replyTo, compact: options.compact }, { ...deps, next });
 }
 
 // Starts a side question in a session whose plan is running: the `ask`

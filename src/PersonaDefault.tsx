@@ -27,7 +27,7 @@ export default function PersonaDefault({
         <Typography variant="h6">Personas</Typography>
         <Typography color="text.secondary">
           A persona tells the model how to work. New chats start with the default below; each chat keeps its persona once
-          the first message is sent; edits to a persona's file reach a chat after Clear context. Each persona is a file
+          the first message is sent; edits to a persona's file reach a new chat. Each persona is a file
           in <code>{folder ?? PERSONAS_FOLDER}</code>.
         </Typography>
       </Box>

@@ -8,6 +8,7 @@ import { type RunPlanCallbacks, type RunTurnCallbacks, runTurn } from "./agent/a
 import { INTERRUPTED } from "./agent/helpers.ts";
 import { askForSessionName } from "./agent/sessionNaming.ts";
 import { splitAsides, weaveAsides } from "./asides.ts";
+import { summaryOf } from "./compact.ts";
 import { withFrozenPersona } from "./persona.ts";
 import { threadsUpdate } from "./planThread.ts";
 import { requestCount, turnCount } from "./toolResults.ts";
@@ -47,7 +48,7 @@ export async function modelLoaded(h: RunnerHandle): Promise<boolean> {
 // and whether the model finished (not stopped, failed or cut off by a limit).
 // `planStep`: the turn runs that plan step; its messages carry the step's id.
 export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
-  return async (text, given, { planning = false, planStep, from, images, replyTo } = {}) => {
+  return async (text, given, { planning = false, planStep, from, images, replyTo, compact = false } = {}) => {
     const { connector, model, toolsOn, modelOptions, toolContext } = h.env;
     // A plan step never sees a side question (see src/asides.ts): `before` is
     // the plan's own messages, and what the turn writes has them put back where
@@ -214,6 +215,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         text,
         images,
         replyTo,
+        ...(compact ? { compact: true } : {}),
         imagesBase64: Object.keys(imageMap).length > 0 ? imageMap : undefined,
         ...(clearCount !== undefined ? { clearCount } : {}),
       },
@@ -225,6 +227,33 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     if (clearCount !== undefined) {
       const ended = requestCount(result.messages.slice(start), clearCount);
       h.edit((s) => (s.toolResultCut && ended > s.toolResultCut.count ? { ...s, toolResultCut: { ...s.toolResultCut, count: ended } } : s));
+    }
+
+    // A compaction that got its summary moves the history start to the request
+    // (src/compact.ts): the model is sent the request and the summary from here
+    // on, and every message stays. The token count is stale now, so it goes, and
+    // the system prompt is made again for the next reply (the working directory,
+    // the persona's text), which costs nothing since the history is short.
+    // Claude signs its thinking against the whole conversation before it, and
+    // from here on that conversation is not sent: the compaction turn's replies
+    // lose their signed blocks and are sent as their text and calls (as any
+    // reply without signed thinking is), or Claude would refuse them.
+    if (compact && result.ok) {
+      const done = summaryOf(result.messages);
+      if (done) {
+        h.edit((s) => ({
+          ...s,
+          messages: s.messages.map((m, i) => {
+            if (i <= done.at || !m.blocks) return m;
+            const { blocks: _signed, ...rest } = m;
+            return rest;
+          }),
+          contextStart: done.at,
+          usage: null,
+          promptDir: undefined,
+          personaText: undefined,
+        }));
+      }
     }
 
     // One usage record per turn, even one that failed or was stopped: the

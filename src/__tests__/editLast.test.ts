@@ -36,6 +36,11 @@ describe("lastEditable", () => {
     expect(lastEditable([user("hi"), bot("hello")], true, false)).toBeNull();
   });
 
+  it("skips the request for a compaction summary and its reply", () => {
+    const m = [user("real question"), bot("answer"), user("summarize", { compaction: true }), bot("the summary", { compaction: true })];
+    expect(lastEditable(m, false, false)).toMatchObject({ index: 0, text: "real question" });
+  });
+
   it("is null while a reply streams", () => {
     expect(lastEditable([user("hi")], false, true)).toBeNull();
   });

@@ -355,7 +355,7 @@ to, image previews, and the Ask / Tell the plan switch (while a plan runs).
 The text starts one line tall and grows to about eight. The bottom row has,
 on the left, the paperclip and the **folder chip**, and on the right the
 approvals marker (only while an auto-approve switch is on), the context ring
-(Clear and Compact) and a round **Send**, which turns into **Stop** while a
+(the meter, with Compact session) and a round **Send**, which turns into **Stop** while a
 reply runs and into the side question's Stop while that runs. On a wide screen
 Enter sends (Shift+Enter makes a new line); on a phone Enter makes a new line
 and the button sends. Esc stops a reply or cancels an edit, and the up arrow in
@@ -397,9 +397,10 @@ image instead. Images work as before.
 - **The chip freezes once the chat has started.** The first reply fixes the
   folder the system prompt names (`promptDir`), so changing the working
   directory afterwards would make the prompt wrong. From then on the chip is
-  a label, and its menu has only the two items below. **Clear context** puts
-  `promptDir` back, because the system prompt takes the folder again then, and
-  the chip is a picker again.
+  a label, and its menu has only the two items below. A compaction (below), or a
+  todo started in the chat, moves the chat's history start, and that puts `promptDir`
+  back, because the system prompt takes the folder again then, and the chip is
+  a picker again.
 - **Also allowed** (in the same menu, only when there are any) lists the extra
   files and folders the model may read, each marked with whether you added
   it or the model asked for it, with a remove button for each.
@@ -705,11 +706,11 @@ instead (for example, "base claims on what you have just checked").
   read-only label. In a long chat much of what was said depends on the
   persona, so a different one would no longer make sense. To work another
   way, start a new chat. A thread that runs a plan takes its chat's persona.
-- **Edits wait for Clear context.** At the first reply the chat also keeps
+- **Edits wait for a compaction or a new chat.** At the first reply the chat also keeps
   the persona's text as the system prompt has it. Changing the file then
   doesn't change a running chat's prompt, which would make the model
   reprocess the whole chat (and, on Claude, write it to the cache again).
-  The change reaches a chat after Clear context, which brings the prompt up
+  The change reaches a chat when it is compacted, which brings the prompt up
   to date anyway, or in a new chat. If the persona's file is gone by then, a
   chat update says the chat now works as Builder.
 - **Order in the system prompt.** The fixed start, the common baseline, the
@@ -1723,10 +1724,9 @@ step that was running when the page closed comes back as pending.
   off in **Settings → Chat** to see the raw text, or switch one message with
   the **<>** button in its bottom-right corner.
 - Context indicator (under Send on a phone; the share of the window used, "2%"), orange then
-  red as the window fills. Click it for tokens used of the model's window, generation speed and
-  **Clear context**: the model forgets everything so far, but the transcript
-  stays on screen, dimmed, under a divider. **New chat** clears both. Turn the
-  indicator off in **Settings → Chat**.
+  red as the window fills. Click it for tokens used of the model's window and generation speed,
+  and for **Compact session** (see Compaction below). There is no Clear context button any
+  more; for a new topic, start a new chat. Turn the indicator off in **Settings → Chat**.
 - **Think before answering**, per llama.cpp model in **Settings → Models** (off by
   default; Claude models have **Effort** instead, if they take it, see the
   Anthropic connector above): off sends `chat_template_kwargs: {enable_thinking: false}`; on
@@ -1903,7 +1903,7 @@ Running without thinking (Haiku 4.5, Sonnet 4.5) doesn't make a model cheaper
 either.
 
 **What lowers the cost**: a lower **Effort** (less thinking, fewer tool calls,
-shorter replies); **Clear context** or a new chat when the topic changes, so
+shorter replies); a new chat when the topic changes, so
 the old history stops being sent; asking for parts of files rather than whole
 ones; replying within a few minutes while the cache is warm; and keeping one
 model and one Effort for a chat. Turning thinking off is not a saving: Claude
@@ -1912,7 +1912,7 @@ Anthropic refuses later requests (`reasoning_extraction`).
 
 ### Old tool results
 
-Every request carries the whole chat since Clear context, and in a working
+Every request carries the whole chat, and in a working
 chat most of that is tool results: whole files and command output. Replayed
 over the saved chats (November 2026), tool results were 50–90% of a long
 chat's history. The model needs a result while it acts on it; after that,
@@ -1955,7 +1955,7 @@ request went out), and moves only:
   (`WARM_MOVE_TOKENS`), so a chat you answer quickly still gets room.
 
 Otherwise each request leaves out the same results as the last one and
-starts exactly as it did. Clear context starts the cut afresh. One turn
+starts exactly as it did. A new history start (a compaction) starts the cut afresh. One turn
 whose own results are heavy (past about 30,000 tokens) also has its oldest
 results replaced, down to about 10,000 (`REPLY_HIGH_TOKENS`,
 `REPLY_LOW_TOKENS`). The gap between the two numbers keeps that cut from
@@ -2022,8 +2022,148 @@ too eager. The server log's `cleared` field says the same per request.
 
 **What it doesn't do yet.** Tool *inputs* stay in, which can be 10–19% of a
 heavy chat. The 30,000-token start is an estimate from message text, so it
-ignores the system prompt and tool definitions. Server-side compaction
-(summarizing old turns) isn't used.
+ignores the system prompt and tool definitions. Compaction (below) is what
+shortens a chat for good.
+
+## Compaction
+
+When a chat gets nearly full, the model writes a summary of the conversation so
+far, and from then on it is sent that summary instead of the older messages.
+**Nothing is deleted:** every message stays in the saved chat and on screen, and
+compaction adds two messages and changes only `contextStart` and `usage` among
+the fields that exist. A divider marks the **history start**, the point where
+what the model sees begins. Old messages stay readable above it.
+
+In `session.json`, after one compaction, it looks like this:
+
+```
+messages:
+  0  user       "fix the login bug"
+  1  assistant  (tool calls) ...
+  2  tool       (result of a tool)
+  3  assistant  "Fixed it."
+  4  user       "please summarize..."     compaction: true
+  5  assistant  "Summary: ..."            compaction: true
+
+contextStart: 4
+usage: null
+```
+
+### Words used here
+
+- **Message**: one entry in the chat: yours, a reply, or a tool result.
+  `session.json` holds one flat list of them, in the order they happened.
+- **Turn**: your message, the tool runs and the reply. Only a way of grouping
+  messages: the page does it when it draws the chat, and the file has no turns.
+  Compaction is a turn of its own: the request and the summary.
+- **History start** (`contextStart` in `session.json`): the 0-based position in
+  the message list of the first message the model is sent. It always points at
+  the first message of a turn, but it is stored as a plain number.
+- **Run**: the server's hold on the chat while it is busy. A compaction is a
+  second turn inside the run of the reply before it, not part of that reply's
+  turn.
+
+### The flow, in the file
+
+A chat is compacted once it reaches 60% of the model's window. "sent" is the part
+of the list the model is sent: from `contextStart` on.
+
+1. A reply ends and the chat is at 65%. Nothing has been added yet.
+   ```
+   0 user       "fix the login bug"
+   1 assistant  (tool calls)
+   2 tool       (result)
+   3 assistant  "Fixed it."
+   contextStart: 0     usage: 65%      sent: 0, 1, 2, 3
+   ```
+2. The server, still in the same run, adds the compaction request, and the model
+   streams its summary into the next message. `contextStart` has not moved.
+   ```
+   4 user       "please summarize..."   compaction: true
+   5 assistant  "Summary: ..."          compaction: true   (streaming)
+   contextStart: 0     sent: 0 to 5
+   ```
+3. The summary is complete. `contextStart` moves to the request, and `usage` is
+   cleared. The run ends.
+   ```
+   contextStart: 4     usage: null     sent: 4, 5
+   ```
+4. You send a message. The model is sent the summary and your message.
+   ```
+   6 user       "now add logout"
+   7 assistant  "Done."
+   contextStart: 4     sent: 4, 5, 6, 7
+   ```
+5. Much later the chat fills again and is compacted again. Messages 0 to 5 stay
+   in the file and on screen above the divider. The second summary is written
+   from what was sent (4 onward), so the first summary is part of it.
+   ```
+   8 user       "please summarize..."   compaction: true
+   9 assistant  "Summary 2: ..."        compaction: true
+   contextStart: 8     sent: 8, 9
+   ```
+6. If the summary can't be had (the request fails, or the model writes no text),
+   messages 4 and 5 of step 2 are removed again, `contextStart` stays 0, and
+   `usage` goes back to what it was.
+   ```
+   0 to 3 as in step 1
+   contextStart: 0     usage: 65%      sent: 0, 1, 2, 3
+   ```
+
+### How it works
+
+- **How the summary is asked for.** As an ordinary message in the chat, through
+  the same request as any reply: same system prompt, same tools, same old tool
+  results left out. That way the start of the request is exactly the last one's,
+  and the server (llama.cpp, or Anthropic's prompt cache) reuses its work on it
+  instead of reading the whole conversation again. The tools stay in the request
+  but may not run: a call gets "Tools aren't available while you write the
+  summary". The wording of the request is the file
+  `prompts/compaction-instructions.md` (at the top level, like `personas/`),
+  loaded by `server/compactInstruction.ts`. It tells the model the summary is for
+  itself, with no access to the messages above, and asks for headings: Goal,
+  Where we are (the most recent part in the most detail), Decisions, Not
+  working (error messages copied exactly), Exact details, Next. It also asks to
+  say what was checked and what only assumed, and to keep what still matters of an
+  earlier summary. Everything in the file is sent, so it holds the message only.
+  It is read each time a compaction runs, so a change applies to the next one
+  without a restart; if the file can't be read, no request is made and it counts
+  as a failed try. The request itself isn't shown in the chat: the divider says
+  "Session compacted", and the model's summary is the reply under it.
+- **When.** After a reply ends and the chat is at 60% of the model's window or
+  more (`COMPACT_AT`, in `src/contextShare.ts`; the meter turns orange later, at
+  80%), the server asks for the
+  summary right then, while it still has the conversation in memory, which is
+  when it costs least. A chat that was left (a computer asleep, a lost
+  connection) is caught by the next reply that ends. Before a message, if the
+  chat has no room left (100%), the summary is asked for first and the message
+  answered from it. The model's window comes from the server's model list; a
+  model that doesn't report one is never compacted by itself. Only chat replies
+  compact, not plan runs.
+- **The Compact session button** is for emergencies. It is in the context
+  meter's popup and asks for the summary now, whatever the chat's size. It is
+  disabled while a reply runs, with no model chosen, and when there is nothing
+  new to summarize. A message sent while a compaction runs waits in the queue
+  like any other and starts after it, from the new history start.
+- **Also on success:** the system prompt is made again for the next reply
+  (working directory, persona text), the saved cut of old tool results (see Old
+  tool results above) starts afresh, and the model's record of which files it
+  has read is cleared, so it reads a file again before changing it: it no longer
+  remembers their contents.
+  On Claude the compaction turn's replies also lose their signed thinking: it was
+  signed against the conversation before the request, which is no longer sent,
+  and Claude would refuse it. They are sent as their text and calls instead.
+- **Retries.** A failed try shows only "Session compaction failed." when the run
+  ends; it doesn't pause queued messages, since the reply you waited for went
+  through. It is tried again after the next reply, up to 2 times in a row
+  (`MAX_COMPACT_TRIES`, kept in memory, so a restart forgets it); a reply that
+  leaves the chat under 60% starts the count again. The button works regardless.
+- **Cost.** A summary asked for after the chat sat idle (Anthropic's cache is
+  five minutes; a llama.cpp slot may have been reused) reads the whole
+  conversation again: slow on a local server, and billed on Claude. That is why
+  it is asked for right after a reply.
+- **Not configurable.** When it runs is fixed in the code, and the wording of the
+  request is that file; `rules.md` is for rules you choose.
 
 ## The server's log
 

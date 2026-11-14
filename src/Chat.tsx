@@ -54,8 +54,6 @@ import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
-import LayersClearOutlinedIcon from "@mui/icons-material/LayersClearOutlined";
-import CompressOutlinedIcon from "@mui/icons-material/CompressOutlined";
 import AccountTreeOutlinedIcon from "@mui/icons-material/AccountTreeOutlined";
 import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
@@ -65,6 +63,7 @@ import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
 import SearchOffIcon from "@mui/icons-material/SearchOff";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
+import CompressOutlinedIcon from "@mui/icons-material/CompressOutlined";
 import StickyNote2OutlinedIcon from "@mui/icons-material/StickyNote2Outlined";
 import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
@@ -232,6 +231,7 @@ import {
   type ChatErrors,
 } from "./chatErrors";
 import { withSessionDefaults } from "./sessionDefaults";
+import { CONTEXT_FULL_AT, CONTEXT_WARN_AT, contextShare } from "./contextShare";
 import { emptySessionState, fromSession, stateKey, toSession, type SessionState } from "./sessionState";
 import { SESSION_KEY, sessionFromHash, setSessionAddress } from "./sessionRoute";
 import { descendantIds, nestedHeldBy, nestedSessionFrom } from "./sessionTree";
@@ -530,7 +530,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // the live tokens per second beside the counter. llama.cpp streams about
   // one token per piece. A ref, since it changes on every piece.
   const streamRate = useRef<StreamRate>({ pieces: 0, first: 0 });
-  // Clear context moves contextStart to the end: earlier messages stay on
+  // contextStart is where what the model sees begins: a todo started in this
+  // chat moves it to the end (see clearContext), and earlier messages stay on
   // screen but aren't sent any more.
   const [prefs, setPrefs] = useState<Preferences | null>(null);
   // Kept in this browser, so it is known before the first draw (see showSteps.ts).
@@ -1575,6 +1576,32 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       starting.current = null;
     }
   };
+  // The Compact session button: asks the server to have the model summarize the
+  // chat (src/compact.ts). The chat is saved first, like a message, so the server
+  // reads what is shown. Nothing is deleted. A refusal shows as the error.
+  const compactNow = async () => {
+    const options = runOptions();
+    if (!options || starting.current) return;
+    const id = sessionId;
+    const toSend = { ...snapshot(options.connectorId), messages };
+    const key = stateKey(toSend);
+    const inSync = sessions.some((x) => x.id === id) && savedKey.current === key;
+    starting.current = id;
+    try {
+      savedKey.current = key;
+      if (!inSync) {
+        const summary = await saveSession(toSend);
+        setSessions((ss) => upsertRow(ss, summary));
+      }
+      await sendChat(id, "", { ...options, planning: false, compact: true });
+      setErrors((s) => clearSendRefusal(s, id));
+    } catch (e) {
+      if (savedKey.current === key) savedKey.current = "";
+      runRefused(e, id);
+    } finally {
+      starting.current = null;
+    }
+  };
   // Saves `session`, then asks the server to run its plan: from the first step
   // that's pending, in order, one turn each, checking every step before ticking
   // it off (see runPlan in src/agent/agent.ts). From then on the server owns the
@@ -1789,7 +1816,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // told to send it again (see chatTurn). Like a first try it isn't a planning
   // turn, as before. Its images are sent again as the refs it already has.
   const retry = async () => {
-    const userMsg = [...messages].reverse().find((m) => m.role === "user" && !m.aside);
+    const userMsg = [...messages].reverse().find((m) => m.role === "user" && !m.aside && !m.compaction);
     if (!userMsg || runActive || starting.current) return;
     if (!model || !connector) return;
     const index = messages.indexOf(userMsg);
@@ -1866,7 +1893,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
   // The last turn that's a user message (not a side question: it has no Resend);
   // only its reply can fail.
-  const lastUserTurn = turns.map((t) => t.parts[0].role === "user" && !t.parts[0].aside).lastIndexOf(true);
+  const lastUserTurn = turns.map((t) => t.parts[0].role === "user" && !t.parts[0].aside && !t.parts[0].compaction).lastIndexOf(true);
   // The turns that are streaming: the plan's reply is the last turn that isn't
   // a side question; a side question's, the last one that is (while one runs).
   const lastPlainTurn = turns.map((t) => !t.parts[0].aside).lastIndexOf(true);
@@ -1885,7 +1912,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         since={streaming && !t.parts[0].aside ? taskSince : null}
         rate={streamRate}
         toolResults={t.results}
-        forgotten={t.start < contextStart}
         renderMarkdown={prefs?.renderMarkdown ?? true}
         showModelName={prefs?.showModelName ?? false}
         reasoningIsSummary={connection(connector?.kind).reasoningIsSummary}
@@ -1894,7 +1920,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         connectorName={connector ? connector.name || connector.kind : undefined}
         onResend={i === lastFailedTurnIndex ? bubbleActions.retry : undefined}
         resendDisabled={i === lastFailedTurnIndex ? runActive : undefined}
-        onEdit={t.parts[0].role === "user" && !t.parts[0].aside && !t.parts[0].planStep ? bubbleActions.edit : undefined}
+        onEdit={t.parts[0].role === "user" && !t.parts[0].aside && !t.parts[0].planStep && !t.parts[0].compaction ? bubbleActions.edit : undefined}
         box={box}
         sessionId={sessionId}
         // Only the note boxes' buttons use these.
@@ -2009,6 +2035,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const hasContext = messages.length > contextStart;
   const showIndicator = hasContext && !!prefs?.showContextMeter;
 
+  // The context boundary a todo started in this chat makes. There is no button
+  // for it any more.
   const clearContext = () => {
     updateSession((s) => ({ contextStart: s.messages.length, usage: null }));
     // The model reprocesses its history from here anyway, so this is the cheap
@@ -2049,33 +2077,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       });
     }
   }, [pendingStart, loaded, sessionId]);
-
-  // Asks in a Dialog first, like deleting a chat: window.confirm is answered
-  // "no" at once, without being shown, in some browsers.
-  const [confirmCompact, setConfirmCompact] = useState(false);
-  const compactSession = () => setConfirmCompact(true);
-  const compactConfirmed = () => {
-    setConfirmCompact(false);
-    if (contextStart > 0) {
-      // Remove forgotten messages from the array
-      updateSession((s) => ({ messages: s.messages.slice(s.contextStart), contextStart: 0, usage: null }));
-      // A cloned plan's place counts messages, so it moves with them. A plan
-      // whose turn is removed goes to the top ("at:0"), where that turn was.
-      const removed = new Set(messages.slice(0, contextStart).flatMap((m) => (m.toolCalls ?? []).map((c) => c.id)));
-      const shift = (a: string | null) => {
-        if (!a) return a;
-        if (!a.startsWith("at:")) return removed.has(a) ? "at:0" : a;
-        return `at:${Math.max(0, Number(a.slice(3)) - contextStart)}`;
-      };
-      updateSession((s) => ({
-        planAnchor: shift(s.planAnchor),
-        pastPlans: s.pastPlans.map((p) => ({ ...p, anchor: shift(p.anchor) })),
-        threads: s.threads.map((t) => ({ ...t, anchor: shift(t.anchor) })),
-      }));
-      // Also update savedKey so we don't save again
-      savedKey.current = "";
-    }
-  };
 
   return (
     <Box sx={{ display: "flex", height: "100dvh" }}>
@@ -2363,22 +2364,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         </DialogActions>
       </Dialog>
 
-      <Dialog open={confirmCompact} onClose={() => setConfirmCompact(false)} maxWidth="xs">
-        <DialogTitle>Compact this session?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            This permanently deletes the messages from before you last cleared the context. The model already doesn't see
-            them. This can't be undone.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setConfirmCompact(false)}>Cancel</Button>
-          <Button color="error" variant="contained" onClick={compactConfirmed}>
-            Compact
-          </Button>
-        </DialogActions>
-      </Dialog>
-
 
       {/* Top padding keeps the first messages clear of the toolbar. */}
       <Box ref={scrollRef} onScroll={onScroll} sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3, position: "relative" }}>
@@ -2442,7 +2427,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 !t.parts[0].planStep && (
                   <Fragment key={t.start}>
                     {cardsBefore(t.start, false)}
-                    {t.start === contextStart && contextStart > 0 && <ContextDivider />}
+                    {t.start === contextStart && contextStart > 0 && <ContextDivider summarized={!!messages[contextStart]?.compaction} />}
                     {cardsBefore(t.start, true)}
                     {bubble(t, i)}
                     {planCards.filter((c) => slot(c.anchor).after === t.start).map((c) => c.card)}
@@ -2451,7 +2436,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             )}
             {cardsBefore("end", false)}
             {/* Cleared after the last message: the divider goes at the end. */}
-            {contextStart > 0 && contextStart === messages.length && <ContextDivider />}
+            {contextStart > 0 && contextStart === messages.length && <ContextDivider summarized={false} />}
             {cardsBefore("end", true)}
             {planCards.filter((c) => slot(c.anchor).lost).map((c) => c.card)}
             {/* Messages sent to the running plan that no step has seen yet:
@@ -2568,9 +2553,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   <ContextIndicator
                     usage={usage}
                     contextSize={models.find((m) => m.id === model)?.contextSize}
-                    onClear={clearContext}
-                    onCompact={compactSession}
-                    canCompact={contextStart > 0}
+                    onCompact={compactNow}
+                    cannotCompact={
+                      !connector || !model
+                        ? "Pick a server and a model first: the model writes the summary."
+                        : messages.length - contextStart <= 2
+                          ? "Nothing to summarize yet."
+                          : null
+                    }
                     disabled={runActive}
                   />
                 </Box>
@@ -3199,7 +3189,6 @@ const MessageBubble = memo(function MessageBubble({
   parts,
   streaming,
   toolResults,
-  forgotten,
   renderMarkdown,
   showModelName,
   reasoningIsSummary,
@@ -3229,8 +3218,6 @@ const MessageBubble = memo(function MessageBubble({
   streaming: boolean;
   // The results of this turn's own tool calls, by call id.
   toolResults: Map<string, ChatMessage>;
-  // Above a Clear context divider: shown dimmed since the model can't see it.
-  forgotten: boolean;
   // Off: messages show as typed, Markdown symbols and all (Settings → Chat).
   renderMarkdown: boolean;
   // Off: the line under a reply leaves out the model's name (Settings → Chat).
@@ -3413,6 +3400,7 @@ const MessageBubble = memo(function MessageBubble({
   // A side question or its answer (asked while a plan ran; the plan never saw
   // it): labelled, and quieter than the chat's own messages.
   const isAside = !!parts[0].aside;
+  const isCompaction = !!parts[0].compaction && parts[0].role === "user";
   // The small buttons on the top edge of a message you sent (shown on hover):
   // what was sent unseen, and formatted/raw. None while it streams or is empty.
   const userActions =
@@ -3737,13 +3725,13 @@ const MessageBubble = memo(function MessageBubble({
     </Stack>
   );
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", gap: 1, opacity: forgotten ? 0.5 : isAside ? 0.85 : 1 }}>
+    <Box sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", gap: 1, opacity: isAside ? 0.85 : 1 }}>
       {isAside && (
         <Typography variant="caption" color="text.secondary" sx={{ mb: -0.5 }}>
           Side question
         </Typography>
       )}
-      {isUser ? (
+      {isCompaction ? null : isUser ? (
         // What you typed: drawn by the Panel, which owns its look and its
         // hover toolbar (Panel.tsx).
         <Panel variant={isAside ? "messageAside" : "message"} error={hasError} tools={userActions}>
@@ -4333,35 +4321,27 @@ function StepTime({ stats, detail }: { stats?: StepStats; detail: (s: StepStats)
   );
 }
 
-// Share of the context window above which the meter warns.
-const CONTEXT_WARN_AT = 0.8;
-const CONTEXT_FULL_AT = 0.95;
-
-// How much of the model's context the conversation fills. Past the limit
-// llama.cpp drops the oldest tokens, so the model starts forgetting the
-// beginning of the chat.
-const contextShare = (usage: Usage | null, contextSize?: number) =>
-  usage && contextSize ? usage.contextTokens / contextSize : 0;
+// The meter's color for how full the context window is.
 const contextColor = (share: number) =>
   share >= CONTEXT_FULL_AT ? "error" : share >= CONTEXT_WARN_AT ? "warning" : "primary";
 
-// Small "% left" ring under Send. Clicking it opens the full meter with the
-// Clear context button. It takes the warning colors so a filling context is
-// noticeable without opening it.
+// Small "% left" ring under Send. Clicking it opens the full meter, with the
+// Compact session button for emergencies (a chat is compacted by itself when it
+// fills up: see src/compact.ts). It takes the warning colors so a filling
+// context is noticeable without opening it.
 function ContextIndicator({
   usage,
   contextSize,
-  onClear,
   onCompact,
-  canCompact,
+  cannotCompact,
   disabled,
 }: {
   usage: Usage | null;
   contextSize?: number;
-  onClear: () => void;
   onCompact: () => void;
-  // Only once something has been cleared: that's what compacting removes.
-  canCompact: boolean;
+  // Why compacting can't be done now, shown under the meter; null when it can.
+  cannotCompact: string | null;
+  // A reply is running: the summary is asked for after it ends.
   disabled: boolean;
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
@@ -4374,7 +4354,7 @@ function ContextIndicator({
 
   return (
     <Box sx={{ display: "flex" }}>
-      <Tooltip title="Context used. Click for details and to clear it.">
+      <Tooltip title="Context used. Click for details and to compact it.">
         <ButtonBase
           onClick={(e) => setAnchor(e.currentTarget)}
           sx={{ borderRadius: 1, px: 0.25, gap: 0.75, color: color === "primary" ? "text.secondary" : `${color}.main` }}
@@ -4420,30 +4400,15 @@ function ContextIndicator({
             </Typography>
           )}
           <Typography variant="caption" color="text.secondary">
-            Clearing keeps the messages on screen, but the model stops seeing them.
+            {cannotCompact ??
+              "The model writes a summary of the conversation so far and is sent that instead of the older messages. Nothing is deleted: the messages stay here, above a divider. This happens by itself when the chat fills up."}
           </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Compacting permanently deletes the messages you cleared, which the model no longer sees.
-          </Typography>
-          {/* One line per label: the popover is too narrow for both with icons otherwise. */}
-          <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-end", "& .MuiButton-root": { whiteSpace: "nowrap" } }}>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<LayersClearOutlinedIcon />}
-              disabled={disabled}
-              onClick={() => {
-                onClear();
-                setAnchor(null);
-              }}
-            >
-              Clear context
-            </Button>
+          <Box sx={{ display: "flex", justifyContent: "flex-end", "& .MuiButton-root": { whiteSpace: "nowrap" } }}>
             <Button
               size="small"
               variant="outlined"
               startIcon={<CompressOutlinedIcon />}
-              disabled={disabled || !canCompact}
+              disabled={disabled || !!cannotCompact}
               onClick={() => {
                 onCompact();
                 setAnchor(null);
@@ -4490,11 +4455,13 @@ function ContextMeter({ usage, contextSize }: { usage: Usage; contextSize?: numb
   );
 }
 
-// Marks where Clear context cut the conversation.
-function ContextDivider() {
+// Marks the history start: where the model's history begins. After a
+// compaction it sees the summary below instead of the messages above; after a
+// todo started in the chat it sees nothing above.
+function ContextDivider({ summarized }: { summarized: boolean }) {
   return (
     <Divider>
-      <Chip size="small" variant="outlined" label="Context cleared · the model doesn't see messages above" />
+      <Chip size="small" variant="outlined" label={summarized ? "Session compacted" : "Context cleared"} />
     </Divider>
   );
 }

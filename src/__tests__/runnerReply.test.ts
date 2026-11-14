@@ -554,3 +554,97 @@ describe("makeReply", () => {
     });
   });
 });
+
+describe("makeReply for a compaction", () => {
+  // The turn answers the way runTurn does when told to compact: its messages
+  // carry `compaction`.
+  function summaryTurn(summary: string, ok = true) {
+    mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {
+      cb.setError(null);
+      cb.setFailed(null);
+      const messages = [
+        ...config.forgotten,
+        ...config.history,
+        { ...user(config.text), compaction: true },
+        { ...assistant(summary), compaction: true },
+      ];
+      cb.setMessages(messages);
+      cb.setUsage({ contextTokens: 900, promptTokens: 40 });
+      return { ok, messages, attached: config.attached };
+    });
+  }
+  const earlier = [user("a"), assistant("b"), user("c"), assistant("d")];
+
+  it("tells the turn to compact, only when asked", async () => {
+    const h = makeHandle({ messages: earlier });
+    okTurn();
+    await makeReply(h.handle)("hello", earlier, {});
+    expect(mockRunTurn.mock.calls[0][0]).not.toHaveProperty("compact");
+    summaryTurn("S");
+    await makeReply(h.handle)("summarize", earlier, { compact: true });
+    expect(mockRunTurn.mock.calls[1][0]).toMatchObject({ compact: true, text: "summarize" });
+  });
+
+  it("moves the history start to the request, and clears the token count and the fixed prompt", async () => {
+    const h = makeHandle({ messages: earlier, promptDir: "/old", personaText: "old text" });
+    summaryTurn("The summary.");
+    const result = await makeReply(h.handle)("summarize", earlier, { compact: true });
+    expect(result.ok).toBe(true);
+    const s = h.session();
+    expect(s.contextStart).toBe(earlier.length);
+    expect(s.usage).toBeNull();
+    expect(s.promptDir).toBeUndefined();
+    expect(s.personaText).toBeUndefined();
+    // Nothing was deleted.
+    expect(s.messages).toHaveLength(earlier.length + 2);
+    expect(s.messages.slice(0, earlier.length)).toEqual(earlier);
+  });
+
+  it("drops the signed thinking of the compaction turn's replies, and only theirs", async () => {
+    const signed = [{ type: "thinking", thinking: "t", signature: "sig" }, { type: "text", text: "d" }] as any;
+    const old = [user("a"), { ...assistant("b"), blocks: signed }];
+    const h = makeHandle({ messages: old });
+    mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {
+      const messages = [
+        ...config.forgotten,
+        ...config.history,
+        { ...user(config.text), compaction: true },
+        { ...assistant("The summary."), compaction: true, blocks: signed },
+      ];
+      cb.setMessages(messages);
+      return { ok: true, messages, attached: config.attached };
+    });
+    await makeReply(h.handle)("summarize", old, { compact: true });
+    const s = h.session();
+    // The reply written before the compaction keeps its blocks: it is no longer sent.
+    expect(s.messages[1].blocks).toEqual(signed);
+    expect(s.messages[3]).toMatchObject({ role: "assistant", content: "The summary.", compaction: true });
+    expect(s.messages[3]).not.toHaveProperty("blocks");
+  });
+
+  it("leaves the history start and the token count alone when there is no summary", async () => {
+    const h = makeHandle({ messages: earlier });
+    summaryTurn("   ");
+    await makeReply(h.handle)("summarize", earlier, { compact: true });
+    expect(h.session().contextStart).toBe(0);
+    expect(h.session().usage).toMatchObject({ contextTokens: 900 });
+  });
+
+  it("leaves them alone when the turn didn't finish", async () => {
+    const h = makeHandle({ messages: earlier });
+    summaryTurn("Half a summ", false);
+    await makeReply(h.handle)("summarize", earlier, { compact: true });
+    expect(h.session().contextStart).toBe(0);
+  });
+
+  it("sends the history from the history start, so a second compaction summarizes the first", async () => {
+    const first = [...earlier, { ...user("summarize"), compaction: true }, { ...assistant("Summary one."), compaction: true }];
+    const h = makeHandle({ messages: first, contextStart: earlier.length });
+    summaryTurn("Summary two.");
+    await makeReply(h.handle)("summarize", first, { compact: true });
+    const config = mockRunTurn.mock.calls[0][0] as RunTurnConfig;
+    expect(config.history.map((m) => m.content)).toEqual(["summarize", "Summary one."]);
+    expect(config.forgotten.map((m) => m.content)).toEqual(["a", "b", "c", "d"]);
+    expect(h.session().contextStart).toBe(first.length);
+  });
+});

@@ -2,6 +2,7 @@
 
 import { type Api, type ModelOptions, type Purpose, type Kind, type ChatMessage, type ToolCall, type Usage, type Todo, type ToolOutcome, type AccessRequest, type Approval, type Attachment, type AttachmentTarget, type Picked, streamChat, runTool } from "../api.ts";
 import { closeOpenToolCalls } from "../closeOpenToolCalls.ts";
+import { COMPACT_REFUSAL } from "../compact.ts";
 import { callKey, shareTokens } from "./helpers.ts";
 import { ProgressWatch } from "./progress.ts";
 import { applyTodoCall, openTodos } from "./todos.ts";
@@ -168,6 +169,10 @@ export interface RunTurnConfig {
   // When set, only these tools may run; a call to another gets an error
   // result (a side question uses ASIDE_TOOLS, see plan.ts).
   allowedTools?: ReadonlySet<string>;
+  // This turn asks for a compaction summary (see src/compact.ts): the messages
+  // it makes carry `compaction`, and no tool may run, though the tools stay in
+  // the request so it starts exactly as the last one did.
+  compact?: boolean;
   systemPrompt: string | null;
   toolDefinitions: any[];
   toolContextUpdate: string;
@@ -225,9 +230,13 @@ export async function runTurn(
   } = config;
   const { setMessages, setError, setFailed, setUsage, setAbort, killSignal, refreshModels, askUser, attach, setWorkingDir, setPlanProposal, setPastPlans, setPlanAnchor, setPlanContext, setPlanSummary, changePlan, todosRef, changeTodos, planRef, planRunningRef, planAnchor, planContext, planSummary } = callbacks;
 
-  const tag = { ...(planStep ? { planStep } : {}), ...(config.aside ? { aside: true } : {}) };
+  const tag = {
+    ...(planStep ? { planStep } : {}),
+    ...(config.aside ? { aside: true } : {}),
+    ...(config.compact ? { compaction: true } : {}),
+  };
   const noteText = config.note ?? (planning ? PLANNING_NOTE : undefined);
-  const { allowedTools } = config;
+  const { allowedTools, compact } = config;
   let error: string | undefined;
   let ok = false;
 
@@ -352,6 +361,8 @@ export async function runTurn(
         const openList = () => openTodos(todosRef.current).map(({ id, summary }) => ({ id, summary }));
 
         try {
+          // The summary is written from what the model knows: no tool runs.
+          if (compact) throw new Error(COMPACT_REFUSAL);
           // Only a side question has an allow-list; a main-chat reply has none.
           if (allowedTools && !allowedTools.has(call.name)) {
             throw new Error(
@@ -632,7 +643,7 @@ export interface RunPlanCallbacks {
   messages: ChatMessage[];
   planRef: { current: PlanStep[] | null };
   setStep: (id: string, patch: Omit<PlanStep, "id" | "text">) => void;
-  reply: (text: string, before: ChatMessage[], opts?: { planning?: boolean; planStep?: string; from?: number; images?: { id: string; mediaType: string }[]; replyTo?: string }) => Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }>;
+  reply: (text: string, before: ChatMessage[], opts?: { planning?: boolean; planStep?: string; from?: number; images?: { id: string; mediaType: string }[]; replyTo?: string; compact?: boolean }) => Promise<{ ok: boolean; messages: ChatMessage[]; error?: string }>;
   // The message that asked for the plan, sent with each step (see stepPrompt).
   request?: string;
   // The context for the plan, sent with each step (see stepPrompt).
