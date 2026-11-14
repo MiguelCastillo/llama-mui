@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { HttpError, type Route, readBody, sendJson } from "./http.ts";
 
 const WHISPER_CLI = "/Users/miguelcastillo/whisper.cpp/build/bin/whisper-cli";
+const WHISPER_MODEL = "/Users/miguelcastillo/ggml-base.bin";
 const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
 
 // Handles /api/whisper and /api/whisper/stream; returns false for anything else.
@@ -47,7 +48,11 @@ async function handleTranscribe(req: Route["req"], res: Route["res"], streamSse:
 
   const dir = await mkdtemp(join(tmpdir(), "whisper-"));
   const filePath = join(dir, "input.wav");
-  await writeFile(filePath, body);
+  try {
+    await writeFile(filePath, body);
+  } catch (e) {
+    throw new HttpError(500, `Failed to write audio file: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   try {
     if (streamSse) {
@@ -68,7 +73,7 @@ function streamTranscribe(filePath: string, res: Route["res"]) {
   return new Promise<void>((resolve, reject) => {
     const child = spawn(
       WHISPER_CLI,
-      ["-f", filePath, "-m", "auto", "-t", "4", "-nt", "-nos", "-nc"],
+      ["-f", filePath, "-m", WHISPER_MODEL, "-t", "4", "-nt"],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
 
@@ -117,7 +122,7 @@ function runWhisper(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       WHISPER_CLI,
-      ["-f", filePath, "-m", "auto", "-t", "4", "-nt", "-nos", "-nc"],
+      ["-f", filePath, "-m", WHISPER_MODEL, "-t", "4", "-nt"],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
 

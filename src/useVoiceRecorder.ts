@@ -57,42 +57,21 @@ function writeString(view: DataView, offset: number, str: string) {
 }
 
 // Decodes a recorded audio blob (webm, mp4, or wav) into a Float32Array of
-// PCM samples at a target sample rate using the Web Audio API.
+// mono PCM samples at a target sample rate. The audio context is created at the
+// target rate, so the browser converts the recording to it while decoding,
+// whatever rate or channel count the microphone recorded at.
 async function decodeAudio(blob: Blob, targetSampleRate = 16000): Promise<Float32Array> {
   const arrayBuffer = await blob.arrayBuffer();
-  const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+  const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const audioContext = new Ctx({ sampleRate: targetSampleRate });
   try {
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    if (audioBuffer.numberOfChannels === 1) return audioBuffer.getChannelData(0);
     // Convert to mono by averaging channels.
-    if (audioBuffer.numberOfChannels === 1) {
-      return audioBuffer.getChannelData(0);
-    }
-    const channelData: Float32Array[] = [];
+    const mono = new Float32Array(audioBuffer.length);
     for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
-      channelData.push(audioBuffer.getChannelData(c));
-    }
-    const length = audioBuffer.length;
-    const mono = new Float32Array(length);
-    for (let i = 0; i < length; i++) {
-      let sum = 0;
-      for (let c = 0; c < channelData.length; c++) {
-        sum += channelData[c][i];
-      }
-      mono[i] = sum / channelData.length;
-    }
-    // Resample if the recorded sample rate differs from the target.
-    if (audioBuffer.sampleRate !== targetSampleRate) {
-      const ratio = targetSampleRate / audioBuffer.sampleRate;
-      const newLength = Math.floor(mono.length * ratio);
-      const resampled = new Float32Array(newLength);
-      for (let i = 0; i < newLength; i++) {
-        const srcIndex = i / ratio;
-        const srcFloor = Math.floor(srcIndex);
-        const srcCeil = Math.min(srcFloor + 1, mono.length - 1);
-        const frac = srcIndex - srcFloor;
-        resampled[i] = mono[srcFloor] * (1 - frac) + mono[srcCeil] * frac;
-      }
-      return resampled;
+      const data = audioBuffer.getChannelData(c);
+      for (let i = 0; i < mono.length; i++) mono[i] += data[i] / audioBuffer.numberOfChannels;
     }
     return mono;
   } finally {
@@ -118,6 +97,8 @@ type VoiceResult = {
   startRecording: () => void;
   // Stop recording, send to whisper, and insert the text via onTranscribed.
   stopRecording: () => void;
+  // Stop recording and discard the audio, leaving the box as it was.
+  cancelRecording: () => void;
 };
 
 // ── hook ───────────────────────────────────────────────────────────────────
@@ -136,6 +117,7 @@ export function useVoiceRecorder({
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const cancelledRef = useRef(false);
 
   const isSupported = typeof window !== "undefined"
     && typeof navigator.mediaDevices !== "undefined"
@@ -145,9 +127,46 @@ export function useVoiceRecorder({
   const startRecording = useCallback(async () => {
     try {
       setError(null);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      cancelledRef.current = false;
+
+      // List available audio input devices and pick the first real microphone
+      // (exclude speakers, system audio, and loopbacks).
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter((d) => d.kind === "audioinput");
+
+      // If no labels are available (privacy restriction), fall back to default.
+      const hasLabels = audioInputs.some((d) => d.label && d.label.length > 0);
+      let deviceId: string | undefined;
+      if (hasLabels) {
+        for (const d of audioInputs) {
+          const label = (d.label || "").toLowerCase();
+          // Skip anything that looks like a speaker, system output, or loopback.
+          if (
+            /speaker|output|system|loopback|stereo mix|virtual|blackhole|roar|soundflower|core audio/i.test(
+              label,
+            )
+          ) {
+            continue;
+          }
+          deviceId = d.deviceId;
+          break;
+        }
+      }
+
+      const audioConstraints: MediaTrackConstraints = { channelCount: 1 };
+      if (deviceId) {
+        // Use plain deviceId (not exact) to avoid silent fallback to default.
+        audioConstraints.deviceId = deviceId;
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
       streamRef.current = stream;
       chunksRef.current = [];
+
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        throw new Error('No audio tracks captured from microphone');
+      }
 
       const recorder = new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
@@ -157,6 +176,12 @@ export function useVoiceRecorder({
       };
 
       recorder.onstop = async () => {
+        // Cancelled: throw the audio away instead of transcribing it.
+        if (cancelledRef.current) {
+          cancelledRef.current = false;
+          chunksRef.current = [];
+          return;
+        }
         const recordedBlob = new Blob(chunksRef.current, { type: recorder.mimeType });
         chunksRef.current = [];
         await transcribeRecordedAudio(recordedBlob);
@@ -184,6 +209,14 @@ export function useVoiceRecorder({
     setIsRecording(false);
   }, []);
 
+  // Stop recording and throw the audio away: nothing is transcribed.
+  const cancelRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      cancelledRef.current = true;
+    }
+    stopRecording();
+  }, [stopRecording]);
+
   // Transcribe the recorded blob: decode to PCM, encode as WAV, POST to
   // whisper/stream and consume the SSE stream. Each SSE event carries
   // { text: 'accumulated transcription so far' }, so the box updates
@@ -195,6 +228,17 @@ export function useVoiceRecorder({
     abortRef.current = controller;
     try {
       const samples = await decodeAudio(blob);
+
+      // Check for silence: if RMS is below 0.001, the mic likely captured nothing.
+      let sum = 0;
+      for (let i = 0; i < samples.length; i++) {
+        sum += samples[i] * samples[i];
+      }
+      const rms = Math.sqrt(sum / samples.length);
+      if (rms < 0.001) {
+        throw new Error('No audio detected — check that the mic is not muted');
+      }
+
       const wavBlob = floatToWav(samples, 16000);
       const response = await fetch("/api/whisper/stream", {
         method: "POST",
@@ -259,5 +303,6 @@ export function useVoiceRecorder({
     error,
     startRecording,
     stopRecording,
+    cancelRecording,
   };
 }

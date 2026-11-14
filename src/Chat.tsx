@@ -2839,6 +2839,9 @@ function Composer({
     box.setDocuments([]);
   };
   const canSend = (!!text.trim() || (pendingImages.length > 0 && noImages === undefined) || pendingDocuments.length > 0) && !disabled && !sending;
+  // The round button is the mic while the box is empty, and Send once anything is in it. It stays the mic while recording or transcribing, and Send while a send is under way.
+  const hasDraft = !!text.trim() || pendingImages.length > 0 || pendingDocuments.length > 0;
+  const showMic = voice.isSupported && !sending && (voice.isRecording || voice.isTranscribing || !hasDraft);
   const attach = attachButton({ images: noImages === undefined ? undefined : false, model: noImages, planRunning });
   return (
     <Box
@@ -3072,38 +3075,6 @@ function Composer({
             </IconButton>
           </span>
         </Tooltip>
-        {/* Microphone button: records audio, sends to whisper, inserts transcription. Only on secure contexts. */}
-        {voice.isSupported && (
-          <Tooltip title={voice.isRecording ? "Stop recording" : voice.isTranscribing ? "Transcribing…" : "Record voice message"}>
-            <span>
-              <IconButton
-                aria-label={voice.isRecording ? "Stop recording" : "Record voice message"}
-                size="small"
-                onClick={() => {
-                  if (voice.isRecording) {
-                    voice.stopRecording();
-                  } else {
-                    voice.startRecording();
-                  }
-                }}
-                disabled={sending || disabled || voice.isTranscribing}
-                sx={{
-                  color: "text.secondary",
-                  ml: -1,
-                  ...(voice.isRecording
-                    ? {
-                        color: "error.main",
-                        animation: `${micPulse} 1.5s infinite`,
-                        "@media (prefers-reduced-motion: reduce)": { animation: "none" },
-                      }
-                    : {}),
-                }}
-              >
-                <MicIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
         {/* Insecure context note: only show on non-iOS browsers where the user might expect the mic to work. iOS browsers always hide it silently since MediaRecorder requires a secure context there too. */}
         {!voice.isSupported && !/iPhone|iPad|iPod/.test(window.navigator.userAgent) && (
           <Typography variant="caption" color="text.secondary" sx={{ alignSelf: "flex-end" }}>
@@ -3115,6 +3086,14 @@ function Composer({
         <Box sx={{ flexGrow: 1 }} />
         {approvals}
         {context}
+        {/* Only while recording: throws the audio away instead of putting its text in the box. */}
+        {voice.isRecording && (
+          <Tooltip title="Cancel recording">
+            <IconButton aria-label="Cancel recording" size="small" onClick={voice.cancelRecording} sx={{ color: "error.main", border: 1, borderColor: "error.main", "&:hover": { bgcolor: "action.hover" } }}>
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
         {onStop || onStopAside ? (
           <StopButton
             title={onStop ? "Stop the reply (Esc)" : "Stop the side question (the plan goes on)"}
@@ -3124,6 +3103,42 @@ function Composer({
             stopping={!!onStop && stopping}
             sx={{ ...roundButtonSx, border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
           />
+        ) : showMic ? (
+          // Nothing typed: the round button records a voice message. It turns into Send as soon as there is something to send.
+          <Tooltip title={voice.isRecording ? "Stop recording" : voice.isTranscribing ? "Transcribing…" : "Record voice message"}>
+            <span>
+              <IconButton
+                aria-label={voice.isRecording ? "Stop recording" : "Record voice message"}
+                onClick={() => {
+                  if (voice.isRecording) {
+                    voice.stopRecording();
+                  } else {
+                    voice.startRecording();
+                  }
+                }}
+                disabled={disabled || voice.isTranscribing}
+                sx={{
+                  ...roundButtonSx,
+                  bgcolor: "primary.main",
+                  color: "primary.contrastText",
+                  "&:hover": { bgcolor: "primary.dark" },
+                  "&.Mui-disabled": voice.isTranscribing
+                    ? { bgcolor: "primary.main", color: "primary.contrastText" }
+                    : { bgcolor: "action.disabledBackground", color: "action.disabled" },
+                  ...(voice.isRecording
+                    ? {
+                        bgcolor: "error.main",
+                        "&:hover": { bgcolor: "error.dark" },
+                        animation: `${micPulse} 1.5s infinite`,
+                        "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+                      }
+                    : {}),
+                }}
+              >
+                {voice.isTranscribing ? <CircularProgress size="1.25rem" color="inherit" /> : <MicIcon fontSize="small" />}
+              </IconButton>
+            </span>
+          </Tooltip>
         ) : (
           <Tooltip title={enterSends ? "Send (Enter)" : "Send"}>
             <span>
