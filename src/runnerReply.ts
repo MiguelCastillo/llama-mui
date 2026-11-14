@@ -9,6 +9,7 @@ import { INTERRUPTED } from "./agent/helpers.ts";
 import { askForSessionName } from "./agent/sessionNaming.ts";
 import { splitAsides, weaveAsides } from "./asides.ts";
 import { summaryOf } from "./compact.ts";
+import { repeatedCalls } from "./forgottenCalls.ts";
 import { withFrozenPersona } from "./persona.ts";
 import { threadsUpdate } from "./planThread.ts";
 import { requestCount, turnCount } from "./toolResults.ts";
@@ -120,6 +121,8 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
 
     const consumed = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, clearedResults: 0, clearedTokens: 0, rereads: 0 };
     let counted = false;
+    // How full the conversation was at the turn's latest request.
+    let contextTokens = 0;
 
     const callbacks: RunTurnCallbacks = {
       setMessages: (messages) => h.edit((s) => ({ ...s, messages: asides.length ? weaveAsides(messages, asides) : messages })),
@@ -130,6 +133,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
       },
       setUsage: (u) => {
         if (!u) return;
+        if (u.contextTokens > 0) contextTokens = u.contextTokens;
         // A request has just finished: the cache lives five minutes from now.
         h.edit((s) => ({
           ...s,
@@ -260,7 +264,17 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     // tokens were used. Nothing is written when the provider gave no counts.
     if (counted && h.recordUsage) {
       try {
-        await h.recordUsage({ sessionId: h.sessionId, provider: connector.name, model, ...consumed });
+        await h.recordUsage({
+          sessionId: h.sessionId,
+          provider: connector.name,
+          model,
+          ...consumed,
+          ...(contextTokens > 0 ? { contextTokens } : {}),
+          ...(compact ? { compaction: true } : {}),
+          // Calls repeated from before the history start: a chat turn only, since a
+          // plan step starts with a history of its own.
+          ...(!planStep && start > 0 ? { forgottenRereads: repeatedCalls(result.messages.slice(before.length), result.messages.slice(0, start)) } : {}),
+        });
       } catch {
         // The log is not worth failing a reply for.
       }

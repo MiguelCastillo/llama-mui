@@ -673,6 +673,18 @@ export interface UsageReport {
   session?: UsageTotals;
   today: UsageTotals;
   dailyTokenLimit: number;
+  // By how big the conversation was at a turn's last request, and how
+  // compactions went (server/usageSizes.ts).
+  bySize: { label: string; totals: UsageTotals }[];
+  compactions: {
+    count: number;
+    summaryTokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    // Share of the summary requests read from the server's cache, or null with no numbers.
+    cacheReuse: number | null;
+    // Compactions whose own share was under half.
+    lowReuse: number;
+    byBand: { label: string; count: number; repliesAfter: number; forgottenRereads: number; soonAgain: number }[];
+  };
 }
 export const getUsage = (sessionId?: string) =>
   call<UsageReport>("GET", `/api/usage${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`);

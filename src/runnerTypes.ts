@@ -68,4 +68,12 @@ export interface TurnUsage {
   clearedResults: number;
   clearedTokens: number;
   rereads: number;
+  // How full the conversation was at the turn's last request, in tokens (the
+  // size the cap for compaction is about). Left out when the provider gave none.
+  contextTokens?: number;
+  // The turn asked for a compaction summary (see src/compact.ts).
+  compaction?: boolean;
+  // Tool calls the turn made that repeat one from before the chat's history
+  // start: work a compaction's summary didn't carry forward (src/forgottenCalls.ts).
+  forgottenRereads?: number;
 }

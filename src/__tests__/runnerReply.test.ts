@@ -490,7 +490,48 @@ describe("makeReply", () => {
       expect(recordUsage).toHaveBeenCalledWith({
         sessionId: "a", provider: "Local llama", model: "m", input: 30, output: 12, cacheRead: 100, cacheWrite: 3,
         clearedResults: 8, clearedTokens: 18000, rereads: 1,
+        // The size at the turn's last request: what the compaction cap is about.
+        contextTokens: 30,
       });
+    });
+
+    it("marks a compaction turn", async () => {
+      const h = makeHandle();
+      const recordUsage = vi.fn();
+      h.handle.recordUsage = recordUsage;
+      twoRequests();
+      await makeReply(h.handle)("summarize", [], { compact: true });
+      expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ compaction: true, contextTokens: 30 }));
+      await makeReply(h.handle)("go", []);
+      expect(recordUsage.mock.calls[1][0]).not.toHaveProperty("compaction");
+    });
+
+    it("counts calls that repeat one from before the history start, and only past a history start", async () => {
+      const call = (id: string, path: string): ChatMessage => ({
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id, name: "read_file", arguments: JSON.stringify({ path }) }],
+      });
+      const old = [user("a"), call("c1", "/a.txt"), assistant("ok"), user("b"), assistant("ok")];
+      const repeatTurn = () =>
+        mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {
+          cb.setUsage({ contextTokens: 10, inputTokens: 10, outputTokens: 5 });
+          // The turn reads /a.txt again (a repeat) and /b.txt (new).
+          const messages = [...config.forgotten, ...config.history, user(config.text), call("c2", "/a.txt"), call("c3", "/b.txt")];
+          return { ok: true, messages, attached: [] };
+        });
+      const recordUsage = vi.fn();
+      // History starts at message 3: the call at message 1 was forgotten.
+      const h = makeHandle({ messages: old, contextStart: 3 });
+      h.handle.recordUsage = recordUsage;
+      repeatTurn();
+      await makeReply(h.handle)("go", old);
+      expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ forgottenRereads: 1 }));
+      // Nothing was forgotten in a chat whose history starts at the beginning.
+      const whole = makeHandle({ messages: old });
+      whole.handle.recordUsage = recordUsage;
+      await makeReply(whole.handle)("go", old);
+      expect(recordUsage.mock.calls[1][0]).not.toHaveProperty("forgottenRereads");
     });
 
     it("records nothing when the provider gave no counts", async () => {

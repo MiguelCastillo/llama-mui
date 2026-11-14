@@ -2162,6 +2162,28 @@ of the list the model is sent: from `contextStart` on.
   five minutes; a llama.cpp slot may have been reused) reads the whole
   conversation again: slow on a local server, and billed on Claude. That is why
   it is asked for right after a reply.
+- **Measuring whether it compacts too much.** Each turn's line in
+  `~/.llama-mui/usage.jsonl` also has `contextTokens` (how big the conversation
+  was at the turn's last request), `compaction: true` on a compaction turn, and
+  `forgottenRereads` (tool calls in the turn that repeat one from before the
+  history start, the same tool with the same arguments compared by meaning: work
+  the summary didn't carry forward; it is only there once a chat has a history
+  start). Settings → Usage shows token use by conversation size (under 200k, 200k
+  to 400k, 400k to 600k, 600k and over) and a Compactions table by the chat's size
+  when it was compacted: how many, the replies after them, the repeated calls in
+  those replies, and how many were compacted again within 5 replies. Repeated
+  calls often above 0 mean compacting loses work; a chat compacted again soon
+  means it compacts too early or the kept part is too big. The table also says
+  how much of the summary requests was read from the server's cache (cache read
+  over cache read, cache written and fresh input; a healthy one reads nearly all
+  of it, since the request starts exactly like the one before) and how many read
+  less than half (`LOW_REUSE`, a guess), which is the sign that the summary
+  request stopped starting like the one before it. Tokens only, no cost. The
+  test `src/__tests__/compactCache.test.ts` guards the same thing offline: it
+  checks that the summary request has the same system prompt, tools, settings and
+  messages as the request before it, and then only the reply and the request for
+  the summary.
+  This is what the 60% in `COMPACT_AT` should be judged by.
 - **Not configurable.** When it runs is fixed in the code, and the wording of the
   request is that file; `rules.md` is for rules you choose.
 

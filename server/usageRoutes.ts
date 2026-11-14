@@ -4,6 +4,7 @@
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { load, save } from "./store.ts";
 import { dayOf, emptyTotals, readUsage, sumAll, sumByDay, sumByProvider, type UsageRecord, type UsageTotals } from "./usageLog.ts";
+import { type CompactionReport, type SizeRow, bySize, compactions } from "./usageSizes.ts";
 
 export const DAYS = 30;
 
@@ -17,6 +18,10 @@ export type UsageReport = {
   today: UsageTotals;
   // 0 means no limit is set.
   dailyTokenLimit: number;
+  // Everything in the log, by how big the conversation was at a turn's last
+  // request, and what compactions cost and how they went (see usageSizes.ts).
+  bySize: SizeRow[];
+  compactions: CompactionReport;
 };
 
 // Pure, so it can be tested without files. `now` is when "today" is.
@@ -34,6 +39,8 @@ export function buildReport(records: UsageRecord[], dailyTokenLimit: number, ses
     ...(sessionId ? { session: sumAll(records.filter((r) => r.sessionId === sessionId)) } : {}),
     today: perDay[today] ?? emptyTotals(),
     dailyTokenLimit,
+    bySize: bySize(records),
+    compactions: compactions(records),
   };
 }
 

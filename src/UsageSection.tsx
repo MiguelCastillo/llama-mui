@@ -35,6 +35,8 @@ export default function UsageSection() {
   const providers = report ? Object.entries(report.byProvider).sort((a, b) => b[1].total - a[1].total) : [];
   // Newest first, and days with no turns left out.
   const days = report ? report.byDay.filter((d) => d.totals.turns > 0).reverse() : [];
+  // Sizes with no turns left out.
+  const sizes = report ? report.bySize.filter((r) => r.totals.turns > 0) : [];
 
   return (
     <Stack spacing={2}>
@@ -90,6 +92,84 @@ export default function UsageSection() {
                   ))}
                 </TableBody>
               </Table>
+            )}
+          </Box>
+
+          <Box>
+            <Typography variant="h6">By conversation size</Typography>
+            <Typography color="text.secondary" variant="body2" sx={{ mb: 1 }}>
+              How big the conversation was when each turn ended. Turns from before this was recorded are not counted. It shows where the tokens go, to judge the size at which a chat is compacted.
+            </Typography>
+            {sizes.length === 0 ? (
+              <Typography color="text.secondary">No turns recorded with a size yet.</Typography>
+            ) : (
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Conversation size</TableCell>
+                    <TableCell align="right">Turns</TableCell>
+                    <TableCell align="right">Fresh input</TableCell>
+                    <TableCell align="right">Output</TableCell>
+                    <TableCell align="right">Read from cache</TableCell>
+                    <TableCell align="right">Written to cache</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {sizes.map(({ label, totals: t }) => (
+                    <TableRow key={label}>
+                      <TableCell>{label}</TableCell>
+                      <TableCell align="right">{n(t.turns)}</TableCell>
+                      <TableCell align="right">{n(t.input)}</TableCell>
+                      <TableCell align="right">{n(t.output)}</TableCell>
+                      <TableCell align="right">{n(t.cacheRead)}</TableCell>
+                      <TableCell align="right">{n(t.cacheWrite)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </Box>
+
+          <Box>
+            <Typography variant="h6">Compactions</Typography>
+            {report.compactions.count === 0 ? (
+              <Typography color="text.secondary">No compactions recorded yet.</Typography>
+            ) : (
+              <>
+                <Typography color="text.secondary" variant="body2" sx={{ mb: 1 }}>
+                  {n(report.compactions.count)} compactions. Their summary requests used {n(report.compactions.summaryTokens.input)} fresh input,{" "}
+                  {n(report.compactions.summaryTokens.output)} output, {n(report.compactions.summaryTokens.cacheRead)} read from cache and{" "}
+                  {n(report.compactions.summaryTokens.cacheWrite)} written to cache.{" "}
+                  {report.compactions.cacheReuse === null
+                    ? "No cache numbers were reported for them."
+                    : `${Math.round(report.compactions.cacheReuse * 100)}% of the summary requests was read from the cache (a healthy one reads nearly all of it)${report.compactions.lowReuse > 0 ? `; ${n(report.compactions.lowReuse)} read less than half, so the summary request stopped starting like the one before it` : ""}.`}{" "}
+                  "Repeated calls" are tool calls made after a compaction that repeat one from before it: work the summary didn't carry forward. Often above 0 means compacting loses work; near 0 means a chat could be compacted earlier. "Compacted again soon" means the chat filled up again within 5 replies.
+                </Typography>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Chat size when compacted</TableCell>
+                      <TableCell align="right">Compactions</TableCell>
+                      <TableCell align="right">Replies after</TableCell>
+                      <TableCell align="right">Repeated calls</TableCell>
+                      <TableCell align="right">Compacted again soon</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {report.compactions.byBand
+                      .filter((b) => b.count > 0)
+                      .map((b) => (
+                        <TableRow key={b.label}>
+                          <TableCell>{b.label}</TableCell>
+                          <TableCell align="right">{n(b.count)}</TableCell>
+                          <TableCell align="right">{n(b.repliesAfter)}</TableCell>
+                          <TableCell align="right">{n(b.forgottenRereads)}</TableCell>
+                          <TableCell align="right">{n(b.soonAgain)}</TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </>
             )}
           </Box>
 

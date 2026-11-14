@@ -153,7 +153,7 @@ export function clearedBy(messages: Message[], count: number, { skipSmall }: { s
 
 // Arguments compared by meaning, not text: a model writes the same call with
 // different spacing or key order.
-function sameArguments(a: string, b: string): boolean {
+export function sameArguments(a: string, b: string): boolean {
   const norm = (t: string) => {
     try {
       const sort = (v: unknown): unknown =>
