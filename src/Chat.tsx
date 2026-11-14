@@ -137,6 +137,7 @@ import LiveLine from "./LiveLineRow";
 import { liveLine } from "./liveLine";
 import Elapsed, { type StreamRate } from "./Elapsed";
 import { stepSummary } from "./stepSummary";
+import { toolCallTitle } from "./toolCallTitle";
 import { groupRounds } from "./stepGroups";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import { createMessageBox, type MessageBox, type PendingDocument, type PendingImage } from "./messageBox";
@@ -3225,8 +3226,8 @@ const MessageBubble = memo(function MessageBubble({
   // The chat's connection streams a readable summary as its reasoning (Claude)
   // and not raw thoughts: shown open in the steps and on the live line.
   reasoningIsSummary: boolean;
-  // Off (the default): no steps lines and no live line, only each round's note
-  // and the answer (Settings → Chat; kept in this browser, see showSteps.ts).
+  // Off (the default): no steps lines, only each round's note, the live line
+  // while it runs, and the answer (Settings → Chat; kept in this browser, see showSteps.ts).
   showSteps: boolean;
   // Error message for the last user message in this turn.
   failed?: string | null;
@@ -3293,12 +3294,18 @@ const MessageBubble = memo(function MessageBubble({
   // With steps hidden, thinking and tool calls show nothing, so the dots
   // wait for text only.
   const waiting = streaming && !last.content && (!showSteps || (!last.reasoning && !last.toolCalls?.length));
-  // While a reply runs (and the task's start is known) its history folds into
-  // one live line at the bottom: the latest note, a spinner and the elapsed
-  // time, with the history inside. Once the newest round is writing the
-  // answer the line is left out and the answer streams as normal text.
-  const live = showSteps && !isUser && streaming && since != null ? liveLine(parts, reasoningIsSummary) : null;
-  const showLiveLine = !!live && !live.writingAnswer;
+  // While a reply runs (and the task's start is known) one status line sits at
+  // the bottom: a spinner, the latest text before a round's tool calls (or
+  // "Thinking…") and the time since the task started. It holds nothing; the
+  // history is drawn in place, and nothing that is on screen is ever hidden
+  // again, except by Show steps. The line goes away when the turn ends. It
+  // shows whether or not Show steps is on: that setting only decides if the
+  // "3 steps" lines are drawn.
+  const live = !isUser && streaming && since != null ? liveLine(parts, { reasoningIsSummary, showCalls: showSteps, hasResult: (id) => toolResults.has(id) }) : null;
+  // A round's tool calls arrive only when its stream ends, so until then the
+  // page can't tell where its steps line goes (under its text, or above the
+  // answer). Its steps line is drawn once the stream has ended, and stays.
+  const inProgress = (m: ChatMessage) => streaming && m === last && !m.toolCalls?.length;
   // One round's steps (its thinking and shown tool calls) fold into one row
   // of their own, put under that round's note, or above the answer when the
   // round has no tool calls. Null for a round with no steps.
@@ -3316,8 +3323,9 @@ const MessageBubble = memo(function MessageBubble({
   };
   const stepsRowFor = (m: ChatMessage): ReactNode => {
     if (!showSteps || isUser || m.role !== "assistant") return null;
+    if (inProgress(m)) return null;
     if (roundGroups.find((g) => g.round === m)?.joinsPrevious) return null;
-    const group = groupOf(m);
+    const group = groupOf(m).filter((r) => !inProgress(r));
     const sum = stepSummary(group);
     if (sum.count === 0) return null;
     // "3 steps · 12s": the time is what the rounds' thinking and tool runs took.
@@ -3565,16 +3573,7 @@ const MessageBubble = memo(function MessageBubble({
           {shownCalls(m.toolCalls).length > 0 && stepsRowFor(m)}
         </Fragment>
         ));
-        // Live: the history sits inside the line's details, closed until
-        // opened, and the line comes last. Finished (or writing the answer):
-        // the history is the reply itself, as it always was.
-        return showLiveLine && live && since != null ? (
-          <LiveLine text={live.text} since={since}>
-            {history}
-          </LiveLine>
-        ) : (
-          history
-        );
+        return history;
       })()}
       {onlyStepsHidden && (
         <Typography variant="body2" color="text.secondary">
@@ -3660,16 +3659,12 @@ const MessageBubble = memo(function MessageBubble({
           </Box>
         </Panel>
       ))}
-      {streaming && since != null && !showLiveLine ? (
-        // The counter sits beside the waiting dots, and stays on this
-        // line once text streams in and the dots go. The live line has its
-        // own timer, so this is only for a reply writing its answer.
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: "1.5em" }}>
-          {waiting && <TypingDots />}
-          <Elapsed since={since} rate={rate} variant="caption" color="text.secondary" />
-        </Box>
+      {live && since != null ? (
+        // While the answer is being written the status line also shows the
+        // streaming speed.
+        <LiveLine text={live.text} since={since} rate={live.writingAnswer ? rate : undefined} />
       ) : (
-        !showLiveLine && waiting && <TypingDots />
+        waiting && <TypingDots />
       )}
       {hidden && showHidden && (
         <Typography
@@ -3789,23 +3784,7 @@ const ToolCallView = memo(function ToolCallView({
   stopped: boolean;
 }) {
   const result = resultMessage?.content;
-  let args: any = {};
-  try {
-    args = JSON.parse(call.arguments || "{}");
-  } catch {
-    // Shown raw below; the server reports the bad JSON to the model.
-  }
-  // find_files and grep take a pattern, web_search a query; show it along with
-  // where they looked. run_command shows its command, fetch_url its URL,
-  // locate_path what it's looking for.
-  const term = args.pattern ?? args.query;
-  const target =
-    args.command !== undefined || args.url !== undefined || args.description !== undefined
-      ? String(args.command ?? args.url ?? args.description)
-      : term !== undefined
-        ? `"${term}"${args.path ? ` in ${args.path}` : ""}`
-        : (args.path ?? "");
-  const title = `${call.name}${target ? ` ${target}` : ""}`;
+  const title = toolCallTitle(call);
   const failed = result?.startsWith("Error:");
   const [open, setOpen] = useState(false);
   return (

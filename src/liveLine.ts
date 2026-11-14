@@ -1,38 +1,48 @@
-// What the one live line says while a reply is still running. A reply is made
-// of rounds (one assistant message each). The line shows the latest note: the
-// short text the model wrote before its tool calls. Until there is one, it says
-// "Thinking…". When the newest round is already writing the final answer (text
-// and no tool calls) the answer streams as normal text and the line is not
-// shown, so `writingAnswer` tells the caller to leave it out.
+// What the one live line says while a reply is still running. It says what the
+// model is doing now, never something already drawn above it in the chat:
+//   - a tool call is running: "Running" and that call's title (see
+//     toolCallTitle.ts), or "Working…" when Show steps is off, since a call is
+//     a step;
+//   - the newest round is writing text: "Writing…";
+//   - otherwise: "Thinking…", or on a connection whose reasoning is a summary
+//     (Claude), the last line of the newest round's thinking summary. Raw
+//     thoughts are never shown there.
+// `writingAnswer` is true while the newest round has text and no tool calls
+// yet (the calls arrive when its stream ends, so it may still be the text
+// before them); the caller uses it to show the streaming speed.
 
 import type { ChatMessage } from "./api.ts";
 import { shownCalls } from "./agent/replyNotes.ts";
+import { toolCallTitle } from "./toolCallTitle.ts";
 
 export const THINKING_TEXT = "Thinking…";
+export const WRITING_TEXT = "Writing…";
+export const WORKING_TEXT = "Working…";
 
 export interface LiveLine {
-  // The latest note, trimmed, or "Thinking…" when there is none.
   text: string;
-  // True when the newest round has text and no tool calls: it is the answer.
   writingAnswer: boolean;
 }
 
+export interface LiveLineOptions {
+  // The connection's (see connections/types.ts): reasoning is a readable summary.
+  reasoningIsSummary?: boolean;
+  // Show steps is on: a running call may be named.
+  showCalls?: boolean;
+  // Whether a call has its result yet.
+  hasResult?: (callId: string) => boolean;
+}
+
 // `parts` are the messages of one reply; only assistant messages are rounds.
-// The note is searched from the newest round backwards, so a newest round that
-// has no note yet (it is only thinking, or has just started its calls) keeps
-// showing the note before it.
-// `reasoningIsSummary` (the connection's, see connections/types.ts): with no
-// note yet, the line shows the last line of the newest round's thinking summary
-// instead of "Thinking…". Raw thoughts are never shown there.
-export function liveLine(parts: ChatMessage[], reasoningIsSummary = false): LiveLine {
+export function liveLine(parts: ChatMessage[], opts: LiveLineOptions = {}): LiveLine {
   const rounds = parts.filter((m) => m.role === "assistant");
   const newest = rounds[rounds.length - 1];
-  const writingAnswer = !!newest && !!newest.content.trim() && shownCalls(newest.toolCalls).length === 0;
-  for (let i = rounds.length - 1; i >= 0; i--) {
-    const text = rounds[i].content.trim();
-    if (text && shownCalls(rounds[i].toolCalls).length > 0) return { text, writingAnswer };
-  }
-  if (reasoningIsSummary && newest?.reasoning) {
+  const calls = shownCalls(newest?.toolCalls);
+  const writingAnswer = !!newest && !!newest.content.trim() && calls.length === 0;
+  const running = calls.find((c) => !opts.hasResult?.(c.id));
+  if (running) return { text: opts.showCalls ? `Running ${toolCallTitle(running)}` : WORKING_TEXT, writingAnswer };
+  if (writingAnswer) return { text: WRITING_TEXT, writingAnswer };
+  if (opts.reasoningIsSummary && newest?.reasoning) {
     const last = newest.reasoning.trim().split("\n").filter((l) => l.trim()).pop();
     if (last) return { text: last.replace(/^[*#\s]+|[*\s]+$/g, ""), writingAnswer };
   }

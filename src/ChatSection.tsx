@@ -65,7 +65,7 @@ export default function ChatSection() {
             >
               <ListItemText
                 primary="Show steps"
-                secondary="Show each round's steps (thinking and tool calls) as a line under its note, and a live line while a reply runs. Off shows only the notes and the answer. Saved in this browser, so each device has its own; off until you turn it on."
+                secondary="Show each round's steps (thinking and tool calls) as a line under its text. Off shows only the text, the answer, and the live line at the bottom while a reply runs. Saved in this browser, so each device has its own; off until you turn it on."
               />
             </ListItem>
             {OPTIONS.map((o, i) => (

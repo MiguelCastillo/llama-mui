@@ -1662,10 +1662,10 @@ step that was running when the page closed comes back as pending.
   box, with a note to load it from the model menu. Opening an old chat picks
   its model, but doesn't load it.
 - Streaming replies with a Stop button (on a phone) or Esc (wide screens).
-- **Show steps** (Settings → Chat) turns all of this on, and it is off until
-  you do: with it off a reply shows each round's text before its tool calls and the answer, and no
-  steps lines; while it runs, the waiting dots and the elapsed time show
-  instead of the live line. A reply that was only steps (say, stopped in the
+- **Show steps** (Settings → Chat) turns the steps lines on, and it is off until
+  you do: with it off a reply shows each round's text before its tool calls and
+  the answer, and no steps lines; while it runs the live line (below) still shows
+  what the model is doing now ("Working…" while a tool runs). A reply that was only steps (say, stopped in the
   middle of a tool call) says so, and where to turn them on. The choice is
   kept in this browser, not in the settings file, so each device has its own,
   and the page knows it before it draws a reply (a setting kept on the server
@@ -1694,25 +1694,30 @@ step that was running when the page closed comes back as pending.
   stays open only while the chat is on screen. The reply's total time is in the small
   print under the reply. A reply that is only steps (say, stopped in the
   middle of a tool call) shows just the line.
-- While a reply runs, the notes and step lines above are folded into one
-  line at the bottom of the reply: a small spinner, the model's latest note
-  on a single line (cut off with "…" if it's long; hover for all of it), the
-  time since the task started, and an arrow. It says "Thinking…" when there is
-  no note yet; on a Claude connection, once its thinking summary has started
-  it shows the summary's last line instead, until a note arrives. It starts closed; click it to see the history so far, laid out
-  exactly like a finished reply (each note with its steps line beneath). Once
-  the model starts writing the final answer, the line goes away and the
-  answer streams as normal text, so an answer is never hidden behind it. When
-  the reply ends, the line disappears and the finished layout shows. A reply
-  with no start time (one that isn't a live task) keeps the waiting dots and
-  shows its history as it comes.
+- While a reply runs, one **live line** sits at the bottom of the reply: a small
+  spinner, what the model is doing now on a single line (cut off with "…" if
+  it's long; hover for all of it), and the time since the task started. While a
+  tool call runs it says "Running" and the call's title, as its row shows it
+  (with Show steps off, "Working…", since a call is a step); while text streams,
+  "Writing…"; otherwise "Thinking…", or on a Claude connection, once its thinking
+  summary has started, the summary's last line. It never repeats text already in
+  the chat. It holds nothing and doesn't open: the
+  reply's history is drawn above it, laid out exactly like a finished reply, as
+  it comes. The rule is that nothing on screen is hidden again, except by Show
+  steps. So a round's text stays where it streamed. A round's tool calls arrive
+  only when its stream ends, so until then its steps line (Show steps on) isn't
+  drawn; it appears under the round's text once the calls arrive and stays. The
+  final round's steps line, if it has one, appears above the answer when the
+  reply ends. While the answer is being written the live line stays, and shows
+  the streaming speed beside the time. When the reply ends the line disappears.
+  A reply with no start time (one that isn't a live task) has no live line: it
+  keeps the waiting dots and shows its history as it comes.
 - The chat follows new output while you're at the bottom. Scroll up to read
   back, even while a reply streams, and it stays put; a down arrow at the
   bottom jumps to the latest and follows again, as does scrolling back down or
   sending a message.
 - While a reply runs, a counter shows how long it's taken: on the live line
-  (time only), or, while the answer is being written, next to the waiting dots
-  with the speed it's streaming at; during a plan run it's on the plan card. A finished reply keeps the total in small print, for example
+  (with the speed it's streaming at, once the answer is being written); during a plan run it's on the plan card. A finished reply keeps the total in small print, for example
   "2.8s · 52 tps (client) · 58 tps (server)": the client speed is what reached
   the browser, the server speed is llama.cpp's own figure for generating it. A
   big gap means the server was slow to deliver (say, while loading another

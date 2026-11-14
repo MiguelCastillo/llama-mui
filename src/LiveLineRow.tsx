@@ -1,73 +1,36 @@
-import type { ReactNode } from "react";
-import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
-  CircularProgress,
-  Stack,
-  Typography,
-} from "@mui/material";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import Elapsed from "./Elapsed";
-import { flatAccordionSx } from "./stepFormat";
+import { CircularProgress, Stack, Typography } from "@mui/material";
+import Elapsed, { type StreamRate } from "./Elapsed";
 
-// The one line shown at the bottom of a reply while it is still running: a
+// The one status line at the bottom of a reply while it is still running: a
 // small spinner, what the model said it is doing (`text`), and the time since
-// the task started (`since`). Closed until clicked; open, it shows the history
-// so far (`children`). Display only: the caller decides when to show it.
+// the task started (`since`). It holds nothing and opens nothing: the reply's
+// history is drawn above it, in place. With `rate`, the time is followed by
+// the streaming speed. Display only: the caller decides when to show it.
 export default function LiveLineRow({
   text,
   since,
-  children,
+  rate,
 }: {
   text: string;
   since: number;
-  children?: ReactNode;
+  rate?: { current: StreamRate };
 }) {
   return (
-    <Accordion
-      disableGutters
-      elevation={0}
-      // Draw the history only while this is open.
-      slotProps={{ transition: { unmountOnExit: true } }}
-      sx={{
-        ...flatAccordionSx,
-        // Open, the history fills the width with no padding of its own.
-        "&& .live-details": { p: 0 },
-      }}
+    // minWidth 0 down the flex chain lets a long note shrink to one line
+    // instead of widening the reply.
+    <Stack
+      direction="row"
+      spacing={1}
+      aria-label={`Working: ${text}`}
+      sx={{ alignItems: "center", minWidth: 0 }}
     >
-      {/* minWidth 0 down the flex chain lets a long note shrink to one line
-          instead of widening the reply. */}
-      <AccordionSummary
-        expandIcon={<ExpandMoreIcon />}
-        aria-label={`Working: ${text}`}
-        sx={{ "& .MuiAccordionSummary-content": { minWidth: 0 } }}
-      >
-        <Stack
-          direction="row"
-          spacing={1}
-          sx={{ alignItems: "center", minWidth: 0, flex: 1 }}
-        >
-          <CircularProgress size="0.875rem" sx={{ flexShrink: 0 }} />
-          {/* The model's note is text for you to read, so it is the normal message
-              size and colour, not the small grey of a label. Only the time is small. */}
-          <Typography
-            variant="body1"
-            noWrap
-            title={text}
-            sx={{ minWidth: 0, flex: 1 }}
-          >
-            {text}
-          </Typography>
-          <Elapsed
-            since={since}
-            variant="caption"
-            color="text.secondary"
-            sx={{ flexShrink: 0 }}
-          />
-        </Stack>
-      </AccordionSummary>
-      <AccordionDetails className="live-details">{children}</AccordionDetails>
-    </Accordion>
+      <CircularProgress size="0.875rem" sx={{ flexShrink: 0 }} />
+      {/* The page's text is body1 (see AGENTS.md, Styling), so the words and the
+          time are the same size; the time is only a quieter colour. */}
+      <Typography variant="body1" noWrap title={text} sx={{ minWidth: 0 }}>
+        {text}
+      </Typography>
+      <Elapsed since={since} rate={rate} variant="body1" color="text.secondary" sx={{ flexShrink: 0 }} />
+    </Stack>
   );
 }

@@ -26,6 +26,30 @@ works, and this file says how to change it.
 
   Don't add to this list without saying so here.
 
+## What's on screen stays
+
+While a reply runs, nothing the page has drawn is hidden, moved or folded away
+afterward. The only thing that hides information is the **Show steps** toggle
+(Settings → Chat). Miguel set this rule; don't change it unless he is
+discussing it with you. In the guide's words (`docs/guide.md`, "Words used
+here"):
+
+- Each round's text before its tool calls streams into the chat and stays
+  where it streamed.
+- With Show steps on, a round's steps line appears under its text once its
+  tool calls arrive (they arrive only when the round's stream ends), and stays.
+  The final round's steps line appears above the answer when the reply ends.
+  With Show steps off, no steps lines are drawn.
+- The **live line** is a status line at the bottom: spinner, what the model is
+  doing now, the time. It says "Running" and the call's title while a tool
+  call runs (with Show steps off, "Working…", since a call is a step), "Writing…"
+  while text streams, "Thinking…" otherwise. It never repeats text already in
+  the chat. It holds nothing and doesn't open, shows with Show steps on or off,
+  and goes away when the reply ends. Never draw the history inside it.
+- Don't guess what a streaming text is (the answer, or text before tool calls)
+  by drawing something and then taking it back. If the page can't know yet,
+  draw nothing new for it until it can.
+
 ## API keys
 
 A saved key lives encrypted in `~/.llama-mui/.keys` (AES-256-GCM, `server/secrets.ts`)
