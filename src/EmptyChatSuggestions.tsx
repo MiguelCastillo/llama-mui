@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Box, ButtonBase, Typography, useMediaQuery } from "@mui/material";
+import { Box, ButtonBase, Typography } from "@mui/material";
+import { useVisibleShorterThan } from "./useVisibleHeight";
 import { listSessions } from "./api";
 import MyTodos from "./MyTodos";
 import { pickSuggestions, visibleCount } from "./suggestions";
@@ -44,16 +45,15 @@ export default function EmptyChatSuggestions({
   const picks = useMemo(() => pickSuggestions(), []);
   const groups = useMemo(() => todoGroups(sessions ?? []), [sessions]);
   // Three are picked once and the first few shown, so resizing doesn't reshuffle.
-  const short = useMediaQuery("(max-height: 40rem)");
+  const short = useVisibleShorterThan(40);
   const shown = picks.slice(0, visibleCount(groups.length > 0, short));
 
   return (
     <Box
       sx={{
-        position: "absolute",
-        top: "calc(100% + 1rem)",
-        left: 0,
-        right: 0,
+        // In the flow under the heading (1rem below it), so the block they
+        // share can be anchored by its bottom edge.
+        mt: 2,
         display: "flex",
         flexDirection: "column",
         alignItems: "center",

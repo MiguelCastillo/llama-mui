@@ -154,6 +154,18 @@ interface, and plain http on this computer only.
   with it; and MUI's breakpoints, which the library takes in px. A new
   drawing follows the same pattern; anything else is new, so ask.
 
+## Layout and the phone keyboard
+
+- **A screen with a message box uses the shared chat layout component**
+  (`ChatLayout`), not its own boxes.
+- **Size from the visible height it gives you** (`useVisibleHeight`), never
+  from the full screen: no `vh`, `dvh` or media queries on screen height. The
+  full screen doesn't shrink when the phone keyboard opens.
+- **Never position anything by a fraction of the chat area's height.** Place
+  it from the message box, using the layout's slots.
+- **The layout's shared values live in one place**, in the layout component.
+  Change them there; don't copy them elsewhere.
+
 ## Before designing a change
 
 - Read the section of `docs/guide.md` for the area first, and search the code

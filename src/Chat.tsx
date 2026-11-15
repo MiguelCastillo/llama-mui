@@ -142,6 +142,7 @@ import { groupRounds } from "./stepGroups";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import { createMessageBox, type MessageBox, type PendingDocument, type PendingImage } from "./messageBox";
 import { useVoiceRecorder } from "./useVoiceRecorder";
+import { ChatLayout } from "./ChatLayout";
 import { composeMessage, isDocumentFile, prepareDocument, splitMessage } from "./documents";
 import EditButton from "./EditButton";
 import { submitDraft } from "./submitDraft";
@@ -617,7 +618,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const observer = new ResizeObserver(recheck);
     observer.observe(content);
     observer.observe(box);
-    return () => observer.disconnect();
+    // The box itself getting shorter (the phone keyboard opening) would leave
+    // the last messages below the view: a chat that is following stays at the end.
+    const keepEnd = new ResizeObserver(() => {
+      if (followingRef.current) stickToBottom();
+    });
+    keepEnd.observe(box);
+    return () => {
+      observer.disconnect();
+      keepEnd.disconnect();
+    };
   }, []);
 
   // The saved chat this is, and the list for the chats panel. Nothing is
@@ -2080,24 +2090,31 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   }, [pendingStart, loaded, sessionId]);
 
   return (
-    <Box sx={{ display: "flex", height: "100dvh" }}>
-      <SessionsPanel
-        sessions={sessions}
-        currentId={sessionId}
-        open={drawerMode ? drawerOpen : sessionsOpen}
-        narrow={drawerMode}
-        busy={false}
-        attention={attention}
-        inProgress={inProgress}
-        onSelect={(id) => id !== sessionId && openSession(id)}
-        onNew={newChat}
-        onNewNested={newNested}
-        onDelete={removeSession}
-        onRename={renameSessionLocal}
-        onGroup={groupSessionLocal}
-        onClose={() => setDrawerOpen(false)}
-      />
-      <Box sx={{ flexGrow: 1, minWidth: 0, height: "100dvh", display: "flex", flexDirection: "column", position: "relative" }}>
+    <ChatLayout
+      narrow={narrow}
+      maxWidth={CHAT_MAX_WIDTH}
+      scrollRef={scrollRef}
+      onScroll={onScroll}
+      sidebar={
+        <SessionsPanel
+          sessions={sessions}
+          currentId={sessionId}
+          open={drawerMode ? drawerOpen : sessionsOpen}
+          narrow={drawerMode}
+          busy={false}
+          attention={attention}
+          inProgress={inProgress}
+          onSelect={(id) => id !== sessionId && openSession(id)}
+          onNew={newChat}
+          onNewNested={newNested}
+          onDelete={removeSession}
+          onRename={renameSessionLocal}
+          onGroup={groupSessionLocal}
+          onClose={() => setDrawerOpen(false)}
+        />
+      }
+      top={
+        <>
       {/* Floating toolbar in the top-right corner. Collapsing slides the
           controls away to the right (up, on phones); the expand, New chat
           and Settings buttons always stay. */}
@@ -2366,8 +2383,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       </Dialog>
 
 
-      {/* Top padding keeps the first messages clear of the toolbar. */}
-      <Box ref={scrollRef} onScroll={onScroll} sx={{ flexGrow: 1, overflowY: "auto", pt: 9, pb: 3, position: "relative" }}>
+        </>
+        }
+        messages={
         <Container maxWidth={false} ref={contentRef} sx={{ maxWidth: CHAT_MAX_WIDTH }}>
           <Stack spacing={2}>
             {connector === null ? (
@@ -2390,36 +2408,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             ) : (
               // The session is still being read until `loaded`, so without it the
               // empty-chat screen would flash before the real messages.
-              loaded && messages.length === 0 && (
-                <>
-                  {/* Three quarters of the way down the chat area, near the message box:
-                      placed against the scrolling box (position: relative), so it stays
-                      in proportion at any window size. The creature and the suggestions
-                      hang off the heading, so a heading that wraps can't run into them. */}
-                  <Box
-                    sx={{
-                      position: "absolute",
-                      top: "75%",
-                      left: 0,
-                      right: 0,
-                      transform: "translateY(-50%)",
-                    }}
-                  >
-                    <Typography
-                      variant="h3"
-                      sx={{
-                        textAlign: "center",
-                        fontWeight: 500,
-                        fontSize: { xs: "2.25rem", sm: "3rem" },
-                      }}
-                    >
-                      How can I help you?
-                    </Typography>
-                    <EmptyChatCreature />
-                    <EmptyChatSuggestions onStart={startFromEmpty} onOpenSession={openSession} />
-                  </Box>
-                </>
-              )
+              null
             )}
             {turns.map(
               (t, i) =>
@@ -2477,21 +2466,41 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             {error && <Alert severity="error">{error}</Alert>}
           </Stack>
         </Container>
-        {/* Sticky with no height: it floats over the bottom of the chat
-            without adding space under the last message. */}
-        {moreBelow && messages.length > 0 && (
-          <Box sx={{ position: "sticky", bottom: "1rem", height: 0, display: "flex", justifyContent: "center" }}>
+        }
+        // The empty chat: the heading, the creature (hangs above the heading)
+        // and the suggestions. A short area (the phone keyboard open) pushes
+        // the creature out of view first.
+        anchored={
+          connector !== null &&
+          loaded &&
+          messages.length === 0 && (
+            <>
+              <Typography
+                variant="h3"
+                sx={{
+                  textAlign: "center",
+                  fontWeight: 500,
+                  fontSize: { xs: "2.25rem", sm: "3rem" },
+                }}
+              >
+                How can I help you?
+              </Typography>
+              <EmptyChatCreature />
+              <EmptyChatSuggestions onStart={startFromEmpty} onOpenSession={openSession} />
+            </>
+          )
+        }
+        floating={
+          moreBelow && messages.length > 0 && (
             <Tooltip title="Jump to the latest and keep following">
               <Fab size="small" color="primary" onClick={toBottom} sx={{ mt: -5 }} aria-label="Jump to the latest">
                 <KeyboardArrowDownIcon />
               </Fab>
             </Tooltip>
-          </Box>
-        )}
-      </Box>
-
-      <Paper square elevation={0} sx={{ py: narrow ? 1 : 2, bgcolor: "transparent" }}>
-        <Container maxWidth={false} sx={{ maxWidth: CHAT_MAX_WIDTH, ...(narrow && { px: 1 }) }}>
+          )
+        }
+        composer={
+        <>
           <UsageWarning refreshKey={turnRunning} sx={{ mb: 1 }} />
           <Composer
             box={box}
@@ -2568,10 +2577,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               )
             }
           />
-        </Container>
-      </Paper>
-      </Box>
-    </Box>
+        </>
+      }
+    />
   );
 }
 
