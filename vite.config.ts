@@ -7,11 +7,16 @@ import { selfSignedCert } from "./server/cert.ts";
 export default defineConfig({
   plugins: [react(), api(), logging()],
   server: {
-    // Dev is on 5174; the built app (npm run prod) has 5173. strictPort so a
-    // busy port is an error, not a quiet move to another one. host: true binds
-    // to all interfaces so the LAN IP is reachable from mobile. https is
-    // made at startup (server/cert.ts) so no cert files are needed.
-    port: 5174,
+    // Dev is https on every interface at HTTPS_PORT (default 5175; the
+    // microphone and phones need it; other devices are let in only when
+    // Settings → Phone allows it, server/lan.ts), and the same app is plain http
+    // on this computer only at HTTP_PORT (default 5174, set in api() in
+    // server/plugin.ts), which inspect_page opens without a certificate
+    // warning. The built app (npm run prod) is the same pair on 5173 and 5172.
+    // strictPort so a busy port is an error, not a quiet move to another one.
+    // The certificate is made at startup (server/cert.ts) so no cert files are
+    // needed.
+    port: Number(process.env.HTTPS_PORT ?? 5175),
     strictPort: true,
     host: true,
     https: selfSignedCert(),

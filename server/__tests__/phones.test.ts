@@ -16,6 +16,7 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 const phones = await import("../phones.ts");
+const { setOtherDevices, otherDevicesAllowed } = await import("../lan.ts");
 const { COOKIE, PAIRING_TTL_MS, _resetPairing, isAllowed, isLocal, nameFor, phoneRoutes, setListenAddress } = phones;
 
 const LAN = "192.168.1.50";
@@ -57,6 +58,7 @@ async function pair(now = Date.now()) {
 
 beforeEach(() => {
   _resetPairing();
+  setOtherDevices(true);
   setListenAddress({ address: "::", family: "IPv6", port: 5173 });
 });
 
@@ -116,11 +118,35 @@ describe("pairing", () => {
     expect(nameFor("Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile")).toBe("Android phone");
   });
 
+  it("only makes codes while other devices are allowed to connect", async () => {
+    setOtherDevices(false);
+    const r = await run(["phone", "pairing"], "POST");
+    expect(r.status).toBe(409);
+    expect(r.body.error).toContain("Let other devices connect");
+  });
+
   it("only makes codes while the server is listening beyond this computer", async () => {
     setListenAddress({ address: "127.0.0.1", family: "IPv4", port: 5173 });
     const r = await run(["phone", "pairing"], "POST");
     expect(r.status).toBe(409);
-    expect(r.body.error).toContain("npm run prod:lan");
+  });
+
+  it("turns other devices on and off from this computer, and says so", async () => {
+    setOtherDevices(false);
+    expect((await run(["phone"], "GET")).body.otherDevices).toBe(false);
+    const on = await run(["phone", "other-devices"], "PUT", { body: { on: true } });
+    expect(on.status).toBe(200);
+    expect(otherDevicesAllowed()).toBe(true);
+    expect((await run(["phone"], "GET")).body).toMatchObject({ otherDevices: true, reachable: true });
+    await run(["phone", "other-devices"], "PUT", { body: { on: false } });
+    expect(otherDevicesAllowed()).toBe(false);
+    expect((await run(["phone"], "GET")).body.reachable).toBe(false);
+  });
+
+  it("refuses a bad value, and any change from another device", async () => {
+    expect((await run(["phone", "other-devices"], "PUT", { body: { on: "yes" } })).status).toBe(400);
+    expect((await run(["phone", "other-devices"], "PUT", { from: LAN, body: { on: false } })).status).toBe(403);
+    expect(otherDevicesAllowed()).toBe(true);
   });
 });
 

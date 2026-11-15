@@ -29,14 +29,19 @@ through it step by step, so you review instead of doing it yourself.
 
 ```sh
 npm install
-npm run prod    # builds the app and serves it: http://localhost:5173
+npm run prod    # builds the app and serves it: https://localhost:5173
 ```
 
-For the phone, `npm run prod:lan` does the same on every network interface.
-Changing the code? `npm run dev` runs Vite on http://localhost:5174 (`dev:lan`
-for the network). There are two because Vite restarts the API whenever a server
-file changes, which cuts off replies that are streaming; the built app on 5173
-isn't touched by edits to the source.
+The same server also answers plain http on 5172, on this computer only. Use
+https (5173) when you want the microphone, which a browser gives only to secure
+pages, and a phone needs it too (turn on "Let other devices connect" in Settings
+→ Phone; 5172 always stays on this computer). Plain http has no
+certificate warning to click through, which is what lets the model open the page
+itself with `inspect_page`. `HTTPS_PORT` and `HTTP_PORT` change the ports.
+Changing the code? `npm run dev` runs Vite as the same pair: http://localhost:5174
+(this computer only) and https://localhost:5175. There are two apps because Vite
+restarts the API whenever a server file changes, which cuts off replies that are
+streaming; the built app on 5172 and 5173 isn't touched by edits to the source.
 
 Then open Settings (the gear icon) → Connectors and add your server.
 

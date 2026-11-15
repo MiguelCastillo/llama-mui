@@ -649,13 +649,16 @@ export interface PairedDevice {
   lastSeen: number;
 }
 export interface PhoneInfo {
-  // Whether the server listens beyond this computer (npm run dev:lan).
+  // Whether other devices may connect (Settings → Phone), as saved.
+  otherDevices: boolean;
+  // Whether they can reach the server now: allowed, and it listens beyond this computer.
   reachable: boolean;
   port: number;
   addresses: { name: string; address: string }[];
   devices: PairedDevice[];
 }
 export const getPhone = () => call<PhoneInfo>("GET", "/api/phone");
+export const setOtherDevices = (on: boolean) => call<{ otherDevices: boolean }>("PUT", "/api/phone/other-devices", { on });
 export const createPairing = () => call<{ token: string; expiresAt: number }>("POST", "/api/phone/pairing");
 export const removeDevice = (id: string) => call<{ id: string }>("DELETE", `/api/phone/devices/${id}`);
 // Token totals (server/usageRoutes.ts). dailyTokenLimit 0 means no limit.

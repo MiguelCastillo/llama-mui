@@ -14,6 +14,8 @@
 // good once, for a few minutes. Plain http on a shared network can be sniffed;
 // docs/guide.md says what that means.
 
+import { LOOPBACK, otherDevicesAllowed, setOtherDevices } from "./lan.ts";
+import { load, save } from "./store.ts";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -70,8 +72,6 @@ function exclusive<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // ---- who is asking ----------------------------------------------------
-
-const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 export function isLocal(req: IncomingMessage): boolean {
   if (req.headers["x-forwarded-for"] || req.headers["forwarded"] || req.headers["x-real-ip"]) return false;
@@ -156,10 +156,10 @@ export const _resetPairing = () => {
 let listening: AddressInfo | string | null = null;
 export const setListenAddress = (a: AddressInfo | string | null) => void (listening = a);
 
-// Whether other devices can reach the server at all: it is listening on every
-// interface (npm run prod:lan), not just this computer's loopback.
+// Whether other devices can reach the server at all: they are allowed (Settings
+// → Phone, see lan.ts) and it is listening beyond this computer's loopback.
 export function reachable(): boolean {
-  if (!listening || typeof listening === "string") return false;
+  if (!otherDevicesAllowed() || !listening || typeof listening === "string") return false;
   return !LOOPBACK.has(listening.address) && listening.address !== "localhost";
 }
 
@@ -189,7 +189,8 @@ const summary = ({ id, name, pairedAt, lastSeen }: Device) => ({ id, name, paire
 
 // Handles /api/phone (this computer only) and POST /api/pair (anyone, with a
 // good code); returns false for anything else.
-//   GET    /phone               → { reachable, port, addresses: [{ name, address }], devices }
+//   GET    /phone               → { otherDevices, reachable, port, addresses: [{ name, address }], devices }
+//   PUT    /phone/other-devices { on } → { otherDevices }; saved, takes effect at once
 //   POST   /phone/pairing       → { token, expiresAt }; 409 unless reachable
 //   DELETE /phone/devices/<id>  → { id }; that device is signed out
 //   POST   /pair { token }      → sets the device cookie; { ok: true, name }
@@ -221,12 +222,22 @@ export async function phoneRoutes({ req, res, parts, method }: Route, now = Date
 
   if (parts.length === 1 && method === "GET") {
     const port = typeof listening === "object" && listening ? listening.port : 0;
-    sendJson(res, 200, { reachable: reachable(), port, addresses: addresses(), devices: (await readDevices()).map(summary) });
+    sendJson(res, 200, { otherDevices: otherDevicesAllowed(), reachable: reachable(), port, addresses: addresses(), devices: (await readDevices()).map(summary) });
+    return true;
+  }
+  if (parts.length === 2 && parts[1] === "other-devices" && method === "PUT") {
+    const body = await readJson(req);
+    if (typeof body.on !== "boolean") throw new HttpError(400, "on must be true or false");
+    const store = await load();
+    store.otherDevices = body.on;
+    await save(store);
+    setOtherDevices(body.on);
+    sendJson(res, 200, { otherDevices: body.on });
     return true;
   }
   if (parts.length === 2 && parts[1] === "pairing" && method === "POST") {
     if (!reachable()) {
-      throw new HttpError(409, "llama-mui is only listening on this computer. Stop it and start it with `npm run prod:lan`, then try again.");
+      throw new HttpError(409, "Other devices can't connect yet. Turn on \"Let other devices connect\" in Settings → Phone, then try again.");
     }
     sendJson(res, 200, newCode(now));
     return true;

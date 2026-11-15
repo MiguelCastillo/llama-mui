@@ -1,4 +1,4 @@
-import { request as httpRequest, type Server } from "node:http";
+import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +17,7 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 const { createApp, resolveInside } = await import("../main.ts");
+type AppServer = import("../main.ts").AppServer;
 
 // A built client in a temp folder, with a file outside it that must never be served.
 const root = realpathSync(mkdtempSync(path.join(tmpdir(), "llama-mui-dist-")));
@@ -41,13 +42,13 @@ function get(port: number, rawPath: string, opts: { method?: string; headers?: R
   });
 }
 
-async function listen(server: Server): Promise<number> {
+async function listen(server: AppServer): Promise<number> {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   return (server.address() as AddressInfo).port;
 }
 
 describe("static files", () => {
-  let server: Server;
+  let server: AppServer;
   let port: number;
   beforeAll(async () => {
     server = createApp(dist);
@@ -123,7 +124,7 @@ describe("a missing build", () => {
 });
 
 describe("/api", () => {
-  let server: Server;
+  let server: AppServer;
   let port: number;
   beforeAll(async () => {
     server = createApp(dist);

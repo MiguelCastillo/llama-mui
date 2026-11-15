@@ -16,6 +16,7 @@ import { personaRoutes } from "./personaRoutes.ts";
 import { skillRoutes } from "./skillRoutes.ts";
 import { ruleRoutes } from "./rules.ts";
 import { modelSettingRoutes } from "./models.ts";
+import { guardNetwork, loadOtherDevices } from "./lan.ts";
 import { isAllowed, isPairing, phoneRoutes, setListenAddress } from "./phones.ts";
 import { preferenceRoutes } from "./preferences.ts";
 import { usageRoutes } from "./usageRoutes.ts";
@@ -23,6 +24,7 @@ import { selfOrigin } from "./selfOrigin.ts";
 import { sessionRoutes } from "./sessions.ts";
 import { toolRoutes } from "./tools.ts";
 import { modelAdminRoutes } from "./modelAdmin.ts";
+import { log } from "./log.ts";
 import { recoverOnce } from "./restart.ts";
 import { stopAllRuns } from "./runners.ts";
 import { whisperRoutes } from "./whisper.ts";
@@ -59,14 +61,29 @@ function isCrossSite(req: Connect.IncomingMessage): boolean {
   const origin = req.headers.origin;
   if (!origin) return false;
   try {
-    return new URL(origin).host !== req.headers.host;
+    // Over https the dev server speaks HTTP/2, which has no Host header: the
+    // address arrives as :authority instead.
+    const host = req.headers.host ?? (req.headers[":authority"] as string | undefined);
+    return new URL(origin).host !== host;
   } catch {
     return true;
   }
 }
 
 export const handler: Connect.NextHandleFunction = (req, res) => {
-  if (isCrossSite(req)) return sendJson(res, 403, { error: "Cross-site requests aren't allowed" });
+  if (isCrossSite(req)) {
+    // Recorded so a refused request can be traced to what sent it. Only
+    // address headers are kept, nothing from the body or cookies.
+    log("api.cross-site-refused", {
+      method: req.method,
+      url: req.url,
+      host: req.headers.host ?? req.headers[":authority"],
+      origin: req.headers.origin,
+      secFetchSite: req.headers["sec-fetch-site"],
+      referer: req.headers.referer,
+    });
+    return sendJson(res, 403, { error: "Cross-site requests aren't allowed" });
+  }
   // Mounted at /api, so req.url is relative to it.
   const url = new URL(req.url ?? "/", "http://x");
   const r: Route = {
@@ -97,16 +114,21 @@ export const handler: Connect.NextHandleFunction = (req, res) => {
 // once the server is listening it tells the client code where that is.
 //
 // A server on https has a self-signed certificate (the browser needs https for
-// the microphone), which Node's fetch would refuse. So it also gets a plain
-// http listener on this computer's loopback only, on a port of its own, serving
-// the same app (`app`), and the server's own calls go there. Loopback with no
-// proxy header is what isAllowed lets in, so nothing else changes for them.
-export function whenServing(httpServer: Server | null, app?: RequestListener) {
+// the microphone), which Node's fetch would refuse and inspect_page can't click
+// through. So it also gets a plain http listener on this computer's loopback
+// only, serving the same app (`app`), on `httpPort` (0: any free port), and the
+// server's own calls go there too. Loopback with no proxy header is what
+// isAllowed lets in, so nothing else changes for them. A websocket upgrade
+// (Vite's hot reload) is handed to the https server, which is the one that
+// handles them. If `httpPort` is taken, the listener uses a free port instead
+// and the log and console say so.
+export function whenServing(httpServer: Server | null, app?: RequestListener, httpPort = 0) {
   // A run that was going when the last server stopped is marked as interrupted
   // (see restart.ts); this server's own runs end if it is closed meanwhile.
   void recoverOnce();
   httpServer?.once("close", () => void stopAllRuns());
   if (!httpServer) return;
+  guardNetwork(httpServer);
   const secure = "setSecureContext" in httpServer;
   const set = () => {
     const address = httpServer.address();
@@ -119,10 +141,19 @@ export function whenServing(httpServer: Server | null, app?: RequestListener) {
     if (!app) return;
     const loopback = createHttpServer(app);
     loopback.requestTimeout = 0;
-    loopback.listen(0, "127.0.0.1", () => {
-      const origin = selfOrigin(loopback.address());
+    loopback.on("upgrade", (req, socket, head) => httpServer.emit("upgrade", req, socket, head));
+    const started = () => {
+      const address = loopback.address();
+      const origin = selfOrigin(address);
       if (origin) setApiOrigin(origin);
+      if (httpPort && address && typeof address === "object") console.log(`llama-mui listening on http://127.0.0.1:${address.port} (this computer only)`);
+    };
+    loopback.once("error", (e: NodeJS.ErrnoException) => {
+      log("server.http-error", { code: e.code, error: e.message, port: httpPort });
+      console.error(`llama-mui: http on 127.0.0.1:${httpPort} didn't start (${e.code === "EADDRINUSE" ? "port in use; set HTTP_PORT" : e.message}); using another port`);
+      loopback.listen(0, "127.0.0.1", started);
     });
+    loopback.listen(httpPort, "127.0.0.1", started);
     httpServer.once("close", () => {
       setApiOrigin(null);
       loopback.close();
@@ -150,13 +181,15 @@ export function api(): Plugin {
     name: "llama-mui-api",
     configureServer(server) {
       server.middlewares.use("/api", handler);
-      whenServing(server.httpServer as Server | null, server.middlewares as unknown as RequestListener);
+      whenServing(server.httpServer as Server | null, server.middlewares as unknown as RequestListener, Number(process.env.HTTP_PORT ?? 5174));
       prepareLoginEnv();
+      void loadOtherDevices();
     },
     configurePreviewServer(server) {
       server.middlewares.use("/api", handler);
       whenServing(server.httpServer as Server | null, server.middlewares as unknown as RequestListener);
       prepareLoginEnv();
+      void loadOtherDevices();
     },
   };
 }

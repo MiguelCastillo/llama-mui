@@ -43,6 +43,8 @@ type Send = (type: string, data: unknown) => void;
 // Opens the stream and returns what writes to it. `onClose` runs once when the
 // page goes away (at once if it already has).
 function startStream(res: ServerResponse, heartbeatMs: number, onClose: () => void): Send {
+  // HTTP/2 forbids a Connection header (Node warns and drops it).
+  const http2 = res.req?.httpVersion === "2.0";
   if (res.destroyed) {
     onClose();
     return () => {};
@@ -53,7 +55,7 @@ function startStream(res: ServerResponse, heartbeatMs: number, onClose: () => vo
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
+    ...(http2 ? {} : { Connection: "keep-alive" }),
     "X-Accel-Buffering": "no",
   });
   const timer = setInterval(() => write(": heartbeat\n\n"), heartbeatMs);

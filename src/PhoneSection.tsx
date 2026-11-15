@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, Box, Button, CircularProgress, IconButton, MenuItem, Paper, Stack, TextField, Tooltip, Typography } from "@mui/material";
+import { Alert, Box, Button, CircularProgress, FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, TextField, Tooltip, Typography } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import SmartphoneOutlinedIcon from "@mui/icons-material/SmartphoneOutlined";
-import { type PhoneInfo, createPairing, getPhone, removeDevice } from "./api";
+import { type PhoneInfo, createPairing, getPhone, removeDevice, setOtherDevices } from "./api";
 import QrCode from "./QrCode";
 
 const when = (t: number) => new Date(t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
@@ -69,6 +69,14 @@ export default function PhoneSection() {
       .then(refresh)
       .catch((e) => setError(e.message));
 
+  const allow = (on: boolean) => {
+    setError(null);
+    if (!on) setCode(null);
+    setOtherDevices(on)
+      .then(refresh)
+      .catch((e) => setError(e.message));
+  };
+
   const left = code ? code.expiresAt - now : 0;
   const url = code && info ? `${location.protocol}//${address}:${info.port}/#/pair/${code.token}` : "";
 
@@ -95,12 +103,19 @@ export default function PhoneSection() {
 
       {!info ? (
         <CircularProgress sx={{ alignSelf: "center" }} />
-      ) : !info.reachable ? (
+      ) : (
+        <FormControlLabel
+          control={<Switch checked={info.otherDevices} onChange={(e) => allow(e.target.checked)} />}
+          label="Let other devices connect"
+        />
+      )}
+
+      {info && !info.reachable ? (
         <Alert severity="info">
-          llama-mui is only listening on this computer, so a phone can't reach it. Stop it and start it with{" "}
-          <code>npm run prod:lan</code>, then come back here.
+          Only this computer can reach llama-mui. Turn on "Let other devices connect" so a phone can pair. Turning it off
+          again closes the connections from other devices; paired phones stay paired and can connect again once it is on.
         </Alert>
-      ) : info.addresses.length === 0 ? (
+      ) : !info ? null : info.addresses.length === 0 ? (
         <Alert severity="warning">This computer has no network address to reach it by. Connect it to a network first.</Alert>
       ) : (
         <Stack spacing={2} sx={{ alignItems: "flex-start" }}>

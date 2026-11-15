@@ -21,6 +21,9 @@ works, and this file says how to change it.
     including the `sessions/<id>/worktrees` exception;
   - the block on `settings.json`, `.keys` and the key file (`isSettingsFile`);
   - the home-folder rule in `create_worktree`, and the approval `remove_worktree` asks for;
+  - the connection check in `server/lan.ts`: the servers listen on every interface and
+    close a connection from any device but this computer unless Settings → Phone allows
+    it, because binding only to the loopback would mean rebinding a server that runs hold open;
   - the host check in `inspect_page` (`server/inspect.ts`): localhost opens freely, any other host asks first,
     because a page runs code in Chrome and a sandbox or network rule should be what limits that.
 
@@ -80,7 +83,9 @@ a minute is a stuck process: tell Miguel, and don't delete it yourself.
 ## Other devices
 
 The server has no login, and its tools run commands, so a device that isn't this
-computer must be paired first (`server/phones.ts`). The one gate is in
+computer must be paired first (`server/phones.ts`). The first gate is
+`server/lan.ts`, which closes connections from other devices while they aren't allowed
+(Settings → Phone). The second is in
 `server/plugin.ts`: every request under `/api` is let in only from this
 computer (loopback, no proxy header) or with a paired device's cookie, and only
 `POST /api/pair` is open. A new route is behind it automatically; keep routes
@@ -88,6 +93,47 @@ under `/api`, and don't add one that skips `isAllowed`. Page code must run over
 plain `http` at a network address (a phone's case), so don't use features that
 need a secure context without a fallback: `crypto.randomUUID` (use `newId` in
 `src/uuid.ts`) and `navigator.clipboard` (use `copyText` in `src/clipboard.ts`).
+
+## Servers, ports and protocols
+
+There are two ways to run the app, and each listens twice: https on every
+interface, and plain http on this computer only.
+
+| Run with | Server | https (all interfaces) | plain http (this computer only) |
+|---|---|---|---|
+| `npm run dev` | Vite (`vite.config.ts`, `/api` comes from `server/plugin.ts`) | 5175 (`HTTPS_PORT`) | 5174 (`HTTP_PORT`) |
+| `npm run prod` | Node (`server/main.ts`, serves `dist`) | 5173 (`HTTPS_PORT`) | 5172 (`HTTP_PORT`) |
+
+- **https is HTTP/2, with HTTP/1.1 as the fallback.** Vite's https server speaks
+  HTTP/2 on its own. `server/main.ts` uses `node:http2` `createSecureServer`
+  with `allowHTTP1: true`, so a client that can't do HTTP/2 (older browsers, a
+  `curl --http1.1`) still gets served. The plain http servers are HTTP/1.1 only.
+- **Why both https and http.** Only https gives a page a secure context (the
+  microphone needs one, and so do phones at a network address). Plain http on
+  the loopback exists so `inspect_page` opens the app without a certificate
+  warning. The certificate is self-signed and made at startup (`server/cert.ts`).
+- **Don't assume HTTP/1.1 in server code.** An HTTP/2 request has no `Host`
+  header: the address arrives as `:authority`. The cross-site check in
+  `server/plugin.ts` (`isCrossSite`) reads `host`, then `:authority`; without
+  that fallback it refused the app's own requests over Vite's https with
+  "Cross-site requests aren't allowed". HTTP/2 also forbids a `Connection`
+  header, so the event stream in `server/events.ts` leaves it out when
+  `req.httpVersion` is `2.0`.
+- **Per-connection code has to cover HTTP/2 sessions.** `guardNetwork` in
+  `server/lan.ts` also watches the server's `session` event and closes the
+  session, since an HTTP/2 connection's socket can be read but not closed
+  directly. The timeouts in `limits()` and the shutdown in `trackConnections`
+  (`server/main.ts`) exist for the same reason: an HTTP/2 server has neither
+  `closeAllConnections` nor its own timeout settings.
+- **Ports are strict in dev.** Vite uses `strictPort`, so a busy 5175 is an
+  error, not a quiet move to another port. A stuck old Vite on 5175 can accept
+  connections and never answer; find it with `lsof -nP -iTCP:5175 -sTCP:LISTEN`.
+- **A refused cross-site request is logged** as `api.cross-site-refused` in the
+  server log (method, path, host, origin, `Sec-Fetch-Site`, referer; nothing
+  else), so a false refusal can be traced.
+- **Check both protocols after a server change:**
+  `curl -sk --http2 https://localhost:<port>/` and `--http1.1`, and plain
+  `curl http://127.0.0.1:<port>/`, each should answer 200.
 
 ## Styling
 

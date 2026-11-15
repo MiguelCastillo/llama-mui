@@ -20,11 +20,16 @@ moved into `.keys` and checked on the first start. This doesn't stop a program
 running as you that can read both places.
 
 The `/api` is served by `server/plugin.ts`, a Vite plugin that runs under
-`npm run dev` (Vite, port 5174), and by `server/main.ts`, a plain Node server
-that serves the built `dist/` and mounts the same handler. `npm run prod` and
-`npm run prod:lan` build the client and start it on port 5173; an edit to the
+`npm run dev` (Vite: https on port 5175 and the same app as plain http on 5174,
+this computer only; `HTTPS_PORT` and `HTTP_PORT` change them), and by `server/main.ts`, a plain Node server
+that serves the built `dist/` and mounts the same handler. `npm run prod`
+builds the client and starts it over https on port 5173;
+the same server also answers plain http on 5172 (`HTTP_PORT`), on this computer
+only. Only https gives a page
+the microphone; only plain http opens in `inspect_page` without a certificate
+warning. An edit to the
 source never restarts it, which is why day-to-day use is there and dev is on
-its own port. Set `PORT` or `HOST` to change where it listens. Ctrl+C stops
+its own port. Set `HTTPS_PORT` or `HTTP_PORT` to change the ports. Ctrl+C stops
 accepting requests, gives open ones 5 seconds, then exits (a second Ctrl+C
 exits at once). Both servers use the same `~/.llama-mui`, but a run lives in the
 memory of the process that started it, so don't open and run the same chat in
@@ -35,10 +40,13 @@ interrupted. The handler refuses requests from other websites
 can send requests to localhost, and without that check one could run the
 model's tools, commands included, on its own.
 
-**Using it from your phone.** By default the server only listens on this
-computer. Start it with `npm run prod:lan` (it serves the built app on every interface; `npm run dev:lan` does the same for Vite) and it
-listens on your network too. Nothing else on the network is let in until it is
-paired: in **Settings → Phone**, **Show QR code** makes a code for one phone,
+**Using it from your phone.** By default only this computer can connect. The
+servers do listen on every network interface, but a connection from any other
+device is closed the moment it arrives (`server/lan.ts`) until you turn on
+**Let other devices connect** in **Settings → Phone**; the choice is saved, and
+turning it off closes the connections from other devices that are open (replies
+and runs that are going aren't touched). Nothing on the network is let in until
+it is paired: in **Settings → Phone**, **Show QR code** makes a code for one phone,
 good once, for five minutes. Scan it with the phone's camera; the phone opens
 llama-mui and is signed in with a cookie that lasts a year. Requests from this
 computer itself need nothing, as before; any other device's `/api` request is
@@ -49,9 +57,10 @@ each device's cookie is saved, in `~/.llama-mui/devices.json`; the code itself
 is kept in memory and goes after the `#` of the address, so it isn't sent to
 the server in a request line or logged. Things to know:
 
-- **It's plain `http`.** Someone on the same network could see the cookie, so
-  use it on a network you trust (your home one), not a shared Wi-Fi. For
-  anywhere else, put it behind HTTPS (Tailscale's `serve`, say): requests that
+- **Use https (port 5173, or 5175 in dev).** The certificate is self-signed, so
+  the phone's browser warns once. Over plain `http` someone on the same network
+  could see the cookie, so use a network you trust (your home one), not a shared
+  Wi-Fi. For anywhere else, put it behind HTTPS (Tailscale's `serve`, say): requests that
   arrive through a proxy on this computer say who they were forwarded for and
   are treated as another device, not as this computer, so they need pairing
   too.

@@ -75,6 +75,9 @@ export interface Store {
   // The most tokens (input + output) to use in a day before the app warns.
   // 0 means no limit. It only warns; nothing is blocked (see server/usageRoutes.ts).
   dailyTokenLimit: number;
+  // Whether devices other than this computer may connect (Settings → Phone;
+  // see server/lan.ts). Off until the user turns it on.
+  otherDevices: boolean;
 }
 
 // Exported so the file tools can refuse to read it: it holds API keys.
@@ -105,6 +108,7 @@ const empty = (): Store => ({
   checkCommands: {},
   defaultPersona: "Builder",
   dailyTokenLimit: 0,
+  otherDevices: false,
 });
 
 // Ids of connectors whose saved key wouldn't open when a store was loaded, by
