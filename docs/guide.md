@@ -2255,3 +2255,189 @@ Nothing secret goes in a line: no API key, header, prompt or reply, and a path i
 logged without its query. `jq` reads it well:
 
     jq -c 'select(.event=="upstream.end" and .outcome!="done")' ~/.llama-mui/logs/server-*.log
+
+## The audit log
+
+Apart from the server's log, llama-mui keeps an audit log of what the model and
+the pages did that matters afterwards: which tools ran, what asked for approval,
+who or what approved it, which requests were refused. It is for answering "what
+happened to my files and commands, and who allowed it".
+
+It is in `~/.llama-mui/audit/audit-<day>.log` (day in UTC, folder private to you,
+files readable only by you), one JSON object per line with `t` (time), `pid` and
+`event`. Each file is deleted once it is more than 90 days old (`KEEP_DAYS` in
+`server/audit.ts`). The check runs when the server starts and once every 24 hours,
+and each deletion is itself a line (`audit.pruned`) naming the files removed.
+A failure to write a line never stops a reply or a request.
+
+### What each event means
+
+- `tool.call`: a tool ran, or was asked to. Written by the framework around every
+  tool, so a new tool or plugin is covered without adding anything. It has the
+  `session`, `tool`, `persona`, `outcome` (`result`, `error`, `needs-access`,
+  `needs-location`, `needs-approval`, or `refused:unknown|off|persona|bad-args`),
+  `ms`, `args` (argument names and sizes, never their values), `facts` (the plain
+  facts the tool says about itself: a path, a command and its folder, a host, a
+  query) and `noted` (facts found while it ran: an exit code, a timeout, or
+  `approvedBy`).
+- `ask.raised`: a tool needed an answer and the page was asked. `ask.auto`: the
+  session's own setting answered for you (`approvedBy` is `session-setting:changes`
+  or `session-setting:commands`). `ask.dropped`: the ask ended with no answer
+  because the run was stopped. All three say what was asked (the kind, the path,
+  command and folder, or host and address, and the reason text, never the diff),
+  with the `session`, the kind of run, the step and an `askId`.
+- `ask.answered`: someone answered from a page: allow, deny, plan or the paths
+  picked, with `approvedBy: "user"`, the `askId` and who sent it. `ask.refused`: an
+  answer that didn't take (a second answer to the same ask, or the wrong kind of
+  answer), with the reason. `autoapprove.changed`: the session's automatic approval
+  was switched on or off, or "always" was chosen.
+- `command.run`: a saved shell command run by the "check" button, which uses no
+  tool and no approval: command, folder, exit code and time. `process.start` is
+  retired: it is no longer written (old files still hold it), because every
+  program llama-mui starts now leaves an `io.exec` line instead.
+- `io.exec`, `io.fetch`, `io.fs`, `io.fs.batch`: the lowest layer. Every program
+  started, every network request made and every file or folder changed by the
+  server goes through one wrapper in `server/io/` and leaves one of these lines,
+  with a short `why` naming the reason and, when a chat tool call or an api request
+  caused it, the same `session`, `call` or `request` as that call's own line. So a
+  `tool.call` can be followed to what it did:
+  `jq -c 'select(.call=="<id>")' ~/.llama-mui/audit/audit-*.log`. `io.fs.batch`
+  is a once-a-minute count for state saved very often (a session's file, the
+  usage log, the settings), so those saves are counted but don't drown the log.
+- `api.request`: every request that changes something, and every request that was
+  refused or failed (cross-site, unpaired device, stale save and so on): method,
+  route, status, time, the reason, and who sent it (address and the start of the
+  browser's name). Plain reads that worked are left out.
+- `session.seen`: the first time a session shows up in the log since the server
+  started, with its title, folder and parent. `session.deleted`: written just
+  before a session's files are removed, with the same facts and every session
+  removed with it.
+- `audit.pruned`: old files were deleted, naming them.
+
+### The schema
+
+This is the contract for a line. It was written from what the code writes, so
+when an event or field is added, add it here in the same change.
+
+Every line has three fields that `audit()` sets itself: `t` (ISO time, UTC),
+`pid` (the server process) and `event`. `t`, `pid` and `event` are reserved: a
+caller's own fields come after them, so a field with one of those names would
+overwrite it. Everything else is the event's own fields, listed below. `?` marks
+a field that is only there sometimes.
+
+Fields that mean the same thing in every event:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `session` | string | The session's id. May carry a suffix after `:` for a thread's own run. |
+| `who` | `{ address, agent }` | Who sent the request: remote address, and the first 80 characters of the browser's name. `address` can be empty (see below). |
+| `ms` | number | How long it took, in milliseconds. |
+| `call` | string | Short id of one tool call. On its `tool.call` line and on every `io.*` line the call caused. Only there when a tool call caused the line. |
+| `request` | string | Short id of one api request. On its `api.request` line and on every `io.*` line it caused. Only there when a request caused the line. |
+| `why` | string | On every `io.*` line: a short constant naming the reason (`page.fetch`, `git.status`, `rules.save`). Written by the code, never from user input. |
+| `askId` | string | Ties `ask.raised`, `ask.answered`, `ask.refused` and `ask.dropped` of one question together. |
+| `approved` | boolean | Whether the action was allowed, on every line that records a decision. |
+| `approvedBy` | string | `user`, `session-setting:changes`, `session-setting:commands`, `worktree` or `approval` (see "Who approved it"). |
+| `run`, `step` | string, string or null | The kind of run (`turn` or `plan`) and the plan step in flight. |
+
+The "what was asked" fields come from one place (`askFacts` in
+`server/runners.ts`) and are the same in every `ask.*` line and in `ask.answered`:
+`ask` (`approval`, `access` or `location`), then for an approval `approval` (the
+type: `change`, `command`, `worktree`, `page`...), `reason?`, and by type: a
+change has `path` and `action`; a command has `command`, `cwd` and `readOnly?`;
+a worktree has `action`, `repo`, `branch` and `path`; a page has `url` and
+`host`. An access question has `path` and `pathKind`; a location question has
+`description`, `pathKind` and `canSetWorkingDir`. Never a diff.
+
+| Event | Fields besides the shared ones |
+|---|---|
+| `tool.call` | `session`, `call?` (a short id for this call; the same id is on the `io.*` lines the call causes), `tool`, `group`, `persona`, `outcome`, `ms`, `args` (name to `string:<size>`, `array:<size>` or a type; or `raw:<size>` if the arguments weren't JSON), `facts?` (what the tool's `audit` describer returned), `approval` (`{ type, target }` of the approval the call carried, or null), `needs?` (`{ type, target }` of what it asked for), `noted` (what the tool noted while running) |
+| `ask.raised` | `session`, `run`, `step`, `askId`, what was asked |
+| `ask.auto` | the same, plus `approved: true`, `approvedBy: "session-setting:<setting>"` |
+| `ask.dropped` | the same, plus `approved: false`, `stopRequested` |
+| `ask.answered` | `session`, `askId`, `who`, what was asked (empty if the ask was already gone), `decision` (`allow`, `deny`, `plan` or `paths`), `approved`, `always?` (the kind chosen), `paths?` (the paths picked), `approvedBy: "user"` |
+| `ask.refused` | `session`, `askId`, `who`, `reason`, `attempted` |
+| `autoapprove.changed` | `session`, `kind`, `on`, `via` (`always` or `autoapprove`), `who` |
+| `command.run` | `via`, `command`, `folder`, `exit` (number or null), `ms`, `who` |
+| `process.start` | **Retired, no longer written.** Was `program`, `via`. Never reused. Replaced by `io.exec`. |
+| `io.exec` | `why`, `session?`, `call?`, `request?`, `program`, `argv` (each argument clipped), `exit` (number or null), `signal` (string or null), `ms`, `timedOut`, `error?` (an error code such as `ENOENT` if it didn't start). Never the environment, stdout or stderr. |
+| `io.fetch` | `why`, `session?`, `call?`, `request?`, `method`, `host`, `path` (no query string), `status?` (missing if the request failed), `ms`, `error?` (an error name). Never headers, a body or a query string. |
+| `io.fs` | `why`, `session?`, `call?`, `request?`, `op` (`write`, `append`, `rename`, `remove` or `mkdir`), `path`, `to?` (the new path, for a rename), `bytes?` (for a write or append), `error?` (an error code if it failed). Never the content. |
+| `io.fs.batch` | `why`, `path`, `count` (writes in the minute), `bytes` (their total size). One line per path per minute and one when the server exits. No `session`, `call` or `request`, because the writes in it may come from several. A failed batched write is not counted here: it leaves an `io.fs` line with its `error`. |
+| `api.request` | `request?` (a short id for this request; the same id is on the `io.*` lines it causes), `method`, `route`, `session?`, `status`, `ms`, `reason?`, `aborted?`, `who` |
+| `session.seen` | `session`, `title`, `workingDir`, `parent` (each can be null) |
+| `session.deleted` | the same as `session.seen`, plus `family?` (every id removed with it) |
+| `audit.pruned` | `files`, `keepDays` |
+
+Rules for anything added later. A change that breaks one of them should not pass
+review:
+
+1. A tool is logged by the framework, so it needs nothing for `tool.call`. If it
+   touches files, commands or the network it adds an `audit` describer and puts
+   facts such as an exit code or `approvedBy` in `noted`. Never a value that could
+   be a secret or content.
+2. A new way to answer a question, or to change something without a tool, needs
+   its own event. Starting a program, making a network request and changing a
+   file or folder are not done directly: use the wrappers in `server/io/`
+   (`exec.ts`, `fetch.ts`, `fs.ts`), which write the line. The guard test
+   `server/__tests__/auditCoverage.test.ts` fails on a raw `node:child_process`
+   import, a global `fetch` or a file-changing import from `node:fs`. Only the
+   files in its allowlist (the audit writer, the log writer and the lock file) are
+   exempt, each with a reason, because auditing them would loop.
+3. Every wrapper call takes a required `why`: a short constant written in the code
+   (`page.fetch`, `git.status`, `rules.save`), the same at every call of one
+   purpose, never built from user input or a path.
+4. A wrapper line says what happened, never what the call carried: no environment,
+   output, header, body, query string or file content. Add a field only if it is a
+   plain fact.
+5. State that is saved many times a minute uses the batched write in
+   `server/io/fs.ts`, which gives one `io.fs.batch` line a minute. Everything else
+   is one line per change.
+6. Anything that records a decision carries `approved` (boolean) and
+   `approvedBy`, and a question's lines share an `askId`.
+7. A line that names a session calls `noteSession(id)` first, so `session.seen`
+   comes before it and the session can be traced after deletion.
+8. Event names are lower case, `noun.verb` or `noun.noun`, and a name is never
+   reused for something else. Fields can be added. A field is never renamed,
+   removed or given a new meaning, because people read the files with `grep` and
+   `jq`. A required field on an old event counts as a rename.
+9. Plain facts only (a name, a size, a path, a status, a time). The "never
+   written" list below applies to every event.
+10. A line is written once, and writing it never throws or waits.
+
+Known gap: `who.address` is empty on some requests that come through the built
+app's front end (seen on page requests; the model's requests show 127.0.0.1).
+Those lines can't say which machine sent them. Not yet traced.
+
+### Who approved it
+
+`approvedBy` says which way a change got the go-ahead:
+
+- `user`: someone pressed Allow on a page (an `ask.answered` line).
+- `session-setting:changes` or `session-setting:commands`: nobody was asked; the
+  session's automatic approval setting allowed it (an `ask.auto` line).
+- `worktree`: an edit inside one of the session's own worktrees, which never asks
+  (in the `noted` part of the `tool.call`).
+- `approval`: the edit or worktree was approved through an ask, so look for the
+  `ask.*` line with the same session just before it.
+
+### What is never written
+
+A diff, a file's contents, a prompt, a reply, a request body, a header (beyond the
+start of the browser's name), a cookie or an API key. Tools give the name and size
+of an argument, not its value.
+
+### Tracing a session that is gone
+
+Lines carry the session's id. `session.seen` and `session.deleted` carry the title
+and folder, so the id can be traced after the session file is deleted:
+
+    grep '"session.deleted"' ~/.llama-mui/audit/audit-*.log
+    grep '<session id>' ~/.llama-mui/audit/audit-*.log
+
+### Reading it
+
+    tail -f ~/.llama-mui/audit/audit-$(date -u +%F).log
+    jq -c 'select(.event=="tool.call" and .tool=="run_command")' ~/.llama-mui/audit/audit-*.log
+    jq -c 'select(.event=="ask.auto")' ~/.llama-mui/audit/audit-*.log
+    jq -c 'select(.event=="api.request" and .status>=400)' ~/.llama-mui/audit/audit-*.log

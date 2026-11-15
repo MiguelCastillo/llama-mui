@@ -169,6 +169,26 @@ interface, and plain http on this computer only.
 - **The layout's shared values live in one place**, in the layout component.
   Change them there; don't copy them elsewhere.
 
+## The audit log
+
+- **Tools are logged by the framework** (`server/tools.ts` wraps every tool), so
+  don't add a log line to a tool. A new tool that touches files, commands or the
+  network should add an `audit` describer (plain facts: a path, a command, a host;
+  never a diff, contents, a prompt or a key).
+- **`server/io/` is the only place for raw exec, fetch and file writes.** To start
+  a program, make a network request or change a file or folder, use the wrappers
+  there (`exec.ts`, `fetch.ts`, `fs.ts`) and give every call a short constant
+  `why`. They write the audit line; never log what the call carried. The guard
+  test `server/__tests__/auditCoverage.test.ts` fails on a raw
+  `node:child_process` import, a global `fetch` or a file-changing `node:fs`
+  import outside `server/io/` and its short reasoned allowlist (the audit and log
+  writers and the lock file). `docs/guide.md`, "The audit log".
+- **To see everything for a chat, search for its id:**
+  `grep <id> ~/.llama-mui/audit/*.log`. Every line caused by a chat carries it
+  (a thread's run id is `<chat>:<n>`, so searching the chat id finds those too).
+  Lines with none are on purpose: startup, the certificate, background timers and
+  anything else not caused by a chat.
+
 ## Before designing a change
 
 - Read the section of `docs/guide.md` for the area first, and search the code
