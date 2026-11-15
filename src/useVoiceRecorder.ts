@@ -4,6 +4,7 @@
 // brief loading state while transcribing.
 
 import { useRef, useState, useCallback, useEffect } from "react";
+import { sessionHeaders } from "./api";
 
 // ── WAV encoding ───────────────────────────────────────────────────────────
 
@@ -242,7 +243,7 @@ export function useVoiceRecorder({
       const wavBlob = floatToWav(samples, 16000);
       const response = await fetch("/api/whisper/stream", {
         method: "POST",
-        headers: { "Content-Type": "audio/wav" },
+        headers: { "Content-Type": "audio/wav", ...sessionHeaders() },
         body: wavBlob,
         signal: controller.signal,
       });

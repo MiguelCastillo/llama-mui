@@ -24,6 +24,12 @@ export interface ToolContext {
   // Aborted when the caller gives up on the call (Stop everything closes its
   // request): a tool that starts something long, like run_command, stops it.
   signal?: AbortSignal;
+  // Plain facts a tool adds about this call for the audit log (an exit code,
+  // who approved it). Read by runTool after the call; never put a diff, file
+  // contents or a secret in it.
+  noted?: Record<string, unknown>;
+  // The persona the call is made under, set by runTool for the audit line.
+  persona?: string;
 }
 
 // The folders and files the tools may reach: the working directory first,
@@ -43,6 +49,33 @@ export interface ToolSpec {
   // OpenAI-style function definition, sent to the model as-is.
   definition: { type: "function"; function: { name: string; description: string; parameters: object } };
   run: (ctx: ToolContext, args: any) => Promise<string>;
+  // Optional: plain facts about a call's arguments for the audit log (a path,
+  // a host, a size). Never the contents of a file or a diff. Every call is
+  // logged without this; it only adds detail.
+  audit?: (args: any) => Record<string, unknown>;
+}
+
+// Adds plain facts to the call's audit line (see ToolContext.noted). Does
+// nothing when the call isn't audited, so a tool can call it freely.
+export function note(ctx: ToolContext, facts: Record<string, unknown>): void {
+  if (ctx.noted) Object.assign(ctx.noted, facts);
+}
+
+const clip = (s: string, n = 300) => (s.length > n ? `${s.slice(0, n)}…` : s);
+
+// A command, a path or a search as an audit fact: clipped, and "" for a
+// value that isn't text.
+export const textFact = (v: unknown, n?: number): string => (typeof v === "string" ? clip(v.trim(), n) : "");
+
+// A URL as an audit fact: the host and the address without its query and
+// fragment, which can carry tokens. Null when it isn't a URL.
+export function urlFacts(v: unknown): { host: string; url: string } | null {
+  try {
+    const u = new URL(String(v ?? "").trim());
+    return { host: u.host, url: clip(`${u.origin}${u.pathname}`) };
+  } catch {
+    return null;
+  }
 }
 
 // Errors the model should see as the tool's result, so it can correct itself.

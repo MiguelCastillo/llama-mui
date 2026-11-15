@@ -7,6 +7,7 @@
 
 import type { Server } from "node:http";
 import { createLogger, type Logger, type Plugin } from "vite";
+import { startAuditPruning } from "./audit.ts";
 import { log, logHint, logProcessEnd, pruneLogs } from "./log.ts";
 import { openRequests } from "./upstreamLog.ts";
 import { startWatching } from "./watch.ts";
@@ -16,6 +17,7 @@ export type Mode = "prod" | "dev" | "preview";
 export function logServing(httpServer: Server | null, mode: Mode): void {
   logProcessEnd();
   pruneLogs();
+  startAuditPruning();
   log("server.start", { mode, node: process.version, cwd: process.cwd() });
   if (httpServer) {
     const announce = () => {

@@ -118,6 +118,8 @@ import {
   runTool,
   saveSession,
   noteRevision,
+  setOpenSession,
+  sessionHeaders,
   ApiError,
   MAX_REPLY_QUOTE,
 } from "./api";
@@ -634,6 +636,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // saved until the open session has loaded, so an empty screen can't
   // overwrite it.
   const [sessionId, setSessionId] = useState(loadSessionId);
+  // The page's API requests name the open chat, so the server's audit log can
+  // say which chat a check of its folder was for. Only a label.
+  useEffect(() => {
+    setOpenSession(sessionId);
+    return () => setOpenSession(undefined);
+  }, [sessionId]);
   // First load: the address takes the open chat's id, replacing the current
   // entry so it isn't an extra step back. A Settings or pairing address stays.
   useEffect(() => {
@@ -1308,7 +1316,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     try {
       images = await Promise.all(
         (item.images ?? []).map(async (ref) => {
-          const res = await fetch(`/api/sessions/${id}/images/${ref.id}`);
+          const res = await fetch(`/api/sessions/${id}/images/${ref.id}`, { headers: sessionHeaders() });
           if (!res.ok) throw new Error(`the server answered ${res.status}`);
           const blob = await res.blob();
           return { blob, preview: URL.createObjectURL(blob), name: "Image" };

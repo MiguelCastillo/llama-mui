@@ -303,10 +303,28 @@ export function setApiOrigin(origin: string | null) {
 
 const originOf = () => apiOrigin ?? location.origin;
 
+// Which chat a request is made for, named in a header so the server's audit
+// log can say whose work it was. It is only a label for the log. The server
+// sets it (setSessionLabel) to read the chat of the run that is making the
+// call. The page names the chat it has open (setOpenSession) when no run is.
+export const SESSION_HEADER = "x-llama-session";
+let sessionLabel: () => string | undefined = () => undefined;
+export function setSessionLabel(fn: () => string | undefined) {
+  sessionLabel = fn;
+}
+let openSession: string | undefined;
+export function setOpenSession(id: string | undefined) {
+  openSession = id || undefined;
+}
+export function sessionHeaders(): Record<string, string> {
+  const id = sessionLabel() ?? openSession;
+  return id ? { [SESSION_HEADER]: id } : {};
+}
+
 async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(apiOrigin ? apiOrigin + path : path, {
     method,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    headers: { ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...sessionHeaders() },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
   });
@@ -1212,6 +1230,7 @@ async function streamMessages(
   const client = new Anthropic({
     baseURL: `${originOf()}/api/c/${connectorId}`,
     apiKey: "set-by-the-server",
+    defaultHeaders: sessionHeaders(),
     dangerouslyAllowBrowser: true,
     // The SDK retries only failed requests (Anthropic's 429s and 529s), never
     // a stream under way. llama.cpp has nothing worth retrying.
@@ -1378,6 +1397,7 @@ async function streamCompletions(
   const client = new OpenAI({
     baseURL: `${originOf()}/api/c/${connectorId}/v1`,
     apiKey: "set-by-the-server",
+    defaultHeaders: sessionHeaders(),
     dangerouslyAllowBrowser: true,
     maxRetries: 0,
   });

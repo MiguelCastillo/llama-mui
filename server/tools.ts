@@ -2,6 +2,8 @@
 // Tools. Tools are on unless the user turned them off.
 
 import os from "node:os";
+import { audit, noteSession, whoOf } from "./audit.ts";
+import { currentCause, newId, runWithCause } from "./auditContext.ts";
 import { DISK_TOOLS, checkAttachments, checkWorkingDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import { RULE_TOOLS, governingRules, readRules, ruleTools, workingRules } from "./rules.ts";
@@ -163,7 +165,11 @@ const GROUPS: Group[] = [
   },
 ];
 
-const TOOLS: ToolSpec[] = [
+const wrapped = new WeakSet<ToolSpec>();
+// True for a spec that withAudit has wrapped (the coverage test checks it).
+export const isAudited = (t: ToolSpec): boolean => wrapped.has(t);
+
+const TOOLS: ToolSpec[] = withAudit([
   ...RULE_TOOLS,
   ...PLAN_TOOLS,
   ...TODO_TOOLS,
@@ -177,7 +183,10 @@ const TOOLS: ToolSpec[] = [
   ...WEB_TOOLS,
   ...FETCH_TOOLS,
   ...INSPECT_TOOLS,
-];
+]);
+
+// The registry's (wrapped) specs, for tests that check every one is covered.
+export const toolSpecs = (): readonly ToolSpec[] => TOOLS;
 
 // Every tool name the app has, whether or not it is turned off in Settings.
 export const allToolNames = (): string[] => TOOLS.map((t) => t.name);
@@ -339,17 +348,160 @@ export function personaRefusal(name: string, persona: Persona): string | null {
   return `Error: the ${name} tool is not available to the ${persona.name} persona this chat works as. Use one of its tools: ${persona.tools.join(", ")}.`;
 }
 
+// What an argument holds, without its value: a type and a size.
+const shapeOf = (v: unknown): string =>
+  typeof v === "string" ? `string:${v.length}` : Array.isArray(v) ? `array:${v.length}` : v === null ? "null" : typeof v;
+
+// The names and sizes of a call's arguments, never the values.
+function argShape(args: unknown): Record<string, string> | string {
+  if (typeof args === "string") return args; // already "raw:<size>" from safeParse
+  if (!args || typeof args !== "object") return shapeOf(args);
+  return Object.fromEntries(Object.entries(args).map(([k, v]) => [k, shapeOf(v)]));
+}
+
+// An approval as plain facts: its type and what it targets, never its diff.
+function approvalFacts(a: any): { type: string; target: string } | null {
+  if (!a || typeof a !== "object" || typeof a.type !== "string") return null;
+  const target =
+    a.type === "change" ? a.path : a.type === "command" ? a.command : a.type === "worktree" ? a.path : a.type === "page" ? a.url : "";
+  return { type: a.type, target: String(target ?? "") };
+}
+
+function carriedApproval(approved: string | null) {
+  if (!approved) return null;
+  try {
+    return approvalFacts(JSON.parse(approved));
+  } catch {
+    return null;
+  }
+}
+
+// Writes the tool.call line. Used by the wrapper around every spec's run
+// (withAudit) and by runTool's refusals, which never reach a run.
+function logToolCall(o: {
+  name: string;
+  tool: ToolSpec | undefined;
+  ctx: ToolContext;
+  rawArgs: unknown;
+  kind: string;
+  started: number;
+  needs?: { type: string; target: string } | null;
+}) {
+  const { name, tool, ctx, rawArgs } = o;
+  let facts: Record<string, unknown> | undefined;
+  try {
+    const parsed = typeof rawArgs === "string" ? safeParse(rawArgs) : rawArgs;
+    facts = tool?.audit && parsed && typeof parsed === "object" ? tool.audit(parsed) : undefined;
+  } catch {
+    facts = undefined;
+  }
+  noteSession(ctx.chatId);
+  const call = currentCause().call;
+  audit("tool.call", {
+    session: ctx.chatId,
+    ...(call ? { call } : {}),
+    tool: name,
+    group: tool?.group,
+    persona: ctx.persona,
+    outcome: o.kind,
+    ms: Date.now() - o.started,
+    args: argShape(typeof rawArgs === "string" ? safeParse(rawArgs) : rawArgs),
+    facts,
+    approval: carriedApproval(ctx.approved),
+    ...(o.needs ? { needs: o.needs } : {}),
+    noted: ctx.noted,
+  });
+}
+
+// Wraps every spec's run so a call leaves its audit line whoever calls it, not
+// only runTool: a tool added to the list is covered without remembering to log.
+// A call logs once: a result, an error, or a question for the user.
+function withAudit(specs: ToolSpec[]): ToolSpec[] {
+  return specs.map((spec) => {
+    const inner = spec.run;
+    const out: ToolSpec = {
+      ...spec,
+      run: (ctx, args) =>
+        // Everything the tool starts, and the line below, carry this call's cause.
+        runWithCause({ ...(ctx.chatId ? { session: ctx.chatId } : {}), call: newId() }, async () => {
+          const started = Date.now();
+          ctx.noted = ctx.noted ?? {};
+          let kind = "crash";
+          let needs: { type: string; target: string } | null = null;
+          try {
+            const result = await inner(ctx, args);
+            kind = result.startsWith("Error:") ? "error" : "result";
+            return result;
+          } catch (e: any) {
+            if (e instanceof AccessNeeded) {
+              kind = "needs-access";
+              needs = { type: "access", target: e.target.path };
+            } else if (e instanceof LocateNeeded) kind = "needs-location";
+            else if (e instanceof ApprovalNeeded) {
+              kind = "needs-approval";
+              needs = approvalFacts(e.approval);
+            } else if (e instanceof ToolError || e?.code === "EACCES" || e?.code === "EPERM") kind = "error";
+            throw e;
+          } finally {
+            logToolCall({ name: spec.name, tool: out, ctx, rawArgs: args, kind, started, needs });
+          }
+        }),
+    };
+    wrapped.add(out);
+    return out;
+  });
+}
+
+// Every model tool call goes through here. A call that runs is logged by the
+// wrapper around the tool's run; the refusals that stop it before it runs
+// (unknown, off, persona, bad arguments) are logged here.
 async function runTool(name: string, rawArgs: unknown, ctx: ToolContext, persona: Persona | null = null): Promise<Outcome> {
-  const text = (result: string) => ({ result });
+  const started = Date.now();
   const tool = TOOLS.find((t) => t.name === name);
-  if (!tool) return text(`Error: there is no tool named ${name}`);
-  if (!isOffered(ctx, tool)) return text(`Error: the ${name} tool is turned off in Settings`);
+  ctx.noted = ctx.noted ?? {};
+  ctx.persona = persona?.name;
+  return runToolChecked(name, tool, rawArgs, ctx, persona, (kind) =>
+    logToolCall({ name, tool, ctx, rawArgs, kind, started }),
+  );
+}
+
+const safeParse = (s: string): unknown => {
+  try {
+    return s.trim() ? JSON.parse(s) : {};
+  } catch {
+    return `raw:${s.length}`;
+  }
+};
+
+// `mark` is called with the reason when a call is refused before it runs
+// (the refusals are plain text for the model).
+async function runToolChecked(
+  name: string,
+  tool: ToolSpec | undefined,
+  rawArgs: unknown,
+  ctx: ToolContext,
+  persona: Persona | null,
+  mark: (kind: string) => void,
+): Promise<Outcome> {
+  const text = (result: string) => ({ result });
+  if (!tool) {
+    mark("refused:unknown");
+    return text(`Error: there is no tool named ${name}`);
+  }
+  if (!isOffered(ctx, tool)) {
+    mark("refused:off");
+    return text(`Error: the ${name} tool is turned off in Settings`);
+  }
   const refusal = persona && personaRefusal(name, persona);
-  if (refusal) return text(refusal);
+  if (refusal) {
+    mark("refused:persona");
+    return text(refusal);
+  }
   let args: any;
   try {
     args = typeof rawArgs === "string" ? (rawArgs.trim() ? JSON.parse(rawArgs) : {}) : (rawArgs ?? {});
   } catch {
+    mark("refused:bad-args");
     return text("Error: the tool arguments were not valid JSON");
   }
   try {
@@ -495,7 +647,18 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
     const folder = String(body.folder ?? "");
     const command = ctx.workingDir && folder === ctx.workingDir ? ctx.store.checkCommands[folder] : undefined;
     if (!command) throw new HttpError(404, "No check command for that folder");
-    const output = await exec(command, folder);
+    // Recorded because nothing asked: this is the one command that runs unasked.
+    const started = Date.now();
+    const output = await exec(command, folder, undefined, "check.run");
+    const exitCode = /\[exit code (-?\d+)\]$/.exec(output)?.[1];
+    audit("command.run", {
+      via: "check-command",
+      command,
+      folder,
+      exit: exitCode === undefined ? null : Number(exitCode),
+      ms: Date.now() - started,
+      who: whoOf(req),
+    });
     sendJson(res, 200, { command, passed: output.endsWith("[exit code 0]"), output });
     return true;
   }

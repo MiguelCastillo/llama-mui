@@ -82,6 +82,7 @@ import { startAsideFromOptions, startFromOptions, startTurnFromOptions } from ".
 import * as runners from "./runners.ts";
 import { AUTO_KINDS, type AutoKind, withAuto } from "../src/autoApprove.ts";
 import { sessionFolder } from "./sessionFile.ts";
+import { audit, noteSession, whoOf } from "./audit.ts";
 import { validateRefs } from "./images.ts";
 import { randomUUID } from "node:crypto";
 import { type ImageRef, MAX_QUEUE, MAX_REPLY_QUOTE, type ModelOptions, type QueuedMessage } from "../src/api.ts";
@@ -262,6 +263,24 @@ async function sendNext(id: string, chat: Required<CommandDeps>["chat"]): Promis
   }
 }
 
+// Answers the pending ask and records it: 'ask.answered' once it took (the
+// user's decision, approvedBy "user"), 'ask.refused' with the reason when it
+// was refused (a second answer, the wrong kind of answer).
+async function answeredAsk(req: Route["req"], id: string, askId: string, answer: Record<string, unknown>, doIt: () => Promise<void>): Promise<void> {
+  const facts = runners.pendingAskFacts(id, askId);
+  noteSession(id);
+  const base = { session: id, askId, who: whoOf(req) };
+  try {
+    await doIt();
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 409) {
+      audit("ask.refused", { ...base, reason: err.extra?.reason, attempted: answer.decision });
+    }
+    throw err;
+  }
+  audit("ask.answered", { ...base, ...facts, ...answer, approvedBy: "user" });
+}
+
 // Handles POST /api/sessions/<id>/commands/<name>; returns false for anything else.
 export async function commandRoutes({ req, res, parts, method }: Route, given: CommandDeps = defaultDeps): Promise<boolean> {
   const deps = { ...defaultDeps, ...given };
@@ -366,17 +385,28 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
       if (body.allow && body.always !== undefined) {
         const kind = autoKindOf(body.always);
         await hub.edit(id, (s) => void (s.autoApprove = withAuto(s.autoApprove, kind, true)));
+        noteSession(id);
+        audit("autoapprove.changed", { session: id, kind, on: true, via: "always", who: whoOf(req) });
       }
       if (body.plan !== undefined && typeof body.plan !== "boolean") throw new HttpError(400, "plan must be true or false");
       // "Make plan" is a no that asks for a plan; it can't come with a yes.
       if (body.plan === true && body.allow) throw new HttpError(400, "plan can't go with allow: true");
-      await runners.answerAsk(id, askIdOf(body), body.plan === true ? "plan" : body.allow);
+      {
+        const askId = askIdOf(body);
+        const answer = body.plan === true ? "plan" : body.allow;
+        const always = body.allow && body.always !== undefined ? autoKindOf(body.always) : undefined;
+        await answeredAsk(req, id, askId, { decision: answer === "plan" ? "plan" : answer ? "allow" : "deny", approved: answer === true, ...(always ? { always } : {}) }, () =>
+          runners.answerAsk(id, askId, answer),
+        );
+      }
       break;
     case "autoapprove": {
       // Turns an approval-for-the-session on or off, from the chip in the chat.
       const kind = autoKindOf(body.kind);
       if (typeof body.on !== "boolean") throw new HttpError(400, "on must be true or false");
       await hub.edit(id, (s) => void (s.autoApprove = withAuto(s.autoApprove, kind, body.on)));
+      noteSession(id);
+      audit("autoapprove.changed", { session: id, kind, on: body.on, via: "autoapprove", who: whoOf(req) });
       break;
     }
     case "answer": {
@@ -391,11 +421,9 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
         paths.length > 0 &&
         paths.every((p) => typeof p?.path === "string" && p.path && (p.kind === "file" || p.kind === "folder"));
       if (!valid) throw new HttpError(400, "paths must be a list of { path, kind }, with kind file or folder");
-      await runners.answerAsk(
-        id,
-        askIdOf(body),
-        paths.map((p: any) => ({ path: p.path, kind: p.kind, ...(p.asWorkingDir === true && p.kind === "folder" && { asWorkingDir: true }) })),
-      );
+      const picked = paths.map((p: any) => ({ path: p.path, kind: p.kind, ...(p.asWorkingDir === true && p.kind === "folder" && { asWorkingDir: true }) }));
+      const askId = askIdOf(body);
+      await answeredAsk(req, id, askId, { decision: "paths", approved: true, paths: picked }, () => runners.answerAsk(id, askId, picked));
       break;
     }
     default:

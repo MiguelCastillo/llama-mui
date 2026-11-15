@@ -19,6 +19,7 @@
 // Every write goes through one queue per session, so a check of the revision and
 // the write that follows it can't be split by another request.
 
+import { auditSessionDeleted } from "./audit.ts";
 import { HttpError } from "./http.ts";
 import { lockSession, readSession, revisionOf, summaryOf, writeSession } from "./sessionFile.ts";
 import { copyForEvents, diffSession } from "./sessionPatch.ts";
@@ -368,9 +369,10 @@ export function pauseQueue(id: string): Promise<boolean> {
 
 // Deletes a session's file (the sessions route removes the folder after).
 // Refused while a run is live: stop it first.
-export function remove(id: string, deleteFile: () => Promise<void>): Promise<void> {
+export function remove(id: string, deleteFile: () => Promise<void>, family?: string[]): Promise<void> {
   return locked(id, async () => {
     if (runs.has(id)) throw new HttpError(409, "A plan is running in this session. Stop it first.", { reason: "run active" });
+    auditSessionDeleted(id, family); // while the file can still be read
     await deleteFile();
     publish({ type: "removed", id, data: {} });
   });

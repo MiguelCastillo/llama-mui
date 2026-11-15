@@ -53,6 +53,8 @@ import { planRequestFor } from "../src/planThread.ts";
 import { attachedPaths, makeReply, modelLoaded } from "../src/runnerReply.ts";
 import type { Answer, Ask, RunnerEnv, RunnerHandle } from "../src/runnerTypes.ts";
 import { autoApproves } from "../src/autoApprove.ts";
+import { audit, noteSession } from "./audit.ts";
+import { runWithCause } from "./auditContext.ts";
 import { compactInstruction } from "./compactInstruction.ts";
 import { HttpError } from "./http.ts";
 import { forget as forgetReads } from "./reads.ts";
@@ -283,7 +285,12 @@ function patchStep(e: Entry, id: string, patch: Omit<PlanStep, "id" | "text">) {
 // counts as deny. Asks wait for as long as it takes; nothing pops up.
 function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
   // Approved for the rest of the session (see autoApprove.ts): no question.
-  if ("needsApproval" in ask && autoApproves(e.session.autoApprove, ask.needsApproval)) return Promise.resolve(true);
+  if ("needsApproval" in ask && autoApproves(e.session.autoApprove, ask.needsApproval)) {
+    const type = ask.needsApproval.type;
+    const setting = type === "command" ? "commands" : "changes";
+    audit("ask.auto", { ...askContext(e, randomUUID()), ...askFacts(ask), approved: true, approvedBy: `session-setting:${setting}` });
+    return Promise.resolve(true);
+  }
   return new Promise<Answer>((resolve) => {
     if (signal.aborted) return resolve(false);
     const decide = (answer: Answer) => {
@@ -293,11 +300,57 @@ function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
       resolve(answer);
       sync(e);
     };
-    const onAbort = () => decide(false);
+    const onAbort = () => dropAsk(e);
     signal.addEventListener("abort", onAbort);
     e.ask = { id: randomUUID(), ask, decide };
+    audit("ask.raised", { ...askContext(e, e.ask.id), ...askFacts(ask) });
     sync(e);
   });
+}
+
+// Where an ask came from: the session, what kind of run, the step in flight.
+function askContext(e: Entry, askId: string) {
+  noteSession(e.id);
+  return { session: e.id, run: e.kind, step: e.runningStep, askId };
+}
+
+// An ask as plain facts for the audit: what kind of question it is and what it
+// is about (a path, a command and folder, a host and address). Never a diff.
+export function askFacts(ask: Ask): Record<string, unknown> {
+  if ("needsAccess" in ask) return { ask: "access", path: ask.needsAccess.path, pathKind: ask.needsAccess.kind };
+  if ("needsLocation" in ask) {
+    const l = ask.needsLocation;
+    return { ask: "location", description: l.description, pathKind: l.kind, canSetWorkingDir: !!l.canSetWorkingDir };
+  }
+  const a = ask.needsApproval;
+  const base = { ask: "approval", approval: a.type, ...(a.reason ? { reason: a.reason } : {}) };
+  switch (a.type) {
+    case "change":
+      return { ...base, path: a.path, action: a.action };
+    case "command":
+      return { ...base, command: a.command, cwd: a.cwd, ...(a.readOnly !== undefined ? { readOnly: a.readOnly } : {}) };
+    case "worktree":
+      return { ...base, action: a.action, repo: a.repo, branch: a.branch, path: a.path };
+    case "page":
+      return { ...base, url: a.url, host: a.host };
+    default:
+      return base;
+  }
+}
+
+// The plain facts of the pending ask if it is the one named, else {}: what an
+// answer in the audit says it answered (see commands.ts). Never a diff.
+export function pendingAskFacts(id: string, askId: string): Record<string, unknown> {
+  const e = store.get(id);
+  return e?.ask && e.ask.id === askId ? { run: e.kind, step: e.runningStep, ...askFacts(e.ask.ask) } : {};
+}
+
+// The run is ending or being stopped with a question still open: no one
+// answered it. It is recorded as dropped, and counts as a no.
+function dropAsk(e: Entry) {
+  if (!e.ask) return;
+  audit("ask.dropped", { ...askContext(e, e.ask.id), ...askFacts(e.ask.ask), approved: false, stopRequested: e.stopRequested });
+  e.ask.decide(false);
 }
 
 // ── messages to the run ──────────────────────────────────────────────────────
@@ -470,7 +523,9 @@ export function startRunner(
   env: RunnerEnv,
   deps: RunnerDeps = {},
 ): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
-  return launch(id, env, deps, null);
+  // The run's work (saves, usage writes, fetches, timers) all start inside this
+  // cause, so their audit lines carry the chat id.
+  return runWithCause({ session: id }, () => launch(id, env, deps, null));
 }
 
 // One chat reply, run here: the message a page sends to a session with no plan
@@ -487,7 +542,7 @@ export function startTurn(
   turn: { text: string; planning: boolean; images?: { id: string; mediaType: string }[]; replyTo?: string; compact?: boolean },
   deps: RunnerDeps = {},
 ): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
-  return launch(id, env, deps, turn);
+  return runWithCause({ session: id }, () => launch(id, env, deps, turn));
 }
 
 async function launch(
@@ -733,7 +788,7 @@ async function end(e: Entry) {
   e.ended = true;
   e.runningStep = null;
   e.controller = null;
-  e.ask?.decide(false);
+  dropAsk(e);
   clearSaveTimers(e);
   store.delete(e.id);
   try {
@@ -814,7 +869,7 @@ export async function stopRun(id: string, opts: { force?: boolean } = {}) {
     e.stepAtStop = e.runningStep;
     e.controller?.abort();
     e.aside?.controller.abort();
-    e.ask?.decide(false);
+    dropAsk(e);
     sync(e);
   }
   if (opts.force) e.kill.abort();
@@ -868,7 +923,7 @@ export async function resetRunners() {
     clearSaveTimers(e);
     e.controller?.abort();
     e.aside?.controller.abort();
-    e.ask?.decide(false);
+    dropAsk(e);
     await hub.endRun(e.id).catch(() => {});
   }
 }

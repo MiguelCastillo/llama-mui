@@ -7,6 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { HttpError, type Route, readBody, readJson, sendJson } from "./http.ts";
+import { auditedFetch } from "./io/fetch.ts";
 import { type Api, type Connector, type Kind, type Store, load, save } from "./store.ts";
 import { track } from "./upstreamLog.ts";
 
@@ -72,7 +73,7 @@ function authHeaders(apiKey: string, kind: Kind): Record<string, string> {
 
 async function probe(url: string, apiKey: string, kind: Kind) {
   try {
-    const res = await fetch(`${url}/v1/models`, { headers: authHeaders(apiKey, kind), signal: AbortSignal.timeout(5000) });
+    const res = await auditedFetch(`${url}/v1/models`, { headers: authHeaders(apiKey, kind), signal: AbortSignal.timeout(5000) }, { why: "model.probe" });
     if (res.status === 401 || res.status === 403) {
       return { ok: false, error: apiKey ? "The server rejected the API key" : "The server needs an API key" };
     }
@@ -106,17 +107,21 @@ async function proxy(req: IncomingMessage, res: ServerResponse, id: string, rest
   const tracked = track(req, res, c.name, rest);
   let upstream: Response;
   try {
-    upstream = await fetch(`${c.url}${rest}`, {
-      method: req.method,
-      headers: {
-        ...authHeaders(c.apiKey, kindOf(c)),
-        ...(req.headers["content-type"] ? { "Content-Type": req.headers["content-type"] } : {}),
-        ...(typeof req.headers["anthropic-version"] === "string" && { "anthropic-version": req.headers["anthropic-version"] }),
-        ...(typeof req.headers["anthropic-beta"] === "string" && { "anthropic-beta": req.headers["anthropic-beta"] }),
+    upstream = await auditedFetch(
+      `${c.url}${rest}`,
+      {
+        method: req.method,
+        headers: {
+          ...authHeaders(c.apiKey, kindOf(c)),
+          ...(req.headers["content-type"] ? { "Content-Type": req.headers["content-type"] } : {}),
+          ...(typeof req.headers["anthropic-version"] === "string" && { "anthropic-version": req.headers["anthropic-version"] }),
+          ...(typeof req.headers["anthropic-beta"] === "string" && { "anthropic-beta": req.headers["anthropic-beta"] }),
+        },
+        body: hasBody ? new Uint8Array(await readBody(req)) : undefined,
+        signal: controller.signal,
       },
-      body: hasBody ? new Uint8Array(await readBody(req)) : undefined,
-      signal: controller.signal,
-    });
+      { why: "model.proxy" },
+    );
   } catch (e: any) {
     tracked.failed(e);
     throw new HttpError(502, `Can't reach ${c.name}: ${describeNetworkError(e)}`);

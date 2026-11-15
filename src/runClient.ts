@@ -24,7 +24,7 @@
 // Nothing here can hold an API key: the server never sends one, and the page
 // never had one.
 
-import { ApiError, type AutoKind, type Effort, type ImageRef, type ModelOptions, type Picked, type Session, getSession, sendCommand } from "./api";
+import { ApiError, type AutoKind, type Effort, type ImageRef, type ModelOptions, type Picked, type Session, getSession, sendCommand, sessionHeaders } from "./api";
 import { openAppEvents, resetAppEvents } from "./appEvents";
 import { applyPatch, type SessionPatch } from "../server/sessionPatch";
 import type { Answer, Ask } from "./runnerTypes";
@@ -323,7 +323,7 @@ function syncWatch(id: string) {
 export async function uploadImage(sessionId: string, blob: Blob): Promise<ImageRef> {
   const res = await fetch(`/api/sessions/${sessionId}/images`, {
     method: "POST",
-    headers: { "Content-Type": blob.type },
+    headers: { "Content-Type": blob.type, ...sessionHeaders() },
     body: blob,
   });
   const data = await res.json().catch(() => ({}));

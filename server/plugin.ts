@@ -4,7 +4,7 @@
 
 import { createServer as createHttpServer, type RequestListener, type Server } from "node:http";
 import type { Connect, Plugin } from "vite";
-import { setApiOrigin } from "../src/api.ts";
+import { SESSION_HEADER, setApiOrigin, setSessionLabel } from "../src/api.ts";
 import { prepareLoginEnv } from "./terminal.ts";
 import { commandRoutes } from "./commands.ts";
 import { connectorRoutes } from "./connectors.ts";
@@ -25,6 +25,8 @@ import { sessionRoutes } from "./sessions.ts";
 import { toolRoutes } from "./tools.ts";
 import { modelAdminRoutes } from "./modelAdmin.ts";
 import { log } from "./log.ts";
+import { audit, noteSession, sessionExists, whoOf } from "./audit.ts";
+import { currentCause, newId, runWithCause } from "./auditContext.ts";
 import { recoverOnce } from "./restart.ts";
 import { stopAllRuns } from "./runners.ts";
 import { whisperRoutes } from "./whisper.ts";
@@ -70,8 +72,64 @@ function isCrossSite(req: Connect.IncomingMessage): boolean {
   }
 }
 
+// Why a request was refused, for the audit line: set where the refusal is
+// made, read when the response closes.
+type Why = { reason?: string };
+
+// Every request that changes something (not GET) and every request that was
+// refused or failed (status 400 and up) leaves one 'api.request' line. Plain
+// reads that worked, such as the event streams and polling, are skipped.
+// Only the method, the path (ids kept, no query), the status, the time taken,
+// the reason and who sent it are written: never a body, header or cookie.
+// A chat id as it is named in the audit log: letters, digits, dash, colon.
+const SESSION_SHAPE = /^[A-Za-z0-9:-]{1,80}$/;
+
+// The chat a request says it is made for, from the x-llama-session header (a
+// run calling the server's own model proxy sets it, and so does the page for
+// the chat it has open). From any caller it is used only when the id is well
+// shaped and a chat with that id has a saved file. It is only a label for the
+// audit log: it grants nothing, and the header itself is never written.
+export function sessionFromHeader(req: Connect.IncomingMessage): string | undefined {
+  const raw = req.headers[SESSION_HEADER];
+  if (typeof raw !== "string" || !SESSION_SHAPE.test(raw)) return undefined;
+  return sessionExists(raw) ? raw : undefined;
+}
+
+// What a run's calls to the server's own API name as their chat (see api.ts).
+setSessionLabel(() => currentCause().session);
+
 export const handler: Connect.NextHandleFunction = (req, res) => {
+  const started = Date.now();
+  const why: Why = {};
+  const request = newId();
+  const method = req.method ?? "GET";
+  const named = sessionFromHeader(req);
+  res.once("close", () => {
+    const status = res.statusCode;
+    if (method === "GET" && status < 400) return;
+    const pathname = new URL(req.url ?? "/", "http://x").pathname;
+    const parts = pathname.split("/").filter(Boolean);
+    if (parts[0] === "sessions" && parts[1]) noteSession(parts[1]);
+    audit("api.request", {
+      request,
+      method,
+      route: "/api" + (pathname === "/" ? "" : pathname),
+      ...(parts[0] === "sessions" && parts[1] ? { session: parts[1] } : named ? { session: named } : {}),
+      status,
+      ms: Date.now() - started,
+      ...(why.reason ? { reason: why.reason } : {}),
+      // A connection that closed before the answer was finished.
+      ...(res.writableFinished ? {} : { aborted: true }),
+      who: whoOf(req),
+    });
+  });
+  // Whatever the request starts (tools, commands, fetches) carries its id.
+  runWithCause({ request, who: whoOf(req), ...(named ? { session: named } : {}) }, () => serve(req, res, why));
+};
+
+function serve(req: Connect.IncomingMessage, res: Parameters<Connect.NextHandleFunction>[1], why: Why) {
   if (isCrossSite(req)) {
+    why.reason = "cross-site";
     // Recorded so a refused request can be traced to what sent it. Only
     // address headers are kept, nothing from the body or cookies.
     log("api.cross-site-refused", {
@@ -99,16 +157,18 @@ export const handler: Connect.NextHandleFunction = (req, res) => {
   allowed
     .then((ok) => {
       if (ok) return route(r);
+      why.reason = "unpaired";
       sendJson(res, 401, {
         error: "This device isn't paired. On the computer running llama-mui, open Settings → Phone and scan the code.",
         reason: "unpaired",
       });
     })
     .catch((e) => {
+    why.reason = e.message;
     if (res.headersSent) return void res.end();
     sendJson(res, e instanceof HttpError ? e.status : 500, { ...(e instanceof HttpError ? e.extra : {}), error: e.message });
   });
-};
+}
 
 // What a server does when it starts. Plans run on the server call its own /api over http (see setApiOrigin), so
 // once the server is listening it tells the client code where that is.
