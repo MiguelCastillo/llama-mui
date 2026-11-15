@@ -4,7 +4,8 @@
 // browser that opens the app sees the same list. Not in settings.json, which
 // holds API keys; this file holds no secrets.
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import * as fsio from "./io/fs.ts";
 import os from "node:os";
 import path from "node:path";
 
@@ -30,8 +31,8 @@ export async function readRecentFolders(): Promise<string[]> {
 
 export async function writeRecentFolders(list: string[]): Promise<void> {
   const file = recentFile();
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await fsio.mkdir(path.dirname(file), { recursive: true, mode: 0o700 }, { why: "recent-folders.save" });
   // Write-then-rename so a crash mid-write can't leave a truncated file.
-  await writeFile(`${file}.tmp`, JSON.stringify(list));
-  await rename(`${file}.tmp`, file);
+  await fsio.write(`${file}.tmp`, JSON.stringify(list), undefined, { why: "recent-folders.save" });
+  await fsio.rename(`${file}.tmp`, file, { why: "recent-folders.save" });
 }

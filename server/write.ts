@@ -5,12 +5,24 @@
 // and the user is asked again. An existing file can only be changed after the
 // model has read it, and only if it hasn't changed since (see reads.ts).
 
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
+import * as fsio from "./io/fs.ts";
 import path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { inSessionWorktrees, isInside, isSettingsFile, looksBinary, needAccess, toAbsolute } from "./disk.ts";
 import { markRead, requireRead } from "./reads.ts";
-import { type Approval, type ToolContext, ToolError, type ToolSpec, fn, reachableRoots, reasonOf, requireApproval } from "./toolkit.ts";
+import {
+  type Approval,
+  type ToolContext,
+  ToolError,
+  type ToolSpec,
+  fn,
+  note,
+  reachableRoots,
+  reasonOf,
+  requireApproval,
+  textFact,
+} from "./toolkit.ts";
 
 const MAX_WRITE_BYTES = 1024 * 1024;
 
@@ -80,7 +92,11 @@ async function commit(
   if (Buffer.byteLength(after) > MAX_WRITE_BYTES) throw new ToolError("the new content is over 1 MB");
   if (before === after) throw new ToolError(`${file} already has that content; nothing to change`);
   // `file` is already resolved (see resolveWritable), so a worktree is checked by its real path.
-  if (!(await inSessionWorktrees(file))) {
+  note(ctx, { path: file, action, bytes: Buffer.byteLength(after) });
+  if (await inSessionWorktrees(file)) {
+    // No approval asked: the audit says so, so it can't be mistaken for the user's.
+    note(ctx, { approvedBy: "worktree" });
+  } else {
     requireApproval(ctx, {
       type: "change",
       path: file,
@@ -88,9 +104,10 @@ async function commit(
       diff: hunks(file, before ?? "", after),
       ...(reason ? { reason } : {}),
     });
+    note(ctx, { approvedBy: "approval" });
   }
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, after);
+  await fsio.mkdir(path.dirname(file), { recursive: true }, { why: "edit.write" });
+  await fsio.write(file, after, undefined, { why: "edit.write" });
   // The model wrote it, so it knows what's there; its next edit can follow.
   markRead(ctx.chatId, file, after);
 }
@@ -124,6 +141,11 @@ const writeTextFile: ToolSpec = {
     const lines = countLines(args.content);
     return `${before === null ? "Created" : "Replaced"} ${file} (${lines} line${lines === 1 ? "" : "s"})`;
   },
+  audit: (args) => ({
+    path: textFact(args.path),
+    action: "write",
+    bytes: typeof args.content === "string" ? Buffer.byteLength(args.content) : 0,
+  }),
 };
 
 const editTextFile: ToolSpec = {
@@ -168,6 +190,13 @@ const editTextFile: ToolSpec = {
     const n = args.replace_all ? count : 1;
     return `Edited ${file}: replaced ${n} occurrence${n === 1 ? "" : "s"}`;
   },
+  audit: (args) => ({
+    path: textFact(args.path),
+    action: "edit",
+    oldBytes: typeof args.old_text === "string" ? Buffer.byteLength(args.old_text) : 0,
+    newBytes: typeof args.new_text === "string" ? Buffer.byteLength(args.new_text) : 0,
+    replaceAll: args.replace_all === true,
+  }),
 };
 
 export const WRITE_TOOLS = [writeTextFile, editTextFile];

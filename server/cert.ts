@@ -5,7 +5,8 @@
 // plain http doesn't count as secure.
 
 import selfsigned from "selfsigned";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeSync } from "./io/fs.ts";
 import { join } from "node:path";
 
 const certDir = process.env.LLAMA_MUI_HOME ?? join(process.env.HOME ?? "/tmp", ".llama-mui");
@@ -29,11 +30,8 @@ export function selfSignedCert(): { key: string; cert: string } {
   }
   const { cert, private: key } = selfsigned.generate(attrs, certOpts);
   // Ensure the directory exists before writing.
-  const dir = certDir;
-  if (!existsSync(dir)) {
-    import("node:fs").then(fs => fs.mkdirSync(dir, { recursive: true }));
-  }
-  writeFileSync(certPath, cert, "utf-8");
-  writeFileSync(keyPath, key, "utf-8");
+  if (!existsSync(certDir)) mkdirSync(certDir, { recursive: true }, { why: "cert.save" });
+  writeSync(certPath, cert, undefined, { why: "cert.save" });
+  writeSync(keyPath, key, undefined, { why: "cert.save" });
   return { key, cert };
 }

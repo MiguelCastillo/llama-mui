@@ -5,7 +5,8 @@
 // they are encrypted in ~/.llama-mui/.keys (see secrets.ts). A Connector has
 // its `apiKey` in memory, filled in by load() and taken out again by save().
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { mkdir, rename, writeAtomicBatched } from "./io/fs.ts";
 import os from "node:os";
 import path from "node:path";
 import { openKeys, sealKeys } from "./secrets.ts";
@@ -88,9 +89,9 @@ const OLD_SETTINGS_FILE = path.resolve("settings.json");
 
 // Moves settings from the old place, if there are any. True if it moved them.
 async function moveOldSettings(): Promise<boolean> {
-  await mkdir(path.dirname(SETTINGS_FILE), { recursive: true, mode: 0o700 });
+  await mkdir(path.dirname(SETTINGS_FILE), { recursive: true, mode: 0o700 }, { why: "settings.migrate" });
   try {
-    await rename(OLD_SETTINGS_FILE, SETTINGS_FILE);
+    await rename(OLD_SETTINGS_FILE, SETTINGS_FILE, { why: "settings.migrate" });
     return true;
   } catch (e: any) {
     if (e.code === "ENOENT") return false;
@@ -129,12 +130,9 @@ async function readSettings(): Promise<any> {
 }
 
 async function writeSettings(store: Store): Promise<void> {
-  await mkdir(path.dirname(SETTINGS_FILE), { recursive: true, mode: 0o700 });
-  const tmp = `${SETTINGS_FILE}.tmp`;
   // The keys stay out of the file.
   const bare = { ...store, connectors: store.connectors.map(({ apiKey: _key, ...c }) => c) };
-  await writeFile(tmp, JSON.stringify(bare, null, 2) + "\n", { mode: 0o600 });
-  await rename(tmp, SETTINGS_FILE);
+  await writeAtomicBatched(SETTINGS_FILE, JSON.stringify(bare, null, 2) + "\n", { mode: 0o600, dirMode: 0o700 }, { why: "settings.save" });
 }
 
 // Loads and saves run one at a time. Two requests at once would otherwise both

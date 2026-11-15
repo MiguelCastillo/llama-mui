@@ -3,11 +3,11 @@
 // login PATH, network and credentials, which is the point: the model can't reach
 // GitHub, but `git push` run here can.
 
-import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { resolveAllowed } from "./disk.ts";
+import { spawn } from "./io/exec.ts";
 import { log } from "./log.ts";
-import { type ToolContext, ToolError, type ToolSpec, fn, reasonOf, requireApproval } from "./toolkit.ts";
+import { type ToolContext, ToolError, type ToolSpec, fn, note, reasonOf, requireApproval, textFact } from "./toolkit.ts";
 
 const TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_OUTPUT_CHARS = 50_000;
@@ -43,22 +43,21 @@ export function readLoginEnv(shell: string, timeoutMs: number): Promise<{ env: N
     const done = (env: NodeJS.ProcessEnv, fallback: string | null) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
       resolve({ env, fallback });
     };
-    const child = spawn(shell, ["-lc", "env -0"], {
-      stdio: ["ignore", "pipe", "ignore"],
-      detached: true,
-      env: { ...process.env, SSH_ASKPASS_REQUIRE: "never" },
-    });
-    const timer = setTimeout(() => {
-      try {
-        process.kill(-child.pid!, "SIGKILL");
-      } catch {
-        // Already gone.
-      }
-      done(process.env, `the login profile took longer than ${timeoutMs / 1000} seconds`);
-    }, timeoutMs);
+    // The wrapper kills the shell and all it started at the time limit and
+    // says so with a 'timeout' event; we don't wait for its output to close.
+    const child = spawn(
+      shell,
+      ["-lc", "env -0"],
+      {
+        stdio: ["ignore", "pipe", "ignore"],
+        detached: true,
+        env: { ...process.env, SSH_ASKPASS_REQUIRE: "never" },
+      },
+      { why: "terminal.login-env", timeoutMs },
+    );
+    child.once("timeout", () => done(process.env, `the login profile took longer than ${timeoutMs / 1000} seconds`));
     let out = "";
     child.stdout.on("data", (c: Buffer) => (out += c.toString("utf8")));
     child.on("error", (e) => done(process.env, `the login shell didn't start: ${e.message}`));
@@ -105,7 +104,7 @@ const STOPPED = "Stopped by the user before it finished";
 // input fails instead of hanging until the timeout. An aborted signal stops
 // it, and everything it started, at once, including while the login
 // environment is still being read.
-export async function exec(command: string, cwd: string, signal?: AbortSignal): Promise<string> {
+export async function exec(command: string, cwd: string, signal?: AbortSignal, why = "terminal.run"): Promise<string> {
   if (signal?.aborted) throw new ToolError(STOPPED);
   const baseEnv = await new Promise<NodeJS.ProcessEnv>((resolve, reject) => {
     const onAbort = () => reject(new ToolError(STOPPED));
@@ -118,13 +117,18 @@ export async function exec(command: string, cwd: string, signal?: AbortSignal): 
   if (signal?.aborted) throw new ToolError(STOPPED);
   const env = { ...baseEnv, GIT_TERMINAL_PROMPT: "0" };
   return new Promise((resolve, reject) => {
-    const child = spawn(SHELL, ["-c", command], {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env,
-      // Own process group, so the timeout kills what the command started too.
-      detached: true,
-    });
+    const child = spawn(
+      SHELL,
+      ["-c", command],
+      {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        env,
+        // Own process group, so the timeout kills what the command started too.
+        detached: true,
+      },
+      { why, timeoutMs: TIMEOUT_MS },
+    );
     let output = "";
     let cut = false;
     const take = (chunk: Buffer) => {
@@ -133,7 +137,6 @@ export async function exec(command: string, cwd: string, signal?: AbortSignal): 
     };
     child.stdout.on("data", take);
     child.stderr.on("data", take);
-    let timedOut = false;
     const killGroup = () => {
       try {
         process.kill(-child.pid!, "SIGKILL");
@@ -141,22 +144,16 @@ export async function exec(command: string, cwd: string, signal?: AbortSignal): 
         // Already gone.
       }
     };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killGroup();
-    }, TIMEOUT_MS);
     signal?.addEventListener("abort", killGroup, { once: true });
     child.on("error", (e) => {
-      clearTimeout(timer);
       signal?.removeEventListener("abort", killGroup);
       reject(e);
     });
     child.on("close", (code, killedBy) => {
-      clearTimeout(timer);
       signal?.removeEventListener("abort", killGroup);
       if (signal?.aborted) return reject(new ToolError(STOPPED));
       const body = output.length > MAX_OUTPUT_CHARS || cut ? `${output.slice(0, MAX_OUTPUT_CHARS)}\n… (output cut)` : output;
-      const status = timedOut
+      const status = child.timedOut
         ? `killed after ${TIMEOUT_MS / 1000} seconds`
         : killedBy
           ? `killed by ${killedBy}`
@@ -214,8 +211,18 @@ const runCommand: ToolSpec = {
       ...(reason ? { reason } : {}),
       ...(readOnly === undefined ? {} : { readOnly }),
     });
-    return exec(command, cwd, ctx.signal);
+    const out = await exec(command, cwd, ctx.signal);
+    // exec ends its text with "[exit code N]", "[killed after N seconds]" or "[killed by SIGNAL]".
+    const status = /\[([^\]\n]*)\]$/.exec(out)?.[1] ?? "";
+    const exit = /^exit code (\d+)$/.exec(status);
+    note(ctx, exit ? { exit: Number(exit[1]) } : { exit: null, ended: status.startsWith("killed after") ? "timeout" : status });
+    return out;
   },
+  audit: (args) => ({
+    command: textFact(args.command, 1000),
+    cwd: textFact(args.cwd),
+    ...(typeof args.read_only === "boolean" ? { readOnlyClaim: args.read_only } : {}),
+  }),
 };
 
 export const TERMINAL_TOOLS = [runCommand];

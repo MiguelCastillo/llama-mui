@@ -17,7 +17,8 @@
 // with the command that fixes it, rather than quietly used.
 
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import * as fsio from "./io/fs.ts";
 import os from "node:os";
 import path from "node:path";
 
@@ -72,11 +73,11 @@ async function unlockingKey(create: boolean): Promise<Buffer | null> {
     if (e.code !== "ENOENT") throw e;
   }
   if (!create) return null;
-  await mkdir(configDir, { recursive: true, mode: 0o700 });
+  await fsio.mkdir(configDir, { recursive: true, mode: 0o700 }, { why: "secrets.key" });
   const fresh = randomBytes(32);
   try {
     // "wx": never overwrite a key another request just made.
-    await writeFile(SECRET_KEY_FILE, fresh.toString("base64") + "\n", { mode: 0o600, flag: "wx" });
+    await fsio.write(SECRET_KEY_FILE, fresh.toString("base64") + "\n", { mode: 0o600, flag: "wx" }, { why: "secrets.key" });
     return fresh;
   } catch (e: any) {
     if (e.code !== "EEXIST") throw e;
@@ -144,8 +145,8 @@ export async function sealKeys(keys: Record<string, string>, keep: string[] = []
     const key = await unlockingKey(true);
     for (const id of ids) next[id] = seal(key!, id, keys[id]);
   }
-  await mkdir(path.dirname(KEYS_FILE), { recursive: true, mode: 0o700 });
+  await fsio.mkdir(path.dirname(KEYS_FILE), { recursive: true, mode: 0o700 }, { why: "secrets.save" });
   // Write-then-rename so a crash mid-write can't leave a truncated file.
-  await writeFile(`${KEYS_FILE}.tmp`, JSON.stringify({ v: 1, keys: next } satisfies KeysFile, null, 2) + "\n", { mode: 0o600 });
-  await rename(`${KEYS_FILE}.tmp`, KEYS_FILE);
+  await fsio.write(`${KEYS_FILE}.tmp`, JSON.stringify({ v: 1, keys: next } satisfies KeysFile, null, 2) + "\n", { mode: 0o600 }, { why: "secrets.save" });
+  await fsio.rename(`${KEYS_FILE}.tmp`, KEYS_FILE, { why: "secrets.save" });
 }

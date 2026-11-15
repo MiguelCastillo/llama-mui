@@ -4,10 +4,10 @@
 // model checks layout, as a person would, without a screenshot.
 
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import * as fsio from "./io/fs.ts";
 import os from "node:os";
 import path from "node:path";
-import { ToolError, type ToolSpec, fn, reasonOf, requireApproval } from "./toolkit.ts";
+import { ToolError, type ToolSpec, fn, reasonOf, requireApproval, urlFacts } from "./toolkit.ts";
 
 const TIME_LIMIT_MS = 30_000;
 export const MAX_CHARS = 12_000;
@@ -146,7 +146,7 @@ export function wrapScript(script: string): string {
 
 async function inspect(url: URL, script: string | undefined, chrome: string): Promise<string> {
   const puppeteer = (await import("puppeteer-core")).default;
-  const profile = await mkdtemp(path.join(os.tmpdir(), "llama-mui-chrome-"));
+  const profile = await fsio.makeTempDir(path.join(os.tmpdir(), "llama-mui-chrome-"), { why: "inspect.profile" });
   let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
   let timer: NodeJS.Timeout | undefined;
   const run = async () => {
@@ -198,7 +198,7 @@ async function inspect(url: URL, script: string | undefined, chrome: string): Pr
   } finally {
     clearTimeout(timer);
     await browser?.close().catch(() => {});
-    await rm(profile, { recursive: true, force: true }).catch(() => {});
+    await fsio.remove(profile, { recursive: true, force: true }, { why: "inspect.profile" }).catch(() => {});
   }
 }
 
@@ -238,6 +238,8 @@ const inspectPage: ToolSpec = {
       required: ["url"],
     },
   ),
+  // The script's size only: it can hold anything.
+  audit: (args) => ({ ...urlFacts(args.url), scriptBytes: typeof args.script === "string" ? Buffer.byteLength(args.script) : 0 }),
   async run(ctx, args) {
     let url: URL;
     try {

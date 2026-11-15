@@ -3,7 +3,8 @@
 // turn or blocks one; a later layer can add a cost field to a record (unknown
 // fields are kept as they are) or check the totals before a turn starts.
 
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { appendBatched } from "./io/fs.ts";
 import os from "node:os";
 import path from "node:path";
 
@@ -54,8 +55,7 @@ export async function appendUsage(rec: Omit<UsageRecord, "timestamp"> & { timest
   const file = usageFile();
   const line = toRecord({ ...rec, timestamp: rec.timestamp ?? new Date().toISOString() });
   if (!line) throw new Error("A usage record needs a session id and a provider");
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await appendFile(file, `${JSON.stringify(line)}\n`, { mode: 0o600 });
+  await appendBatched(file, `${JSON.stringify(line)}\n`, { mode: 0o600, dirMode: 0o700 }, { why: "usage.append" });
 }
 
 // Every record in the file, oldest first. A missing file is empty; a line that

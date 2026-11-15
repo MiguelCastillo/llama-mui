@@ -1,7 +1,8 @@
 // fetch_url: opens a web page from this machine and returns its text for the
 // model, with HTML turned into plain text.
 
-import { ToolError, type ToolSpec, fn } from "./toolkit.ts";
+import { auditedFetch } from "./io/fetch.ts";
+import { ToolError, type ToolSpec, fn, urlFacts } from "./toolkit.ts";
 
 const TIMEOUT_MS = 20_000;
 const MAX_BYTES = 3 * 1024 * 1024;
@@ -71,6 +72,7 @@ const fetchUrl: ToolSpec = {
       required: ["url"],
     },
   ),
+  audit: (args) => ({ ...urlFacts(args.url) }),
   async run(_ctx, args) {
     let url: URL;
     try {
@@ -84,11 +86,15 @@ const fetchUrl: ToolSpec = {
     let res: Response;
     for (let hop = 0; ; hop++) {
       try {
-        res = await fetch(url, {
-          redirect: "manual",
-          signal: AbortSignal.timeout(TIMEOUT_MS),
-          headers: { "user-agent": "llama-mui/1.0", accept: "text/html,text/plain,application/json;q=0.9,*/*;q=0.5" },
-        });
+        res = await auditedFetch(
+          url,
+          {
+            redirect: "manual",
+            signal: AbortSignal.timeout(TIMEOUT_MS),
+            headers: { "user-agent": "llama-mui/1.0", accept: "text/html,text/plain,application/json;q=0.9,*/*;q=0.5" },
+          },
+          { why: "page.fetch" },
+        );
       } catch (e: any) {
         throw new ToolError(`couldn't open ${url.href}: ${e.cause?.message ?? e.message}`);
       }

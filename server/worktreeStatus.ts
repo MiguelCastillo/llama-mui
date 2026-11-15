@@ -5,14 +5,11 @@
 // stale or be written wrong by a model. One broken worktree is left out; it
 // never fails the answer.
 
-import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { createdWorktrees } from "./createdWorktrees.ts";
+import { execFile } from "./io/exec.ts";
 import { sessionFolder } from "./sessionFile.ts";
-
-const run = promisify(execFile);
 
 export interface WorktreeStatus {
   name: string;
@@ -27,12 +24,17 @@ export interface WorktreeStatus {
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await run("git", args, {
-    cwd,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
-    timeout: 10_000,
-    maxBuffer: 4 * 1024 * 1024,
-  });
+  const { stdout } = await execFile(
+    "git",
+    args,
+    {
+      cwd,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+      timeout: 10_000,
+      maxBuffer: 4 * 1024 * 1024,
+    },
+    { why: "git.status" },
+  );
   return stdout.trim();
 }
 

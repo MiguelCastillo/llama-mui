@@ -18,7 +18,8 @@ import { LOOPBACK, otherDevicesAllowed, setOtherDevices } from "./lan.ts";
 import { load, save } from "./store.ts";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import * as fsio from "./io/fs.ts";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -57,10 +58,10 @@ async function readDevices(): Promise<Device[]> {
 
 async function writeDevices(devices: Device[]): Promise<void> {
   const file = devicesFile();
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await fsio.mkdir(path.dirname(file), { recursive: true, mode: 0o700 }, { why: "phones.save" });
   // Write-then-rename so a crash mid-write can't leave a truncated file.
-  await writeFile(`${file}.tmp`, JSON.stringify(devices, null, 2) + "\n", { mode: 0o600 });
-  await rename(`${file}.tmp`, file);
+  await fsio.write(`${file}.tmp`, JSON.stringify(devices, null, 2) + "\n", { mode: 0o600 }, { why: "phones.save" });
+  await fsio.rename(`${file}.tmp`, file, { why: "phones.save" });
 }
 
 // Saves run one at a time: two pairings at once must both end up in the file.

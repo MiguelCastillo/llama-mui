@@ -9,7 +9,7 @@
 // is there, to point to the right file or folder. Walks for
 // find_files and grep skip symlinks, so they never leave what's attached.
 
-import { execFile } from "node:child_process";
+import { execFile } from "./io/exec.ts";
 import type { Dirent } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import os from "node:os";
@@ -422,12 +422,14 @@ function pickPaths(kind: "file" | "folder"): Promise<string[]> {
     'repeat with p in picked\nset out to out & POSIX path of p & linefeed\nend repeat',
     "out",
   ].join("\n");
-  return new Promise((resolve, reject) =>
-    execFile("osascript", ["-e", script], (err, stdout, stderr) => {
+  return execFile("osascript", ["-e", script], undefined, { why: "file.pick" }).then(
+    ({ stdout }) => stdout.split("\n").filter(Boolean),
+    (err: Error & { stderr?: string }) => {
+      const stderr = err.stderr ?? "";
       // -128 is "User canceled".
-      if (err) return stderr.includes("-128") ? resolve([]) : reject(new Error(stderr.trim() || err.message));
-      resolve(stdout.split("\n").filter(Boolean));
-    }),
+      if (stderr.includes("-128")) return [];
+      throw new Error(stderr.trim() || err.message);
+    },
   );
 }
 

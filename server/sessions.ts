@@ -5,7 +5,8 @@
 // model may change without asking (see inSessionWorktrees in disk.ts), so
 // session.json can't be rewritten by it.
 
-import { readdir, readFile, rm, rmdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import * as fsio from "./io/fs.ts";
 import os from "node:os";
 import path from "node:path";
 import { sessionsDir } from "./disk.ts";
@@ -36,12 +37,12 @@ async function migrateChats(): Promise<void> {
       await writeSession(id, old);
       // Reading converts a session with no workingDir (see convertWorkingDir),
       // so the copy is compared with the old file as it reads.
-      if (JSON.stringify(await readSession(id)) === JSON.stringify(convertWorkingDir(old))) await rm(path.join(OLD_CHATS_DIR, name));
+      if (JSON.stringify(await readSession(id)) === JSON.stringify(convertWorkingDir(old))) await fsio.remove(path.join(OLD_CHATS_DIR, name), undefined, { why: "sessions.migrate" });
     } catch (e) {
       console.warn(`Couldn't move ${name} to sessions: ${e}`);
     }
   }
-  await rmdir(OLD_CHATS_DIR).catch(() => {}); // only works once it's empty
+  await fsio.removeEmptyDir(OLD_CHATS_DIR, { why: "sessions.migrate" }).catch(() => {}); // only works once it's empty
 }
 
 let migration: Promise<void> | undefined;
@@ -177,7 +178,7 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
     }
     // The deepest first, so a parent is never left pointing at nothing.
     const deleted = [...nested.reverse(), id];
-    for (const gone of deleted) await hub.remove(gone, () => deleteSession(gone));
+    for (const gone of deleted) await hub.remove(gone, () => deleteSession(gone), deleted);
     sendJson(res, 200, { id, deleted });
     return true;
   }

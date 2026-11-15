@@ -3,7 +3,8 @@
 // toolsSystemPrompt). Settings → Agent only says where it is. Not in
 // settings.json, which holds API keys; this file holds no secrets.
 
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import * as fsio from "./io/fs.ts";
 import os from "node:os";
 import path from "node:path";
 import { createTwoFilesPatch } from "diff";
@@ -95,9 +96,9 @@ export async function readRules(): Promise<{ text: string; isDefault: boolean }>
   // No rules.md: the user's old instructions.md, if there is one, becomes it.
   try {
     const text = await readFile(legacyFile(), "utf8");
-    await mkdir(path.dirname(rulesFile()), { recursive: true, mode: 0o700 });
-    await writeFile(`${rulesFile()}.tmp`, text);
-    await rename(`${rulesFile()}.tmp`, rulesFile());
+    await fsio.mkdir(path.dirname(rulesFile()), { recursive: true, mode: 0o700 }, { why: "rules.save" });
+    await fsio.write(`${rulesFile()}.tmp`, text, undefined, { why: "rules.save" });
+    await fsio.rename(`${rulesFile()}.tmp`, rulesFile(), { why: "rules.save" });
     return { text, isDefault: false };
   } catch (e: any) {
     if (e.code !== "ENOENT") throw e;
@@ -121,10 +122,10 @@ export async function ruleRoutes({ req, res, parts, method }: Route): Promise<bo
       throw new HttpError(400, `Rules are ${text.length} characters; the limit is ${MAX_RULES}. Shorten them and save again.`);
     }
     const file = rulesFile();
-    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await fsio.mkdir(path.dirname(file), { recursive: true, mode: 0o700 }, { why: "rules.add" });
     // Write-then-rename so a crash mid-write can't leave a truncated file.
-    await writeFile(`${file}.tmp`, text);
-    await rename(`${file}.tmp`, file);
+    await fsio.write(`${file}.tmp`, text, undefined, { why: "rules.add" });
+    await fsio.rename(`${file}.tmp`, file, { why: "rules.add" });
     sendJson(res, 200, { text, isDefault: false });
     return true;
   }
@@ -132,8 +133,8 @@ export async function ruleRoutes({ req, res, parts, method }: Route): Promise<bo
   // Reset: no file, so the default applies again. The old name goes too, or the
   // next read would copy it back.
   if (method === "DELETE") {
-    await rm(rulesFile(), { force: true });
-    await rm(legacyFile(), { force: true });
+    await fsio.remove(rulesFile(), { force: true }, { why: "rules.clear" });
+    await fsio.remove(legacyFile(), { force: true }, { why: "rules.clear" });
     sendJson(res, 200, await readRules());
     return true;
   }
@@ -170,6 +171,8 @@ const addRule: ToolSpec = {
       required: ["text"],
     },
   ),
+  // The length only: the exact line is in the approval the user saw and in rules.md.
+  audit: (args) => ({ chars: typeof args.text === "string" ? args.text.length : 0 }),
   async run(ctx, args) {
     const rule = (typeof args.text === "string" ? args.text : "").replace(/\s+/g, " ").trim().replace(/^-\s+/, "");
     if (!rule) throw new ToolError("text is required: one plain sentence for the rule");
@@ -192,10 +195,10 @@ const addRule: ToolSpec = {
       diff: hunks(file, isDefault ? "" : current, after),
       ...(reason ? { reason } : {}),
     });
-    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await fsio.mkdir(path.dirname(file), { recursive: true, mode: 0o700 }, { why: "rules.edit" });
     // Write-then-rename so a crash mid-write can't leave a truncated file.
-    await writeFile(`${file}.tmp`, after);
-    await rename(`${file}.tmp`, file);
+    await fsio.write(`${file}.tmp`, after, undefined, { why: "rules.edit" });
+    await fsio.rename(`${file}.tmp`, file, { why: "rules.edit" });
     return `Added to your standing rules: ${line}. It applies from the user's next message.`;
   },
 };

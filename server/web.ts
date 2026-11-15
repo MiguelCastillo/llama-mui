@@ -3,7 +3,8 @@
 // JavaScript (html.duckduckgo.com). If that page's markup changes, parseResults
 // is the one place to fix.
 
-import { ToolError, type ToolSpec, fn } from "./toolkit.ts";
+import { auditedFetch } from "./io/fetch.ts";
+import { ToolError, type ToolSpec, fn, textFact } from "./toolkit.ts";
 
 const SEARCH_URL = "https://html.duckduckgo.com/html/";
 const DEFAULT_RESULTS = 8;
@@ -76,6 +77,7 @@ const webSearch: ToolSpec = {
       required: ["query"],
     },
   ),
+  audit: (args) => ({ query: textFact(args.query, 200) }),
   async run(_ctx, args) {
     const query = String(args.query ?? "").trim();
     if (!query) throw new ToolError("query is required");
@@ -83,17 +85,21 @@ const webSearch: ToolSpec = {
 
     let res: Response;
     try {
-      res = await fetch(SEARCH_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          // The HTML endpoint turns away requests that don't look like a browser.
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+      res = await auditedFetch(
+        SEARCH_URL,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            // The HTML endpoint turns away requests that don't look like a browser.
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+          },
+          body: new URLSearchParams({ q: query }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         },
-        body: new URLSearchParams({ q: query }),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
+        { why: "web.search" },
+      );
     } catch (e: any) {
       throw new ToolError(
         e.name === "TimeoutError" ? "DuckDuckGo didn't answer in time" : `couldn't reach DuckDuckGo (${e.cause?.code ?? e.message})`,

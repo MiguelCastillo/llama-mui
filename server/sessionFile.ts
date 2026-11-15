@@ -2,7 +2,8 @@
 // and the run hub. Nothing here knows about runs: it is files and the shape of
 // the sessions list row.
 
-import { mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { remove, removeEmptyDir, writeAtomicBatched } from "./io/fs.ts";
 import path from "node:path";
 import { sessionsDir } from "./disk.ts";
 import { withFileLock } from "./fileLock.ts";
@@ -65,10 +66,8 @@ export async function readSession(id: string): Promise<any | null> {
 }
 
 // Write-then-rename so a crash mid-write can't leave a truncated file.
-async function writeText(file: string, text: string) {
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await writeFile(`${file}.tmp`, text, { mode: 0o600 });
-  await rename(`${file}.tmp`, file);
+function writeText(file: string, text: string) {
+  return writeAtomicBatched(file, text, { mode: 0o600, dirMode: 0o700 }, { why: "session.save" });
 }
 
 // Holds the lock on one session's file while `fn` reads and writes it, so
@@ -82,11 +81,11 @@ export const writeSession = (id: string, session: unknown) => writeText(sessionF
 // (remove), which refuses while a run is live.
 export async function deleteSession(id: string): Promise<void> {
   const file = sessionFile(id);
-  await rm(file, { force: true });
+  await remove(file, { force: true }, { why: "session.delete" });
   // Remove the images folder if it exists.
   const imagesDir = path.join(path.dirname(file), "images");
-  await rm(imagesDir, { recursive: true, force: true }).catch(() => {});
-  await rmdir(path.dirname(file)).catch(() => {});
+  await remove(imagesDir, { recursive: true, force: true }, { why: "session.delete" }).catch(() => {});
+  await removeEmptyDir(path.dirname(file), { why: "session.delete" }).catch(() => {});
 }
 
 // The number of times the server has written this session. A session saved

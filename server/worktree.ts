@@ -11,25 +11,28 @@
 // Ignored and untracked files (node_modules, usually .env) aren't in it, and a
 // tracked secret is.
 
-import { execFile } from "node:child_process";
-import { mkdir, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
+import * as fsio from "./io/fs.ts";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { isInside, toAbsolute } from "./disk.ts";
+import { execFile } from "./io/exec.ts";
 import { sessionFolder } from "./sessions.ts";
-import { type ToolContext, ToolError, type ToolSpec, fn, reasonOf, requireApproval } from "./toolkit.ts";
-
-const run = promisify(execFile);
+import { type ToolContext, ToolError, type ToolSpec, fn, note, reasonOf, requireApproval, textFact } from "./toolkit.ts";
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   try {
-    const { stdout } = await run("git", args, {
-      cwd,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      timeout: 30_000,
-      maxBuffer: 1024 * 1024,
-    });
+    const { stdout } = await execFile(
+      "git",
+      args,
+      {
+        cwd,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        timeout: 30_000,
+        maxBuffer: 1024 * 1024,
+      },
+      { why: "git.worktree" },
+    );
     return stdout.trim();
   } catch (e: any) {
     throw new ToolError(String(e.stderr || e.message).trim().slice(0, 500));
@@ -144,14 +147,17 @@ const createWorktree: ToolSpec = {
       throw new ToolError(`${base} isn't a commit in ${top}`);
     }
 
-    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    await fsio.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }, { why: "worktree.create" });
     await git(top, "worktree", "add", "-b", branch, target, base);
+    note(ctx, { repo: top, path: target, branch, base });
     return (
       `Created a worktree of ${top} at ${target} on a new branch ${branch}, from ${base}. ` +
       "It holds only the files git tracks, so install dependencies before running tests. " +
       `Use ${target} as cwd for run_command; you can change files there without asking.`
     );
   },
+  // Made without asking, so the line records the repo, branch and place.
+  audit: (args) => ({ repo: textFact(args.repo), name: textFact(args.name, 100), base: textFact(args.base, 100) }),
 };
 
 const removeWorktree: ToolSpec = {
@@ -196,9 +202,11 @@ const removeWorktree: ToolSpec = {
 
     const reason = reasonOf(args);
     requireApproval(ctx, { type: "worktree", action: "remove", repo, branch, path: target, ...(reason ? { reason } : {}) });
+    note(ctx, { repo, path: target, branch, approvedBy: "approval" });
     await git(repo, "worktree", "remove", target);
     return `Removed the worktree ${target}. The branch ${branch} is kept in ${repo}, with its commits.`;
   },
+  audit: (args) => ({ name: textFact(args.name, 100) }),
 };
 
 export const WORKTREE_TOOLS = [createWorktree, removeWorktree];

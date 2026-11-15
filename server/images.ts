@@ -3,7 +3,8 @@
 // browser fetches them back via <img> (GET), and deleting a session removes
 // the folder. Base64 is never written into the session.
 
-import { mkdir, readFile, readdir, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import * as fsio from "./io/fs.ts";
 import path from "node:path";
 import { sessionsDir } from "./disk.ts";
 import { HttpError, type Route, readBody, sendJson } from "./http.ts";
@@ -41,8 +42,8 @@ export async function save(sessionId: string, bytes: Buffer, mediaType: string):
   }
   const id = newId();
   const dir = imagesFolder(sessionId);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  await writeFile(path.join(dir, `${id}.${ext}`), bytes, { mode: 0o600 });
+  await fsio.mkdir(dir, { recursive: true, mode: 0o700 }, { why: "image.save" });
+  await fsio.write(path.join(dir, `${id}.${ext}`), bytes, { mode: 0o600 }, { why: "image.save" });
   return { id, mediaType: safe };
 }
 
@@ -88,7 +89,7 @@ export async function removeImage(sessionId: string, imageId: string): Promise<v
   const files = await readdir(folder).catch(() => [] as string[]);
   const match = files.find((f) => f.startsWith(imageId + "."));
   if (!match) throw new HttpError(404, "Image not found");
-  await rm(path.join(folder, match));
+  await fsio.remove(path.join(folder, match), undefined, { why: "image.remove" });
 }
 
 // Check that `child` is inside `root`.
@@ -101,7 +102,7 @@ function isInside(child: string, root: string): boolean {
 export async function removeFolder(sessionId: string): Promise<void> {
   const dir = imagesFolder(sessionId);
   try {
-    await rm(dir, { recursive: true, force: true });
+    await fsio.remove(dir, { recursive: true, force: true }, { why: "image.remove-all" });
   } catch (e: any) {
     if (e.code !== "ENOENT") throw e;
   }

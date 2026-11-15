@@ -7,10 +7,11 @@
 // sends each line of stdout as an SSE event so the client can update the box
 // progressively.
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import * as fsio from "./io/fs.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn } from "./io/exec.ts";
 import { HttpError, type Route, readBody, sendJson } from "./http.ts";
 
 const WHISPER_CLI = "/Users/miguelcastillo/whisper.cpp/build/bin/whisper-cli";
@@ -46,10 +47,10 @@ async function handleTranscribe(req: Route["req"], res: Route["res"], streamSse:
   if (body.length === 0) throw new HttpError(400, "Request body is empty");
   if (body.length > MAX_SIZE) throw new HttpError(413, "Audio file too large (max 10 MB)");
 
-  const dir = await mkdtemp(join(tmpdir(), "whisper-"));
+  const dir = await fsio.makeTempDir(join(tmpdir(), "whisper-"), { why: "whisper.upload" });
   const filePath = join(dir, "input.wav");
   try {
-    await writeFile(filePath, body);
+    await fsio.write(filePath, body, undefined, { why: "whisper.upload" });
   } catch (e) {
     throw new HttpError(500, `Failed to write audio file: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -64,7 +65,7 @@ async function handleTranscribe(req: Route["req"], res: Route["res"], streamSse:
       sendJson(res, 200, { text });
     }
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await fsio.remove(dir, { recursive: true, force: true }, { why: "whisper.upload" });
   }
 }
 
@@ -75,6 +76,7 @@ function streamTranscribe(filePath: string, res: Route["res"]) {
       WHISPER_CLI,
       ["-f", filePath, "-m", WHISPER_MODEL, "-t", "4", "-nt"],
       { stdio: ["ignore", "pipe", "pipe"] },
+      { why: "whisper.transcribe" },
     );
 
     let fullText = "";
@@ -124,6 +126,7 @@ function runWhisper(filePath: string): Promise<string> {
       WHISPER_CLI,
       ["-f", filePath, "-m", WHISPER_MODEL, "-t", "4", "-nt"],
       { stdio: ["ignore", "pipe", "pipe"] },
+      { why: "whisper.transcribe" },
     );
 
     let stdout = "";
