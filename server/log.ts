@@ -92,4 +92,19 @@ export function logProcessEnd(): void {
     throw e;
   });
   process.on("exit", (code) => log("process.exit", { code }));
+  // Node prints a warning (too many listeners on one object, a deprecated call)
+  // to the terminal and nowhere else. Adding a listener keeps that print. The
+  // stack is kept, trimmed: for a warning it names the code that caused it, so
+  // it is there afterwards without --trace-warnings.
+  process.on("warning", logWarning);
+}
+
+// One line for a Node warning: what it says and where it came from.
+export function logWarning(w: Error & { code?: string }): void {
+  log("process.warning", {
+    name: w.name,
+    message: w.message,
+    ...(w.code ? { code: w.code } : {}),
+    stack: String(w.stack ?? "").split("\n").slice(1, 11).map((l) => l.trim()),
+  });
 }

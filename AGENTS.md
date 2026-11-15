@@ -131,6 +131,9 @@ interface, and plain http on this computer only.
 - **A refused cross-site request is logged** as `api.cross-site-refused` in the
   server log (method, path, host, origin, `Sec-Fetch-Site`, referer; nothing
   else), so a false refusal can be traced.
+- **Vite's warnings and errors are logged too**, as `vite.warn` and
+  `vite.error` in the server log (colors stripped, first lines only, length
+  capped), next to Node's `process.warning`. The terminal output is unchanged.
 - **Check both protocols after a server change:**
   `curl -sk --http2 https://localhost:<port>/` and `--http1.1`, and plain
   `curl http://127.0.0.1:<port>/`, each should answer 200.

@@ -27,7 +27,7 @@ const MESSAGES_STREAM = [
   'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":480}}\n\n',
   'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 ].join("");
-const { errorFields, log, logHint, logsDir, pruneLogs } = await import("../log.ts");
+const { errorFields, log, logHint, logWarning, logsDir, pruneLogs } = await import("../log.ts");
 const { checkOnce, resetWatch } = await import("../watch.ts");
 const { HttpError } = await import("../http.ts");
 
@@ -130,6 +130,15 @@ describe("log", () => {
   it("says what an error's cause was, where Node's fetch keeps the real reason", () => {
     const e = Object.assign(new TypeError("terminated"), { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) });
     expect(errorFields(e)).toMatchObject({ error: "terminated", errorName: "TypeError", cause: "UND_ERR_SOCKET", causeMessage: "other side closed" });
+  });
+
+  it("writes a Node warning with its name, message and the top of its stack", async () => {
+    const w = Object.assign(new Error("11 close listeners added to [Http2ServerResponse]"), { name: "MaxListenersExceededWarning", code: "X_TEST" });
+    logWarning(w);
+    const l = (await lines()).find((x) => x.event === "process.warning" && x.code === "X_TEST");
+    expect(l).toMatchObject({ name: "MaxListenersExceededWarning", message: expect.stringContaining("Http2ServerResponse") });
+    expect(l.stack.length).toBeGreaterThan(0);
+    expect(l.stack.length).toBeLessThanOrEqual(10);
   });
 
   it("tells where today's log is and the command to follow it", () => {
