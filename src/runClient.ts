@@ -25,6 +25,7 @@
 // never had one.
 
 import { ApiError, type AutoKind, type Effort, type ImageRef, type ModelOptions, type Picked, type Session, getSession, sendCommand } from "./api";
+import { openAppEvents, resetAppEvents } from "./appEvents";
 import { applyPatch, type SessionPatch } from "../server/sessionPatch";
 import type { Answer, Ask } from "./runnerTypes";
 import { type RunnerView, needsYou } from "./runView";
@@ -97,7 +98,7 @@ const ending = new Map<string, Promise<void>>();
 // Goes up whenever a run starts or ends, so a command can tell it happened.
 const generation = new Map<string, number>();
 const waiters = new Set<() => void>();
-let globalSource: EventSource | null = null;
+let globalEvents: { source: EventSource; release: () => void } | null = null;
 
 const bump = (id: string) => generation.set(id, (generation.get(id) ?? 0) + 1);
 const changed = () => {
@@ -266,9 +267,11 @@ const onStatus = (id: string, data: { run: WireRun | null; error?: string }) =>
 
 // The stream for the whole app.
 function connect() {
-  if (globalSource || typeof EventSource === "undefined") return;
-  const source = new EventSource("/api/events");
-  globalSource = source;
+  if (globalEvents) return;
+  const events = openAppEvents();
+  if (!events) return;
+  globalEvents = events;
+  const source = events.source;
   listen(source, "snapshot", (data: { runs: { id: string; run: WireRun }[] }) => {
     const ids = new Set(data.runs.map((r) => r.id));
     for (const id of [...lives.keys()]) if (!ids.has(id)) void endRun(id);
@@ -500,8 +503,9 @@ async function decide(id: string, askId: string, answerGiven: Answer, always?: A
 // For tests: closes every stream and forgets everything.
 export function resetRunClient() {
   for (const l of lives.values()) l.source?.close();
-  globalSource?.close();
-  globalSource = null;
+  globalEvents?.release();
+  globalEvents = null;
+  resetAppEvents();
   lives.clear();
   stopped.clear();
   listeners.clear();

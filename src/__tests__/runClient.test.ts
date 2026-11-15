@@ -34,6 +34,7 @@ class FakeSource {
   addEventListener(type: string, fn: (e: { data: string }) => void) {
     this.handlers.set(type, [...(this.handlers.get(type) ?? []), fn]);
   }
+  removeEventListener() {}
   close() {
     this.closed = true;
   }

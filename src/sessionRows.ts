@@ -1,6 +1,7 @@
 // Keeping the sessions list current from the server's events, and the stream
 // that brings them. The list is newest first, as the server sends it.
 
+import { openAppEvents } from "./appEvents";
 import type { SessionSummary } from "./api";
 import type { ThreadEvent } from "./planThread";
 
@@ -31,9 +32,12 @@ export interface ListWatch {
 // Returns what closes it. Without EventSource (a test, an old browser) it does
 // nothing, and the list is only as current as the last time it was read.
 export function watchSessionList(handlers: ListWatch): () => void {
-  if (typeof EventSource === "undefined") return () => {};
-  const source = new EventSource("/api/events");
-  let opened = false;
+  const events = openAppEvents();
+  if (!events) return () => {};
+  const source = events.source;
+  // A stream that is open already has sent its snapshot, which this listener
+  // missed: the next one is a reconnect.
+  let opened = source.readyState === 1;
   const read = (e: Event) => {
     try {
       return JSON.parse((e as MessageEvent).data);
@@ -41,21 +45,32 @@ export function watchSessionList(handlers: ListWatch): () => void {
       return null;
     }
   };
-  source.addEventListener("snapshot", () => {
+  const onSnapshot = () => {
     if (opened) handlers.reconnected();
     opened = true;
-  });
-  source.addEventListener("saved", (e) => {
+  };
+  const onSaved = (e: Event) => {
     const data = read(e);
     if (data?.summary) handlers.saved(data.summary);
-  });
-  source.addEventListener("removed", (e) => {
+  };
+  const onRemoved = (e: Event) => {
     const data = read(e);
     if (typeof data?.id === "string") handlers.removed(data.id);
-  });
-  source.addEventListener("thread", (e) => {
+  };
+  const onThread = (e: Event) => {
     const data = read(e);
     if (typeof data?.id === "string" && typeof data.sessionId === "string" && data.status) handlers.thread?.(data);
-  });
-  return () => source.close();
+  };
+  source.addEventListener("snapshot", onSnapshot);
+  source.addEventListener("saved", onSaved);
+  source.addEventListener("removed", onRemoved);
+  source.addEventListener("thread", onThread);
+  return () => {
+    // Only this listener's own handlers are removed; the stream is shared.
+    source.removeEventListener("snapshot", onSnapshot);
+    source.removeEventListener("saved", onSaved);
+    source.removeEventListener("removed", onRemoved);
+    source.removeEventListener("thread", onThread);
+    events.release();
+  };
 }

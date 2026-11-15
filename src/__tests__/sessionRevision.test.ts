@@ -113,6 +113,7 @@ describe("the sessions list", () => {
       addEventListener(type: string, fn: (e: any) => void) {
         handlers[type] = fn;
       }
+      removeEventListener() {}
       close = close;
     }
     const sources: FakeSource[] = [];

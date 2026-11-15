@@ -1595,7 +1595,11 @@ step that was running when the page closed comes back as pending.
     [Where plans show](#where-plans-show)). The Sessions panel
     follows it, so a session saved or deleted in another window changes its
     row without reloading, and the list is read again after a dropped
-    connection. `GET /api/sessions/<id>/events` is for the open session: it
+    connection. The page opens one `/api/events`
+    connection and shares it (`src/appEvents.ts`) between the run client and the
+    Sessions panel: a browser keeps only about six connections open to one
+    address, and a request that finds none free (a click on Run, a page load)
+    waits, so each tab holds as few as it can. `GET /api/sessions/<id>/events` is for the open session: it
     starts with the session, its revision and its run, then sends `status`,
     `step`, `ask`, `session` (only what changed: the changed fields and the
     messages from the first one that differs, at most about ten a second),
