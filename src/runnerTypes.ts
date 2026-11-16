@@ -35,7 +35,8 @@ export interface RunnerHandle {
   getSession: () => Session;
   edit: (fn: (s: Session) => Session) => void;
   setError: (err: string | null) => void;
-  setAbort: (c: AbortController | null) => void;
+  // `kind` says what the request is: a step's check, or (missing) a reply.
+  setAbort: (c: AbortController | null, kind?: "check") => void;
   // Aborted by Stop everything: a tool call in flight is cut short too.
   killSignal?: AbortSignal;
   askUser: (ask: Ask, signal: AbortSignal) => Promise<Answer>;

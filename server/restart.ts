@@ -27,6 +27,7 @@ import { readdir } from "node:fs/promises";
 import { INTERRUPTED } from "../src/agent/helpers.ts";
 import type { ChatMessage, PlanStep } from "../src/api.ts";
 import { callsWaitingForAnswer, closeOpenToolCalls } from "../src/closeOpenToolCalls.ts";
+import { filesChangedSince } from "./auditChanges.ts";
 import { sessionsDir } from "./disk.ts";
 import * as hub from "./runHub.ts";
 import { effectOfCall } from "./tools.ts";
@@ -34,24 +35,82 @@ import { reportInterrupted } from "./threadReport.ts";
 
 export const INTERRUPTED_NOTE = "Interrupted by a restart";
 
+const MAX_FILES = 10;
+const MAX_CALLS = 5;
+const MAX_ARG = 60;
+const ARG_KEYS = ["command", "cmd", "path", "file_path", "filePath", "file", "filename"];
+
+// "run_command (npm test)": the tool and a short piece of the call's own
+// command or path, one line, capped. Never anything else from the arguments
+// (file contents stay out).
+export function describeCall(c: { name: string; arguments: string }): string {
+  let arg = "";
+  try {
+    const a = JSON.parse(c.arguments);
+    const key = ARG_KEYS.find((k) => typeof a?.[k] === "string" && a[k]);
+    if (key) arg = String(a[key]).replace(/\s+/g, " ").trim();
+  } catch {
+    // Arguments that aren't JSON: just the name.
+  }
+  if (arg.length > MAX_ARG) arg = arg.slice(0, MAX_ARG - 1) + "…";
+  return arg ? `${c.name} (${arg})` : c.name;
+}
+
+// Calls with the started mark and no result: they were running when the app stopped.
+function callsInFlight(messages: ChatMessage[]): string[] {
+  const answered = new Set<string>();
+  for (const m of messages) if (m.role === "tool" && m.toolCallId) answered.add(m.toolCallId);
+  const out: string[] = [];
+  for (const m of messages) for (const c of m.toolCalls ?? []) if (c.started && !answered.has(c.id)) out.push(describeCall(c));
+  return out;
+}
+
+const more = (list: string[], max: number) => (list.length > max ? [...list.slice(0, max), `and ${list.length - max} more`] : list);
+
+// The note for a step that was running: the plain words, then what was in
+// flight and which files changed, when known.
+export function interruptedNote(messages: ChatMessage[], changed: string[] = []): string {
+  const calls = callsInFlight(messages);
+  const parts: string[] = [];
+  if (calls.length) parts.push(`In progress: ${more(calls, MAX_CALLS).join("; ")}.`);
+  if (changed.length) parts.push(`Files changed since the run started: ${more(changed, MAX_FILES).join(", ")}.`);
+  return parts.length ? `${INTERRUPTED_NOTE}. ${parts.join(" ")}` : INTERRUPTED_NOTE;
+}
+
+// A reply that was streaming when the app stopped is saved as it stood: a last
+// assistant message with text and no calls (calls are only added once the reply
+// is complete). It stays on screen, marked cut off, and is left out of the next
+// request (the model writes the whole reply again). Only when the run record
+// says the request in flight was a reply: a step's check also streams, and then
+// the last message is a complete answer, which is never marked. A record from
+// an older build has no kind of request, and is left alone too.
+export function markCutOffReply(messages: ChatMessage[], run: hub.RunState): ChatMessage[] {
+  if (run.streaming !== true || run.request !== "reply") return messages;
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant" || last.toolCalls?.length) return messages;
+  return [...messages.slice(0, -1), { ...last, cutOff: true }];
+}
+
 // The session as a restart leaves it, for the run record that was found with
-// it. Pure: the session it is given doesn't change.
-export function markInterrupted(session: any, run: hub.RunState): any {
+// it. Pure: the session it is given doesn't change. `changed` is what the audit
+// saw changed (see filesChangedSince), found by the caller.
+export function markInterrupted(session: any, run: hub.RunState, changed: string[] = []): any {
   let wasRunning = false;
+  const note = interruptedNote(Array.isArray(session.messages) ? session.messages : [], changed);
   const plan: PlanStep[] | null = Array.isArray(session.plan)
     ? session.plan.map((st: PlanStep) => {
         if (st.status !== "running") return st;
         wasRunning = true;
         const keep = st.answer ? { answer: st.answer, asked: st.asked } : {};
-        return { id: st.id, text: st.text, ...(st.summary ? { summary: st.summary } : {}), status: "pending", note: INTERRUPTED_NOTE, ...keep };
+        return { id: st.id, text: st.text, ...(st.summary ? { summary: st.summary } : {}), status: "pending", note, ...keep };
       })
     : null;
 
   const unseen: ChatMessage[] = (run.notes ?? []).map((n) => ({ role: "user", content: n.text, notSeen: true }));
-  const before: ChatMessage[] = Array.isArray(session.messages) ? session.messages : [];
+  const before: ChatMessage[] = markCutOffReply(Array.isArray(session.messages) ? session.messages : [], run);
   // A run that stopped with a question pending never started that call.
   const waitingCalls = run.ask ? callsWaitingForAnswer(before) : [];
-  const messages = [...closeOpenToolCalls(before, waitingCalls, (c) => effectOfCall(c.name, c.arguments)), ...unseen];
+  const messages = [...closeOpenToolCalls(before, waitingCalls, (c) => effectOfCall(c.name, c.arguments), run.marksCalls === true), ...unseen];
 
   const cutOff = run.kind === "turn" || run.streaming === true || wasRunning;
   // Messages waiting in the queue are kept, and paused: nothing is sent by itself after a restart.
@@ -71,7 +130,7 @@ export async function recoverInterruptedRuns(): Promise<string[]> {
       let kind: hub.RunState["kind"];
       const changed = await hub.settleStale(id, (session, run) => {
         kind = run.kind;
-        return (after = markInterrupted(session, run));
+        return (after = markInterrupted(session, run, filesChangedSince(id, run.startedAt)));
       });
       if (!changed) {
         // No run to settle, but a queue that was left waiting stays paused.

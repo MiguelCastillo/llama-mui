@@ -49,11 +49,17 @@ export interface RunState {
   // "turn": the run is one chat reply (a message sent to a session with no
   // plan running), not a plan. Missing means a plan, as in older records.
   kind?: "turn";
+  // The code that started this run marks a changing call as started before it
+  // runs it. Missing in records written by an older build, which doesn't.
+  marksCalls?: boolean;
   ask?: RunAsk;
   // Messages waiting for the next step (see runners.ts, sendNote).
   notes?: RunNote[];
   // A request is in flight (a step's reply or its check).
   streaming?: boolean;
+  // What that request is: a reply being written, or the check after a step.
+  // Missing in records written by an older build.
+  request?: "reply" | "check";
   // Stop was pressed and the run is finishing what is in flight.
   stopping?: boolean;
   // A side question is being answered beside the plan (see aside.ts).
@@ -253,7 +259,7 @@ export function save(id: string, session: any, opts: { sync?: boolean } = {}): P
 // than writing its older copy over it.
 export function beginRun(
   id: string,
-  opts: { status?: RunStatus; session?: () => any; expectRevision?: number; kind?: "plan" | "turn" } = {},
+  opts: { status?: RunStatus; session?: () => any; expectRevision?: number; kind?: "plan" | "turn"; marksCalls?: boolean } = {},
 ): Promise<RunState> {
   return locked(id, async () => {
     if (runs.has(id)) throw new HttpError(409, "This plan is already running.", { reason: "already running" });
@@ -266,7 +272,9 @@ export function beginRun(
       });
     }
     const live: Live = {
-      state: { status: opts.status ?? "running", startedAt: Date.now(), ...(opts.kind === "turn" ? { kind: "turn" as const } : {}) },
+      state: { status: opts.status ?? "running", startedAt: Date.now(), ...(opts.kind === "turn" ? { kind: "turn" as const } : {}),
+        ...(opts.marksCalls ? { marksCalls: true } : {}),
+      },
       session: opts.session,
     };
     if (live.session) live.sent = copyForEvents(live.session());
@@ -286,7 +294,7 @@ export function beginRun(
 // whether a request is in flight and the error shown (`error: null` clears it).
 export function updateRun(
   id: string,
-  patch: { status?: RunStatus; ask?: RunAsk | null; streaming?: boolean; stopping?: boolean; aside?: boolean; error?: string | null; notes?: RunNote[] },
+  patch: { status?: RunStatus; ask?: RunAsk | null; streaming?: boolean; request?: "reply" | "check" | null; stopping?: boolean; aside?: boolean; error?: string | null; notes?: RunNote[] },
 ): Promise<RunState> {
   return locked(id, async () => {
     const live = runs.get(id);
@@ -299,6 +307,10 @@ export function updateRun(
     if (patch.streaming !== undefined) {
       if (patch.streaming) live.state.streaming = true;
       else delete live.state.streaming;
+    }
+    if (patch.request !== undefined) {
+      if (patch.request) live.state.request = patch.request;
+      else delete live.state.request;
     }
     if (patch.stopping !== undefined) {
       if (patch.stopping) live.state.stopping = true;

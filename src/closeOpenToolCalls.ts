@@ -9,6 +9,12 @@ export const UNFINISHED_CALL =
 export const MAY_HAVE_RUN_CALL =
   "This call may not have finished: the app stopped while it was in progress, and it may have done some or all of its work. Check the current state (files, git status, output) before repeating it.";
 
+// For a changing call with no started mark, when the caller knows marks are
+// kept (the server after a restart): it was approved or asked for, but never
+// began. The model asks again, and the user is asked to approve again.
+export const NOT_STARTED_CALL =
+  "This call did not run: the app stopped before it started, so nothing was changed. If it is still needed, make the call again; the user will be asked to approve it again.";
+
 // For an open call of a read-only tool (search, fetch, read): it did not
 // finish, and running it again changes nothing.
 export const SAFE_TO_REPEAT_CALL = "This call did not complete: it was cut off before it finished. It only reads, so it is safe to repeat.";
@@ -47,18 +53,25 @@ export function callsWaitingForAnswer(messages: ChatMessage[]): string[] {
 //    have started and gets "may not have finished".
 // `effect` tells a call's effect when the caller knows the tools (the server
 // does, the page does not); without it the first rule and the last two apply.
+// `marksKept` (the server's restart, which only sees chats saved by code that
+// marks) makes a changing call with no mark "did not run, ask again" even in a
+// chat that has no mark anywhere yet.
 // Calls that have a result are left alone, so running it again changes
 // nothing. Returns the same array when there's nothing to close.
 export function closeOpenToolCalls(
   messages: ChatMessage[],
   waiting: Iterable<string> = [],
   effect?: (call: ToolCall) => "none" | "change",
+  marksKept = false,
 ): ChatMessage[] {
   const notStarted = new Set(waiting);
   const marked = hasMarks(messages);
   const textFor = (c: ToolCall): string => {
     if (c.started) return MAY_HAVE_RUN_CALL;
     if (effect && effect(c) === "none") return SAFE_TO_REPEAT_CALL;
+    // Every changing call is marked before it runs (and unmarked if it only
+    // needed an answer), so with marks kept, no mark means it never began.
+    if (marksKept && effect && effect(c) === "change") return NOT_STARTED_CALL;
     if (marked || notStarted.has(c.id)) return UNFINISHED_CALL;
     return MAY_HAVE_RUN_CALL;
   };

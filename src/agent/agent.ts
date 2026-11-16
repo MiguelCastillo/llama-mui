@@ -114,7 +114,7 @@ export interface RunTurnCallbacks {
   setError: (err: string | null) => void;
   setFailed: (err: string | null) => void;
   setUsage: (u: Usage | undefined) => void;
-  setAbort: (c: AbortController | null) => void;
+  setAbort: (c: AbortController | null, kind?: "check") => void;
   // Aborted by Stop everything (a forced stop): cuts short a tool call that is
   // running, which a plain Stop lets finish.
   killSignal?: AbortSignal;
@@ -689,7 +689,7 @@ export interface RunPlanCallbacks {
   // Settings → Tools, "Fresh context for each plan step"; on unless false.
   freshSteps?: boolean;
   setError: (err: string | null) => void;
-  setAbort: (c: AbortController | null) => void;
+  setAbort: (c: AbortController | null, kind?: "check") => void;
   modelLoaded: () => Promise<boolean>;
   models: Model[];
   // The folder relative paths and commands start in; null is none. Its check
@@ -869,7 +869,7 @@ export async function runPlan(callbacks: RunPlanCallbacks): Promise<void> {
 export interface CheckStepDeps {
   connector: Connector | null;
   model: string;
-  setAbort: (c: AbortController | null) => void;
+  setAbort: (c: AbortController | null, kind?: "check") => void;
   setError: (err: string | null) => void;
   modelLoaded: () => Promise<boolean>;
   models: Model[];
@@ -891,7 +891,7 @@ export async function checkStep(
     deps;
   if (!connector || !(await modelLoaded())) return null;
   const controller = new AbortController();
-  setAbort(controller);
+  setAbort(controller, "check");
   try {
     const mine = filesChanged(stepMessages);
     const own = await readWhole(mine, sessionId, workingDir, attachments, attachedPaths);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage, ToolCall } from "../api";
-import { callsWaitingForAnswer, closeOpenToolCalls, MAY_HAVE_RUN_CALL, SAFE_TO_REPEAT_CALL, UNFINISHED_CALL } from "../closeOpenToolCalls";
+import { callsWaitingForAnswer, closeOpenToolCalls, MAY_HAVE_RUN_CALL, NOT_STARTED_CALL, SAFE_TO_REPEAT_CALL, UNFINISHED_CALL } from "../closeOpenToolCalls";
 
 const call = (id: string): ToolCall => ({ id, name: "read_file", arguments: "{}" });
 const assistant = (ids: string[], extra: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -78,6 +78,20 @@ describe("closeOpenToolCalls", () => {
       expect(texts(out)).toEqual([MAY_HAVE_RUN_CALL, UNFINISHED_CALL]);
       // Without knowing the tools (the page), the same.
       expect(texts(closeOpenToolCalls(withCalls(named("a", "read_file"), named("b", "run_command")), ["b"]))).toEqual([MAY_HAVE_RUN_CALL, UNFINISHED_CALL]);
+    });
+
+    it("with marks kept, an unmarked changing call did not run even in a chat with no mark", () => {
+      const out = closeOpenToolCalls(withCalls(named("a", "run_command")), [], effect, true);
+      expect(texts(out)).toEqual([NOT_STARTED_CALL]);
+      // A read is still safe to repeat, and a started call may have run.
+      expect(texts(closeOpenToolCalls(withCalls(named("a", "read_file"), named("b", "run_command", true)), [], effect, true))).toEqual([
+        SAFE_TO_REPEAT_CALL,
+        MAY_HAVE_RUN_CALL,
+      ]);
+    });
+
+    it("without marks kept, the same call in a chat with no mark may have run", () => {
+      expect(texts(closeOpenToolCalls(withCalls(named("a", "run_command")), [], effect, false))).toEqual([MAY_HAVE_RUN_CALL]);
     });
 
     it("an old chat's open read-only call is safe to repeat when the tools are known", () => {

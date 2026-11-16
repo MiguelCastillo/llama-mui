@@ -421,6 +421,30 @@ describe("streamChat with a tool call that never got a result", () => {
   });
 });
 
+describe("streamChat with a reply that was cut off when the app stopped", () => {
+  const history: ChatMessage[] = [
+    { role: "user", content: "Go" },
+    { role: "assistant", content: "HALF-REPLY-TEXT", cutOff: true },
+    { role: "user", content: "Continue" },
+  ];
+
+  it("leaves it out of the request, in both APIs, and keeps the caller's chat as it was", async () => {
+    const requests = serve([{ choices: [{ delta: {} }] }]);
+    await streamChat({ ...request, api: "openai", kind: "llama", messages: history }, () => {}, new AbortController().signal);
+    expect(JSON.stringify(requests[0].body.messages)).not.toContain("HALF-REPLY-TEXT");
+    expect(history).toHaveLength(3);
+    expect(history[1].cutOff).toBe(true);
+
+    const anth = serve([
+      { type: "message_start", message: { id: "m1", type: "message", role: "assistant", content: [], model: "qwen", stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ]);
+    await streamChat({ ...request, api: "anthropic", kind: "llama", messages: history }, () => {}, new AbortController().signal);
+    expect(JSON.stringify(anth[0].body.messages)).not.toContain("HALF-REPLY-TEXT");
+  });
+});
+
 // A reply that ended with an action item and an idea, then the user's "go ahead".
 // The boxes under the reply are kept on it for display; the model must only see
 // the calls it made and their "Shown to the user." answers.

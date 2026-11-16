@@ -62,8 +62,12 @@ interface WireRun {
   startedAt: number;
   // Missing: a plan.
   kind?: "turn";
+  // Set by a build that marks calls as started; missing in older records.
+  marksCalls?: boolean;
   ask?: { id: string; kind: "access" | "location" | "approval"; details: any };
   streaming?: boolean;
+  // A reply being written, or a step's check; missing in older records.
+  request?: "reply" | "check";
   stopping?: boolean;
   // A side question is being answered.
   aside?: boolean;

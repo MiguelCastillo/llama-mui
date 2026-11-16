@@ -153,10 +153,10 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
           counted = true;
         }
       },
-      setAbort: (c) => {
+      setAbort: (c, kind) => {
         streaming = c !== null;
         syncFailed();
-        h.setAbort(c);
+        h.setAbort(c, kind);
       },
       killSignal: h.killSignal,
       flush: h.flush,

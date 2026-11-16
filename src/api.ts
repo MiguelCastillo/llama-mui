@@ -137,6 +137,9 @@ export interface ChatMessage {
   // under the message; never sent to the model.
   seenByStep?: number;
   notSeen?: boolean;
+  // On an assistant reply that was being written when the app stopped: kept on
+  // screen as it stood, with a label, and never sent to the model.
+  cutOff?: boolean;
   // On the messages of a side question: one asked while a plan ran, answered
   // apart from it (server/aside.ts). They are in the chat, but no plan step
   // sees them; a chat turn after the plan does.
@@ -1146,7 +1149,9 @@ export interface ChatReply {
 // the connector's API. A tool call without a result would make the server
 // reject the request, so those are closed first.
 export async function streamChat(req: ChatRequest, onDelta: (d: StreamDelta) => void, signal: AbortSignal): Promise<ChatReply> {
-  let repaired = { ...req, messages: closeOpenToolCalls(req.messages) };
+  // A reply cut off by a stop of the app stays in the chat but is not sent:
+  // the model writes the whole reply again.
+  let repaired = { ...req, messages: closeOpenToolCalls(req.messages.filter((m) => !m.cutOff)) };
   // Old tool results aren't sent again (toolResults.ts): left out here, or by
   // the server where it does that itself. The saved chat keeps them.
   const here = connection(req.kind).clearsToolResultsHere;

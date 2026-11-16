@@ -122,6 +122,8 @@ interface Entry {
   // The run is over and being wrapped up: no side question starts now.
   closing: boolean;
   controller: AbortController | null;
+  // What the request in flight is, while there is one.
+  requestKind: "reply" | "check" | null;
   stopRequested: boolean;
   // Aborted by a forced stop (Stop everything): it cuts short what a plain
   // Stop lets finish, such as a tool call that is running.
@@ -185,6 +187,7 @@ function sync(e: Entry): Promise<void> {
       status: statusOf(e),
       ask: e.ask ? askToPlain(e.ask.id, e.ask.ask) : null,
       streaming: e.controller !== null,
+      request: e.controller !== null ? e.requestKind : null,
       stopping: e.stopRequested,
       aside: e.aside !== null,
       error: e.error,
@@ -627,6 +630,7 @@ async function launch(
     aside: null,
     closing: false,
     controller: null,
+    requestKind: null,
     stopRequested: false,
     kill: new AbortController(),
     ended: false,
@@ -644,7 +648,7 @@ async function launch(
 
   // The hub refuses a second run, or one whose copy of the session is already
   // out of date; either way nothing has started.
-  await hub.beginRun(id, { session: () => e.session, expectRevision: revisionOf(disk), kind: e.kind });
+  await hub.beginRun(id, { session: () => e.session, expectRevision: revisionOf(disk), kind: e.kind, marksCalls: true });
   store.set(id, e);
 
   const planRef = {
@@ -671,8 +675,9 @@ async function launch(
       e.error = err;
       sync(e);
     },
-    setAbort: (c) => {
+    setAbort: (c, kind) => {
       e.controller = c;
+      e.requestKind = c ? (kind ?? "reply") : null;
       // Stop came while this request was being set up (the model check, say):
       // it ends as soon as it starts.
       if (c && e.stopRequested) c.abort();
@@ -825,6 +830,7 @@ async function end(e: Entry) {
   e.ended = true;
   e.runningStep = null;
   e.controller = null;
+  e.requestKind = null;
   dropAsk(e);
   clearSaveTimers(e);
   store.delete(e.id);

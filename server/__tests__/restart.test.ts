@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,7 +16,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 const hub = await import("../runHub.ts");
 const { INTERRUPTED_NOTE, markInterrupted, recoverInterruptedRuns } = await import("../restart.ts");
-const { UNFINISHED_CALL, MAY_HAVE_RUN_CALL, SAFE_TO_REPEAT_CALL } = await import("../../src/closeOpenToolCalls.ts");
+const { NOT_STARTED_CALL, MAY_HAVE_RUN_CALL, SAFE_TO_REPEAT_CALL, UNFINISHED_CALL } = await import("../../src/closeOpenToolCalls.ts");
 
 const file = (id: string) => path.join(home.dir, ".llama-mui", "sessions", id, "session.json");
 const put = async (id: string, session: object) => {
@@ -72,7 +72,8 @@ describe("markInterrupted", () => {
   });
 
   it("closes a started tool call (no question pending) with the may-have-run text", () => {
-    const out = markInterrupted({ plan: [step("s2", "running")], messages: midStep, failed: null }, { status: "running", startedAt: 1 });
+    const started = [midStep[0], { ...midStep[1], toolCalls: [{ ...call, started: true }] }];
+    const out = markInterrupted({ plan: [step("s2", "running")], messages: started, failed: null }, { status: "running", startedAt: 1 });
     expect(out.messages).toHaveLength(3);
     expect(out.messages[2]).toMatchObject({ role: "tool", toolCallId: "call-1", content: MAY_HAVE_RUN_CALL, planStep: "s2" });
     expect(out.failed).toBe("interrupted");
@@ -81,23 +82,23 @@ describe("markInterrupted", () => {
   it("closes a call that was waiting for approval with the did-not-run text", () => {
     const out = markInterrupted(
       { plan: [step("s2", "running")], messages: midStep, failed: null },
-      { status: "waiting", startedAt: 1, ask: waitingRun.ask } as any,
+      { status: "waiting", startedAt: 1, ask: waitingRun.ask, marksCalls: true } as any,
     );
-    expect(out.messages[2]).toMatchObject({ role: "tool", toolCallId: "call-1", content: UNFINISHED_CALL, planStep: "s2" });
+    expect(out.messages[2]).toMatchObject({ role: "tool", toolCallId: "call-1", content: NOT_STARTED_CALL, planStep: "s2" });
   });
 
-  it("with two open calls and one waiting for approval, gives one of each text", () => {
+  it("with two open unmarked calls, both did not run and the model is told to ask again", () => {
     const two = [
       { role: "user", content: "Do it" },
       { role: "assistant", content: "", toolCalls: [call, { id: "call-2", name: "run_command", arguments: "{}" }], planStep: "s2" },
     ];
     const out = markInterrupted(
       { plan: [step("s2", "running")], messages: two, failed: null },
-      { status: "waiting", startedAt: 1, ask: waitingRun.ask } as any,
+      { status: "waiting", startedAt: 1, ask: waitingRun.ask, marksCalls: true } as any,
     );
     expect(out.messages).toHaveLength(4);
-    expect(out.messages[2]).toMatchObject({ toolCallId: "call-1", content: UNFINISHED_CALL });
-    expect(out.messages[3]).toMatchObject({ toolCallId: "call-2", content: MAY_HAVE_RUN_CALL });
+    expect(out.messages[2]).toMatchObject({ toolCallId: "call-1", content: NOT_STARTED_CALL });
+    expect(out.messages[3]).toMatchObject({ toolCallId: "call-2", content: NOT_STARTED_CALL });
   });
 
   it("with the mark: a started command may have run, an unmarked command did not, an unmarked read is safe to repeat", () => {
@@ -108,11 +109,11 @@ describe("markInterrupted", () => {
     ];
     const out = markInterrupted(
       { plan: [step("s2", "running")], messages: [{ role: "user", content: "Do it" }, { role: "assistant", content: "", toolCalls: calls, planStep: "s2" }], failed: null },
-      { status: "running", startedAt: 1 },
+      { status: "running", startedAt: 1, marksCalls: true },
     );
     expect(out.messages.slice(2).map((m: any) => [m.toolCallId, m.content])).toEqual([
       ["c-run", MAY_HAVE_RUN_CALL],
-      ["c-no", UNFINISHED_CALL],
+      ["c-no", NOT_STARTED_CALL],
       ["c-read", SAFE_TO_REPEAT_CALL],
     ]);
   });
@@ -136,6 +137,173 @@ describe("markInterrupted", () => {
 
   it("copes with a session that has no plan and no messages", () => {
     expect(markInterrupted({}, { status: "running", startedAt: 1, kind: "turn" })).toMatchObject({ plan: null, messages: [] });
+  });
+});
+
+describe("the interrupted note, from the audit log", () => {
+  const auditDir = () => path.join(home.dir, ".llama-mui", "audit");
+  const today = () => path.join(auditDir(), `audit-${new Date().toISOString().slice(0, 10)}.log`);
+  const fsLine = (session: string, p: string, extra: object = {}, at = Date.now()) =>
+    JSON.stringify({ t: new Date(at).toISOString(), event: "io.fs", session, path: p, why: "write", ...extra });
+  const writeAudit = async (lines: string[]) => {
+    await mkdir(auditDir(), { recursive: true });
+    await writeFile(today(), lines.join("\n") + "\n");
+  };
+  const started = { id: "call-1", name: "run_command", arguments: JSON.stringify({ command: "npm test -- --watch=false" }), started: true };
+  const inFlight = [
+    { role: "user", content: "Do it" },
+    { role: "assistant", content: "", toolCalls: [started], planStep: "s1" },
+  ];
+  const noteOf = async (id: string) => (await get(id)).plan[0].note as string;
+  const settle = async (id: string, extra: object = {}) => {
+    await put(id, { plan: [step("s1", "running")], messages: inFlight, run: { status: "running", startedAt: Date.now() - 60_000 }, ...extra });
+    await recoverInterruptedRuns();
+    return noteOf(id);
+  };
+
+  beforeEach(async () => {
+    await rm(auditDir(), { recursive: true, force: true });
+  });
+
+  it("names the call that was running and the files this chat changed, not another chat's", async () => {
+    await writeAudit([
+      fsLine("n1", "/work/a.ts"),
+      fsLine("other", "/work/theirs.ts"),
+      fsLine("n1", "/work/failed.ts", { error: "denied" }),
+      fsLine("n1", "/work/old.ts", {}, Date.now() - 3_600_000),
+      fsLine("n1", "/work/b.ts"),
+      "{half a line",
+    ]);
+    const note = await settle("n1");
+    expect(note).toBe("Interrupted by a restart. In progress: run_command (npm test -- --watch=false). Files changed since the run started: /work/a.ts, /work/b.ts.");
+    expect(note).not.toContain("theirs");
+  });
+
+  it("lists a file changed by an earlier step of the same run under 'since the run started'", async () => {
+    await writeAudit([fsLine("n1b", "/work/from-step-1.ts", {}, Date.now() - 30_000)]);
+    const earlier = [
+      { role: "user", content: "Do it" },
+      { role: "assistant", content: "", toolCalls: [{ id: "c0", name: "write_file", arguments: JSON.stringify({ path: "/work/from-step-1.ts" }), started: true }], planStep: "s0" },
+      { role: "tool", toolCallId: "c0", content: "done" },
+      { role: "assistant", content: "", toolCalls: [started], planStep: "s1" },
+    ];
+    await settle("n1b", { messages: earlier, plan: [step("s0", "done"), step("s1", "running")] });
+    const note = (await get("n1b")).plan[1].note as string;
+    expect(note).toContain("Files changed since the run started: /work/from-step-1.ts.");
+    expect(note).not.toContain("since the step started");
+  });
+
+  it("lists ten files and says how many more", async () => {
+    await writeAudit(Array.from({ length: 13 }, (_, i) => fsLine("n2", `/work/f${i}.ts`, {}, Date.now() - 1000 + i)));
+    const note = await settle("n2");
+    expect(note).toContain("/work/f9.ts, and 3 more.");
+    expect(note).not.toContain("/work/f10.ts");
+  });
+
+  it("caps a long command and never shows file contents", async () => {
+    const big = { ...started, arguments: JSON.stringify({ command: "x".repeat(300) }) };
+    const write = { id: "call-2", name: "write_file", arguments: JSON.stringify({ path: "/work/a.ts", content: "SECRET-CONTENT" }), started: true };
+    const note = await settle("n3", { messages: [inFlight[0], { role: "assistant", content: "", toolCalls: [big, write], planStep: "s1" }] });
+    expect(note.length).toBeLessThan(250);
+    expect(note).toContain("write_file (/work/a.ts)");
+    expect(note).not.toContain("SECRET-CONTENT");
+  });
+
+  it("keeps the plain note when the audit can't be read, or the chat has nothing to report", async () => {
+    // A folder where today's file should be: reading it fails.
+    await mkdir(today(), { recursive: true });
+    expect(await settle("n4", { messages: [{ role: "user", content: "Do it" }] })).toBe(INTERRUPTED_NOTE);
+    // The call is still named without the audit.
+    expect(await settle("n5")).toBe("Interrupted by a restart. In progress: run_command (npm test -- --watch=false).");
+  });
+});
+
+describe("a reply that was cut off while streaming", () => {
+  const partial = { role: "assistant", content: "Let me start by loo" };
+  const run = (extra: object = {}) => ({ status: "running", startedAt: 1, streaming: true, request: "reply", ...extra }) as any;
+
+  it("stays on screen, marked cut off (it is left out of the request, see streamChat)", () => {
+    const out = markInterrupted({ plan: [step("s1", "running")], messages: [{ role: "user", content: "Go" }, partial] }, run());
+    expect(out.messages).toEqual([{ role: "user", content: "Go" }, { ...partial, cutOff: true }]);
+  });
+
+  it("is never marked when the request in flight was a step's check, or the record has no kind", () => {
+    const done = [{ role: "user", content: "Go" }, { role: "assistant", content: "All done." }];
+    expect(markInterrupted({ plan: null, messages: done }, run({ request: "check" })).messages).toEqual(done);
+    expect(markInterrupted({ plan: null, messages: done }, run({ request: undefined })).messages).toEqual(done);
+  });
+
+  it("keeps a finished reply when no request was in flight, and one that has calls", () => {
+    const done = [{ role: "user", content: "Go" }, partial];
+    expect(markInterrupted({ plan: null, messages: done }, { status: "running", startedAt: 1 } as any).messages).toEqual(done);
+    const withCall = [{ role: "user", content: "Go" }, { role: "assistant", content: "Running it", toolCalls: [call] }];
+    const out = markInterrupted({ plan: null, messages: withCall }, run());
+    expect(out.messages[1]).toEqual(withCall[1]);
+  });
+
+  it("only the last message is marked: earlier replies are untouched", () => {
+    const msgs = [{ role: "user", content: "Go" }, { role: "assistant", content: "First, done." }, { role: "user", content: "More" }, partial];
+    expect(markInterrupted({ plan: null, messages: msgs }, run()).messages).toEqual([...msgs.slice(0, 3), { ...partial, cutOff: true }]);
+  });
+});
+
+describe("the cut-off mark in the saved chat", () => {
+  it("is written to the file when a reply was in flight, and not when a check was", async () => {
+    const msgs = [{ role: "user", content: "Go" }, { role: "assistant", content: "Half of an ans" }];
+    await put("cut-reply", { plan: null, messages: msgs, run: { status: "running", startedAt: 1, streaming: true, request: "reply", marksCalls: true } });
+    await put("cut-check", { plan: null, messages: msgs, run: { status: "running", startedAt: 1, streaming: true, request: "check", marksCalls: true } });
+    await recoverInterruptedRuns();
+    expect((await get("cut-reply")).messages).toEqual([msgs[0], { ...msgs[1], cutOff: true }]);
+    expect((await get("cut-check")).messages).toEqual(msgs);
+  });
+});
+
+describe("an approved call that never got the started mark", () => {
+  it("is closed as did-not-run, and a call with a result is left as it was", () => {
+    const done = { id: "call-0", name: "write_file", arguments: "{}", started: true };
+    const msgs = [
+      { role: "user", content: "Go" },
+      { role: "assistant", content: "", toolCalls: [done, call], planStep: "s1" },
+      { role: "tool", content: "written", toolCallId: "call-0", planStep: "s1" },
+    ];
+    const out = markInterrupted({ plan: [step("s1", "running")], messages: msgs }, { status: "running", startedAt: 1, marksCalls: true });
+    expect(out.messages.slice(0, 3)).toEqual(msgs);
+    expect(out.messages).toHaveLength(4);
+    expect(out.messages[3]).toMatchObject({ toolCallId: "call-1", content: NOT_STARTED_CALL });
+    expect(NOT_STARTED_CALL).toMatch(/approve it again/);
+  });
+
+  it("a run record without the flag (an older build) says it may have run, in a chat with no mark", () => {
+    const msgs = [
+      { role: "user", content: "Go" },
+      { role: "assistant", content: "", toolCalls: [call], planStep: "s1" },
+    ];
+    const session = { plan: [step("s1", "running")], messages: msgs };
+    const old = markInterrupted(session, { status: "running", startedAt: 1 });
+    expect(old.messages[2]).toMatchObject({ toolCallId: "call-1", content: MAY_HAVE_RUN_CALL });
+    const flagged = markInterrupted(session, { status: "running", startedAt: 1, marksCalls: true });
+    expect(flagged.messages[2]).toMatchObject({ toolCallId: "call-1", content: NOT_STARTED_CALL });
+  });
+
+  it("a record without the flag still trusts a missing mark when the chat already has one", () => {
+    const msgs = [
+      { role: "user", content: "Go" },
+      { role: "assistant", content: "", toolCalls: [{ ...call, id: "c-a", started: true }, call], planStep: "s1" },
+    ];
+    const out = markInterrupted({ plan: [step("s1", "running")], messages: msgs }, { status: "running", startedAt: 1 });
+    expect(out.messages.slice(2).map((m: any) => [m.toolCallId, m.content])).toEqual([
+      ["c-a", MAY_HAVE_RUN_CALL],
+      ["call-1", UNFINISHED_CALL],
+    ]);
+  });
+
+  it("a run started now writes the flag into the run record, and keeps it through updates", async () => {
+    await put("flag-a", { messages: [] });
+    await hub.beginRun("flag-a", { marksCalls: true });
+    await hub.updateRun("flag-a", { status: "waiting", streaming: true });
+    expect(hub.liveRun("flag-a")).toMatchObject({ marksCalls: true });
+    expect((await get("flag-a")).run).toMatchObject({ marksCalls: true });
+    await hub.endRun("flag-a");
   });
 });
 

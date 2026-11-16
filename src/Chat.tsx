@@ -142,6 +142,7 @@ import { stepSummary } from "./stepSummary";
 import { toolCallTitle } from "./toolCallTitle";
 import { groupRounds } from "./stepGroups";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
+import CutOffNote from "./CutOffNote";
 import { createMessageBox, type MessageBox, type PendingDocument, type PendingImage } from "./messageBox";
 import { useVoiceRecorder } from "./useVoiceRecorder";
 import { ChatLayout } from "./ChatLayout";
@@ -3776,6 +3777,8 @@ const MessageBubble = memo(function MessageBubble({
           {parts[0].seenByStep ? `Seen by step ${parts[0].seenByStep}` : "No step saw this: the plan ended first"}
         </Typography>
       )}
+      {/* A reply the app stopped in the middle of: kept as it stood, not sent again. */}
+      {!isUser && <CutOffNote parts={parts} />}
       {errorLine}
       {/* Full-size image preview dialog. */}
       <Dialog open={!!selectedImage} onClose={() => setSelectedImage(null)} maxWidth={false}>
