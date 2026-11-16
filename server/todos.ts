@@ -54,6 +54,7 @@ export function completeText(open: OpenTodo[], id: unknown): string {
 const addTodo: ToolSpec = {
   name: "add_todo",
   group: "todos",
+  effect: "change",
   label: "Add a todo",
   summary: "Save something the user wants to come back to, in this session.",
   definition: fn(
@@ -84,6 +85,7 @@ const addTodo: ToolSpec = {
 const listTodos: ToolSpec = {
   name: "list_todos",
   group: "todos",
+  effect: "none",
   label: "List todos",
   summary: "List this session's open todos.",
   definition: fn("list_todos", "List this session's open todos, each as id: summary.", {
@@ -98,6 +100,7 @@ const listTodos: ToolSpec = {
 const completeTodo: ToolSpec = {
   name: "complete_todo",
   group: "todos",
+  effect: "change",
   label: "Complete a todo",
   summary: "Mark one of this session's todos done.",
   definition: fn("complete_todo", "Mark an open todo done, by the id list_todos shows.", {

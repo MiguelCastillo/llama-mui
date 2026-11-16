@@ -49,6 +49,13 @@ export interface RunnerHandle {
   // server/usageLog.ts). Injected by the server's runner; a handle without it
   // records nothing. It never throws: a log that can't be written is skipped.
   recordUsage?: (rec: TurnUsage) => void | Promise<void>;
+  // Saves the run's copy of the chat now, to the disk for good, and resolves
+  // once it is written; rejects if the save failed. Injected by the server's
+  // runner; a handle without it (tests, the page) records nothing around calls.
+  flush?: () => Promise<void>;
+  // Whether a tool call changes anything outside the chat (server/toolkit.ts
+  // effectOf). Injected by the server's runner.
+  callEffect?: (name: string, args: string) => "none" | "change";
 }
 
 // What one finished turn consumed, summed over its requests to the model.

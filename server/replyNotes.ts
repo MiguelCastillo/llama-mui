@@ -33,6 +33,8 @@ function toolFor(kind: NoteKind): ToolSpec {
   return {
     name: kind.tool,
     group: "replyNotes",
+    // The server only checks the text; nothing outside the reply changes.
+    effect: "none",
     label: kind.toolLabel,
     summary: kind.toolSummary,
     definition: fn(kind.tool, noteDescription(kind), {

@@ -199,6 +199,7 @@ async function startsFor(scope: Scope, raw: unknown): Promise<string[]> {
 const listDirectory: ToolSpec = {
   name: "list_directory",
   group: "disk",
+  effect: "none",
   label: "List folders",
   summary: "See which files and folders a folder contains, with sizes.",
   definition: fn(
@@ -233,6 +234,7 @@ const listDirectory: ToolSpec = {
 const readTextFile: ToolSpec = {
   name: "read_file",
   group: "disk",
+  effect: "none",
   label: "Read files",
   summary: `Read text files, ${DEFAULT_READ_LINES} lines at a time. Binary files and files over ${formatSize(MAX_READ_FILE_BYTES)} are refused.`,
   definition: fn(
@@ -272,6 +274,7 @@ const readTextFile: ToolSpec = {
 const findFiles: ToolSpec = {
   name: "find_files",
   group: "disk",
+  effect: "none",
   label: "Find files",
   summary: "Find files and folders by name, like *.md or lisbon*.",
   definition: fn(
@@ -303,6 +306,7 @@ const findFiles: ToolSpec = {
 const grep: ToolSpec = {
   name: "grep",
   group: "disk",
+  effect: "none",
   label: "Grep",
   summary: "Search inside files with a regular expression, optionally only in files like *.ts.",
   definition: fn(
@@ -352,6 +356,7 @@ const grep: ToolSpec = {
 const locatePath: ToolSpec = {
   name: "locate_path",
   group: "disk",
+  effect: "none",
   label: "Ask where things are",
   summary: "Ask you to pick a file or folder the model only knows by name, like \"the llama-mui project\".",
   definition: fn(

@@ -19,6 +19,7 @@ import {
   type ToolContext,
   ToolError,
   type ToolSpec,
+  effectOf,
 } from "./toolkit.ts";
 import { FETCH_TOOLS } from "./fetch.ts";
 import { INSPECT_TOOLS } from "./inspect.ts";
@@ -187,6 +188,20 @@ const TOOLS: ToolSpec[] = withAudit([
 
 // The registry's (wrapped) specs, for tests that check every one is covered.
 export const toolSpecs = (): readonly ToolSpec[] => TOOLS;
+
+// The effect of one call, from the tool's name and its arguments as text. An
+// unknown tool counts as a change: the cautious answer.
+export function effectOfCall(name: string, args: string): "none" | "change" {
+  const spec = TOOLS.find((t) => t.name === name);
+  if (!spec) return "change";
+  let parsed: unknown = {};
+  try {
+    parsed = args.trim() ? JSON.parse(args) : {};
+  } catch {
+    // Bad arguments: the call is refused before it runs, whatever it is.
+  }
+  return effectOf(spec, parsed);
+}
 
 // Every tool name the app has, whether or not it is turned off in Settings.
 export const allToolNames = (): string[] => TOOLS.map((t) => t.name);

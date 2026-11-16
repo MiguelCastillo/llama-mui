@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "../api";
+import { MAY_HAVE_RUN_CALL } from "../closeOpenToolCalls";
 import { withSessionDefaults } from "../sessionDefaults";
 
 describe("withSessionDefaults", () => {
@@ -16,6 +17,20 @@ describe("withSessionDefaults", () => {
       pastPlans: [],
       todos: [],
     });
+  });
+
+  it("keeps the started mark on a tool call, and closes a marked open call as may-have-run", () => {
+    const messages = [
+      { role: "user", content: "go" },
+      { role: "assistant", content: "", toolCalls: [{ id: "a", name: "run_command", arguments: "{}", started: true }, { id: "b", name: "read_file", arguments: "{}" }] },
+      { role: "tool", content: "ok", toolCallId: "a" },
+      { role: "tool", content: "ok", toolCallId: "b" },
+    ];
+    const s = withSessionDefaults({ id: "x", title: "t", model: "m", messages } as unknown as Session);
+    expect(s.messages).toEqual(messages);
+    const open = withSessionDefaults({ id: "x", title: "t", model: "m", messages: messages.slice(0, 2) } as unknown as Session);
+    expect(open.messages[1].toolCalls).toEqual(messages[1].toolCalls);
+    expect(open.messages[2]).toMatchObject({ toolCallId: "a", content: MAY_HAVE_RUN_CALL });
   });
 
   it("loads an old session whose plan has no summaries", () => {

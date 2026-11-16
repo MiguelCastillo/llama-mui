@@ -29,6 +29,7 @@ import type { ChatMessage, PlanStep } from "../src/api.ts";
 import { callsWaitingForAnswer, closeOpenToolCalls } from "../src/closeOpenToolCalls.ts";
 import { sessionsDir } from "./disk.ts";
 import * as hub from "./runHub.ts";
+import { effectOfCall } from "./tools.ts";
 import { reportInterrupted } from "./threadReport.ts";
 
 export const INTERRUPTED_NOTE = "Interrupted by a restart";
@@ -50,7 +51,7 @@ export function markInterrupted(session: any, run: hub.RunState): any {
   const before: ChatMessage[] = Array.isArray(session.messages) ? session.messages : [];
   // A run that stopped with a question pending never started that call.
   const waitingCalls = run.ask ? callsWaitingForAnswer(before) : [];
-  const messages = [...closeOpenToolCalls(before, waitingCalls), ...unseen];
+  const messages = [...closeOpenToolCalls(before, waitingCalls, (c) => effectOfCall(c.name, c.arguments)), ...unseen];
 
   const cutOff = run.kind === "turn" || run.streaming === true || wasRunning;
   // Messages waiting in the queue are kept, and paused: nothing is sent by itself after a restart.

@@ -63,6 +63,7 @@ function parseResults(html: string): Result[] {
 const webSearch: ToolSpec = {
   name: "web_search",
   group: "web",
+  effect: "none",
   label: "Web search",
   summary: "Search the web with DuckDuckGo. Returns titles, links and short snippets, not whole pages.",
   definition: fn(

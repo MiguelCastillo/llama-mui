@@ -16,7 +16,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 const hub = await import("../runHub.ts");
 const { INTERRUPTED_NOTE, markInterrupted, recoverInterruptedRuns } = await import("../restart.ts");
-const { UNFINISHED_CALL, MAY_HAVE_RUN_CALL } = await import("../../src/closeOpenToolCalls.ts");
+const { UNFINISHED_CALL, MAY_HAVE_RUN_CALL, SAFE_TO_REPEAT_CALL } = await import("../../src/closeOpenToolCalls.ts");
 
 const file = (id: string) => path.join(home.dir, ".llama-mui", "sessions", id, "session.json");
 const put = async (id: string, session: object) => {
@@ -98,6 +98,23 @@ describe("markInterrupted", () => {
     expect(out.messages).toHaveLength(4);
     expect(out.messages[2]).toMatchObject({ toolCallId: "call-1", content: UNFINISHED_CALL });
     expect(out.messages[3]).toMatchObject({ toolCallId: "call-2", content: MAY_HAVE_RUN_CALL });
+  });
+
+  it("with the mark: a started command may have run, an unmarked command did not, an unmarked read is safe to repeat", () => {
+    const calls = [
+      { id: "c-run", name: "run_command", arguments: "{}", started: true },
+      { id: "c-no", name: "run_command", arguments: "{}" },
+      { id: "c-read", name: "read_file", arguments: "{}" },
+    ];
+    const out = markInterrupted(
+      { plan: [step("s2", "running")], messages: [{ role: "user", content: "Do it" }, { role: "assistant", content: "", toolCalls: calls, planStep: "s2" }], failed: null },
+      { status: "running", startedAt: 1 },
+    );
+    expect(out.messages.slice(2).map((m: any) => [m.toolCallId, m.content])).toEqual([
+      ["c-run", MAY_HAVE_RUN_CALL],
+      ["c-no", UNFINISHED_CALL],
+      ["c-read", SAFE_TO_REPEAT_CALL],
+    ]);
   });
 
   it("puts a message no step had seen into the chat, marked as not seen", () => {

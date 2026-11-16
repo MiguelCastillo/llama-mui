@@ -272,6 +272,7 @@ async function openThread(chatId: string, which: unknown, verb: string): Promise
 const readThread: ToolSpec = {
   name: "read_thread",
   group: "threads",
+  effect: "none",
   label: "Read a thread",
   summary: "Read how a thread's plan went: outcome, steps, result, files.",
   definition: fn(
@@ -322,6 +323,7 @@ const readThread: ToolSpec = {
 const summarizeThread: ToolSpec = {
   name: "summarize_thread",
   group: "threads",
+  effect: "none",
   label: "Summarize a thread",
   summary: "Ask a thread's model for a summary of how its plan went. Costs money: it sends the whole thread to a model.",
   definition: fn(

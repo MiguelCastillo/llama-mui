@@ -205,6 +205,8 @@ async function inspect(url: URL, script: string | undefined, chrome: string): Pr
 const inspectPage: ToolSpec = {
   name: "inspect_page",
   group: "web",
+  // Only a script can change anything in the page or behind it.
+  effect: (args) => (typeof args?.script === "string" && args.script.trim() ? "change" : "none"),
   label: "Inspect pages in a browser",
   summary: "Open a page in Chrome and read its title, visible structure and a script's result.",
   definition: fn(

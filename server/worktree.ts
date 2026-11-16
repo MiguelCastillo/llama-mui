@@ -102,6 +102,7 @@ async function checkRepoLocation(repo: string, given: string) {
 const createWorktree: ToolSpec = {
   name: "create_worktree",
   group: "worktree",
+  effect: "change",
   label: "Create worktrees without asking",
   summary:
     "Turning this on lets the model create git worktrees in this session's own folder without asking, which also adds a branch to the repo.",
@@ -163,6 +164,7 @@ const createWorktree: ToolSpec = {
 const removeWorktree: ToolSpec = {
   name: "remove_worktree",
   group: "worktree",
+  effect: "change",
   label: "Remove worktrees",
   summary: "Remove one of this session's worktrees; its branch and commits are kept.",
   definition: fn(

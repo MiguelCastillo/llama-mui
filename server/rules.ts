@@ -151,6 +151,7 @@ const hunks = (file: string, before: string, after: string) => {
 const addRule: ToolSpec = {
   name: "add_rule",
   group: "rules",
+  effect: "change",
   label: "Add a rule",
   summary: "Add one line to the standing rules in instructions.md, once the user approves it.",
   definition: fn(

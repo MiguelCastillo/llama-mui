@@ -115,6 +115,7 @@ async function commit(
 const writeTextFile: ToolSpec = {
   name: "write_file",
   group: "write",
+  effect: "change",
   label: "Write files",
   summary: "Create a file, or replace everything in one.",
   definition: fn(
@@ -151,6 +152,7 @@ const writeTextFile: ToolSpec = {
 const editTextFile: ToolSpec = {
   name: "edit_file",
   group: "write",
+  effect: "change",
   label: "Edit files",
   summary: "Replace exact text in a file, for changes to part of it.",
   definition: fn(

@@ -59,6 +59,7 @@ export function skillsPromptText(skills: Skill[]): string {
 const loadSkill: ToolSpec = {
   name: "load_skill",
   group: "skills",
+  effect: "none",
   label: "Open skills",
   summary: "Read a skill's instructions.",
   definition: fn(

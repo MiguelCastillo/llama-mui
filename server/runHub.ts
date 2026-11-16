@@ -184,14 +184,14 @@ export interface Saved {
 // server's: whatever the caller's copy says is replaced, by the live run's
 // state (gone once it has ended: `runOver`), or by what the file already had (so a stale record is kept for a
 // restart to find, and never made up by a page).
-async function commit(id: string, session: any, prev: any | null, runOver = false): Promise<Saved> {
+async function commit(id: string, session: any, prev: any | null, runOver = false, sync = false): Promise<Saved> {
   const revision = revisionOf(prev) + 1;
   const out = { ...session, revision };
   const live = runs.get(id);
   const run = live ? copyRun(live.state) : runOver ? undefined : prev?.run;
   if (run) out.run = run;
   else delete out.run;
-  await writeSession(id, out);
+  await writeSession(id, out, sync ? { sync } : {});
   publish({ type: "saved", id, data: { summary: summaryOf(out), revision } });
   return { session: out, revision };
 }
@@ -238,11 +238,12 @@ export function edit(id: string, change: (session: any) => void): Promise<Saved>
 }
 
 // The run's own save: writes its in-memory session as the next revision.
-export function save(id: string, session: any): Promise<Saved> {
+// `sync`: resolves only once the disk has it (a write that must outlive a crash).
+export function save(id: string, session: any, opts: { sync?: boolean } = {}): Promise<Saved> {
   return locked(id, async () => {
     const prev = await readSession(id);
     if (!prev) throw new HttpError(404, "No such session");
-    return commit(id, session, prev);
+    return commit(id, session, prev, false, !!opts.sync);
   });
 }
 

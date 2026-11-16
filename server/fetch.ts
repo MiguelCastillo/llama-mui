@@ -57,6 +57,7 @@ async function readCapped(res: Response): Promise<{ text: string; cut: boolean }
 const fetchUrl: ToolSpec = {
   name: "fetch_url",
   group: "web",
+  effect: "none",
   label: "Open web pages",
   summary: "Read a web page as text.",
   definition: fn(

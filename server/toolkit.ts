@@ -53,6 +53,24 @@ export interface ToolSpec {
   // a host, a size). Never the contents of a file or a diff. Every call is
   // logged without this; it only adds detail.
   audit?: (args: any) => Record<string, unknown>;
+  // Whether a call changes anything outside the chat: "none" is safe to repeat
+  // (reads, searches, fetches); "change" must be recorded before it starts so a
+  // crash can tell whether it may have run. May depend on the arguments.
+  // Required, so a new tool has to decide.
+  effect: ToolEffect | ((args: any) => ToolEffect);
+}
+
+export type ToolEffect = "none" | "change";
+
+// The effect of one call of a tool. A function that throws or answers
+// something odd counts as "change": the cautious answer.
+export function effectOf(spec: Pick<ToolSpec, "effect">, args: any): ToolEffect {
+  try {
+    const e = typeof spec.effect === "function" ? spec.effect(args) : spec.effect;
+    return e === "none" ? "none" : "change";
+  } catch {
+    return "change";
+  }
 }
 
 // Adds plain facts to the call's audit line (see ToolContext.noted). Does

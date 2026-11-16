@@ -159,6 +159,8 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         h.setAbort(c);
       },
       killSignal: h.killSignal,
+      flush: h.flush,
+      callEffect: h.callEffect ? (c) => h.callEffect!(c.name, c.arguments) : undefined,
       // Chat refreshes its own model list; there is nothing to refresh here.
       refreshModels: () => {},
       askUser: h.askUser,

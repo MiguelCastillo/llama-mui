@@ -66,15 +66,17 @@ export async function readSession(id: string): Promise<any | null> {
 }
 
 // Write-then-rename so a crash mid-write can't leave a truncated file.
-function writeText(file: string, text: string) {
-  return writeAtomicBatched(file, text, { mode: 0o600, dirMode: 0o700 }, { why: "session.save" });
+// `sync`: not resolved until the disk has it (see BatchedOptions).
+function writeText(file: string, text: string, sync = false) {
+  return writeAtomicBatched(file, text, { mode: 0o600, dirMode: 0o700, ...(sync ? { sync } : {}) }, { why: "session.save" });
 }
 
 // Holds the lock on one session's file while `fn` reads and writes it, so
 // another llama-mui process on this folder can't write in between (fileLock.ts).
 export const lockSession = <T>(id: string, fn: () => Promise<T>): Promise<T> => withFileLock(`session-${sessionFolderName(id)}`, fn);
 
-export const writeSession = (id: string, session: unknown) => writeText(sessionFile(id), JSON.stringify(session));
+export const writeSession = (id: string, session: unknown, opts: { sync?: boolean } = {}) =>
+  writeText(sessionFile(id), JSON.stringify(session), opts.sync);
 
 // Deletes a session's session.json. A worktree in its folder is the user's
 // work, so the folder only goes if it is empty. Callers go through the hub

@@ -77,6 +77,10 @@ export interface ToolCall {
   name: string;
   // JSON text, exactly as the model produced it.
   arguments: string;
+  // Set to true, and saved, once the call was approved and is about to run.
+  // After a crash it tells a call that began from one that never did. Never
+  // sent to the model. Calls saved before this was recorded have none.
+  started?: boolean;
 }
 
 export interface ChatMessage {

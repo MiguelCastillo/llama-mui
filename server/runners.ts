@@ -62,13 +62,14 @@ import * as hub from "./runHub.ts";
 import { readSession, revisionOf } from "./sessionFile.ts";
 import { type AskReport, askModel, reportToParent } from "./threadReport.ts";
 import { appendUsage } from "./usageLog.ts";
+import { effectOfCall } from "./tools.ts";
 
 export interface RunnerDeps {
   // Runs the plan; runPlan unless a test passes a fake.
   run?: (callbacks: RunPlanCallbacks) => Promise<void>;
   // Saves the session (the debounced saves while it runs); hub.save unless a
   // test passes a fake. The final save is the hub's, when the run ends.
-  save?: (session: Session) => Promise<unknown>;
+  save?: (session: Session, opts?: { sync?: boolean }) => Promise<unknown>;
   // Builds the function that runs one reply (see RunPlanCallbacks.reply);
   // makeReply in src/runnerReply.ts unless a test passes a fake.
   reply?: (handle: RunnerHandle) => RunPlanCallbacks["reply"];
@@ -235,6 +236,40 @@ function persist(e: Entry) {
         persist(e);
       }
     });
+}
+
+// Saves the run's copy now, with the disk's own confirmation (fsync of the file
+// and its folder), and resolves once it is written; rejects if the save failed.
+// It goes through the same one-save-at-a-time path as the timer saves: it waits
+// for one in flight, and a timer save that comes meanwhile waits for it. A run
+// that has ended has nothing to flush: the hub's final save was the last write.
+async function flush(e: Entry): Promise<void> {
+  clearSaveTimers(e);
+  while (e.saving) await e.saving;
+  if (e.ended) return;
+  e.dirty = false;
+  let failure: unknown;
+  const saving = e.deps
+    .save(e.session, { sync: true })
+    .then(() => {})
+    .catch((err) => {
+      failure = err;
+      e.dirty = true;
+    })
+    .finally(() => {
+      e.saving = null;
+      if (e.saveAgain) {
+        e.saveAgain = false;
+        persist(e);
+      }
+    });
+  e.saving = saving;
+  await saving;
+  if (failure) {
+    e.error = `Couldn't save the session: ${(failure as any)?.message ?? failure}`;
+    sync(e);
+    throw failure;
+  }
 }
 
 function scheduleSave(e: Entry) {
@@ -571,7 +606,7 @@ async function launch(
   const resolved: ResolvedDeps & { readImage: typeof import("../server/images.ts").read } = {
     run: deps.run ?? runPlan,
     next: deps.next,
-    save: deps.save ?? ((s) => hub.save(id, s)),
+    save: deps.save ?? ((s, opts) => hub.save(id, s, opts)),
     reply: deps.reply ?? makeReply,
     modelLoaded: deps.modelLoaded ?? modelLoaded,
     report: deps.report ?? askModel,
@@ -629,6 +664,8 @@ async function launch(
         ? { ...e.session, contextStart: plainCount(e.session.messages, e.session.contextStart ?? 0) }
         : e.session,
     edit: (fn) => change(e, fn),
+    flush: () => flush(e),
+    callEffect: effectOfCall,
     setError: (err) => {
       if (e.error === err) return;
       e.error = err;

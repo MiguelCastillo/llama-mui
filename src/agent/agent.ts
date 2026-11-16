@@ -118,6 +118,12 @@ export interface RunTurnCallbacks {
   // Aborted by Stop everything (a forced stop): cuts short a tool call that is
   // running, which a plain Stop lets finish.
   killSignal?: AbortSignal;
+  // Saves the chat to disk now and resolves once it is written. Only the
+  // server's run has one; without it nothing is recorded around a call.
+  flush?: () => Promise<void>;
+  // Whether this call changes anything outside the chat (see ToolSpec.effect).
+  // Without it every call counts as a read.
+  callEffect?: (call: ToolCall) => "none" | "change";
   refreshModels: (id: string) => void;
   askUser: (ask: { needsAccess: AccessRequest } | { needsApproval: Approval } | { needsLocation: { description: string; kind: AttachmentTarget["kind"]; canSetWorkingDir?: boolean } }, signal: AbortSignal) => Promise<boolean | "plan" | Picked[]>;
   attach: (a: Attachment) => void;
@@ -360,6 +366,36 @@ export async function runTurn(
         if (!isNoteTool(call.name)) ran.set(key, times + 1);
         const openList = () => openTodos(todosRef.current).map(({ id, summary }) => ({ id, summary }));
 
+        // A call that changes something is recorded as started, and saved to
+        // disk, before the tool is asked to run; and saved again once its
+        // result is in. If the tool turns out to need an answer first (nothing
+        // ran), the mark is taken off and saved, so a chat that waits for an
+        // approval is not mistaken for one that ran.
+        const records = !!callbacks.flush && callbacks.callEffect?.(call) === "change";
+        const setStarted = async (on: boolean) => {
+          history = history.map((m, i) =>
+            i === replyAt
+              ? {
+                  ...m,
+                  toolCalls: m.toolCalls?.map((c) => {
+                    if (c.id !== call.id) return c;
+                    const { started: _drop, ...rest } = c;
+                    return on ? { ...rest, started: true } : rest;
+                  }),
+                }
+              : m,
+          );
+          setMessages([...forgotten, ...history]);
+          await callbacks.flush!();
+        };
+        const runRecorded = async (context: Parameters<typeof runTool>[1]) => {
+          if (!records) return runTool(call, context, killSignal);
+          await setStarted(true);
+          const out = await runTool(call, context, killSignal);
+          if (!("result" in out)) await setStarted(false);
+          return out;
+        };
+
         try {
           // The summary is written from what the model knows: no tool runs.
           if (compact) throw new Error(COMPACT_REFUSAL);
@@ -376,7 +412,7 @@ export async function runTurn(
             );
           }
 
-          let outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model }, killSignal);
+          let outcome = await runRecorded({ chatId, workingDir, attachments: attached, todos: openList(), connectorId, model });
           while (!("result" in outcome)) {
             // Only a chat with no working directory offers to make the folder one.
             if ("needsLocation" in outcome && workingDir === null && outcome.needsLocation.kind === "folder") {
@@ -431,7 +467,7 @@ export async function runTurn(
               }
               attached = [...attached, target.path];
               attach({ path: target.path, kind: target.kind, source: "request" });
-              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model }, killSignal);
+              outcome = await runRecorded({ chatId, workingDir, attachments: attached, todos: openList(), connectorId, model });
             } else {
               const approval = (outcome as any).needsApproval;
               if (!answer) {
@@ -448,7 +484,7 @@ export async function runTurn(
                 break;
               }
               if (approval.type === "change") diff = approval.diff;
-              outcome = await runTool(call, { chatId, workingDir, attachments: attached, todos: openList(), connectorId, model, approved: approval as Approval }, killSignal);
+              outcome = await runRecorded({ chatId, workingDir, attachments: attached, todos: openList(), connectorId, model, approved: approval as Approval });
             }
           }
           result = outcome.result;
@@ -519,6 +555,8 @@ export async function runTurn(
           },
         ];
         setMessages([...forgotten, ...history]);
+        // The tool has already run: a failed save here is reported by the run, and must not end the turn.
+        if (records) await callbacks.flush!().catch(() => {});
       }
 
       if (planned || noted) {

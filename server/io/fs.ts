@@ -13,7 +13,7 @@
 //
 // Reads are not wrapped: they change nothing.
 
-import { appendFile, mkdir as nodeMkdir, mkdtemp, rename as nodeRename, rm, rmdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir as nodeMkdir, mkdtemp, open, rename as nodeRename, rm, rmdir, writeFile } from "node:fs/promises";
 import { mkdirSync as nodeMkdirSync, writeFileSync } from "node:fs";
 import { dirname as dirnameOf } from "node:path";
 import { audit, noteSession } from "../audit.ts";
@@ -180,7 +180,10 @@ async function batched(why: string, path: string, bytes: number, fn: () => Promi
   tally(why, path, bytes);
 }
 
-export type BatchedOptions = { mode?: number; dirMode?: number };
+// `sync`: wait until the disk has the data (the file, then its folder after the
+// rename) before resolving, so the write survives a crash or power loss. Slower
+// (about 9 ms on a 1.7 MB chat), so only for the writes that must outlive one.
+export type BatchedOptions = { mode?: number; dirMode?: number; sync?: boolean };
 
 // Writes `file` through a temporary file and a rename, so a crash mid-write
 // cannot leave it cut short; makes its folder first. Counts as one write of `file`.
@@ -188,8 +191,27 @@ export function writeAtomicBatched(file: string, data: string, options: BatchedO
   return batched(why, file, sizeOf(data), async () => {
     await nodeMkdir(dirnameOf(file), { recursive: true, mode: options.dirMode });
     const tmp = `${file}.tmp`;
-    await writeFile(tmp, data, { mode: options.mode });
+    if (options.sync) {
+      const handle = await open(tmp, "w", options.mode);
+      try {
+        await handle.writeFile(data);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } else {
+      await writeFile(tmp, data, { mode: options.mode });
+    }
     await nodeRename(tmp, file);
+    if (options.sync) {
+      // The rename lives in the folder: it needs its own sync.
+      const dir = await open(dirnameOf(file), "r");
+      try {
+        await dir.sync();
+      } finally {
+        await dir.close();
+      }
+    }
   });
 }
 

@@ -166,6 +166,8 @@ export async function exec(command: string, cwd: string, signal?: AbortSignal, w
 const runCommand: ToolSpec = {
   name: "run_command",
   group: "terminal",
+  // The read_only argument is only the model's claim: every command counts.
+  effect: "change",
   label: "Run commands",
   summary: `Run a shell command after you approve it, for up to ${TIMEOUT_MS / 60000} minutes.`,
   definition: fn(

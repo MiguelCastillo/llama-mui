@@ -31,6 +31,7 @@ export const planInstructions =
 const updatePlan: ToolSpec = {
   name: "update_plan",
   group: "plan",
+  effect: "change",
   label: "Plan tasks",
   summary: "Write a task's steps as a checklist that chat runs and checks one step at a time.",
   definition: fn(
