@@ -1,4 +1,5 @@
-import { type Capabilities, type Connection, InvalidOptions, type ModelOptions, type Purpose } from "./types.ts";
+import { completionsWire, messagesWire } from "./wires.ts";
+import { type Capabilities, type Connection, InvalidOptions, type ModelOptions, type Purpose, readErrorMessage } from "./types.ts";
 
 // llama.cpp. Think asks the chat template for a reasoning phase before the
 // answer (llama.cpp ignores `thinking: {type: "disabled"}`; its template takes
@@ -37,6 +38,8 @@ export function readProps(props: any, fromList?: Capabilities): Capabilities {
 }
 
 export const llama: Connection = {
+  // llama.cpp serves both: the Completions wire for "openai", else Messages.
+  wire: (api) => (api === "openai" ? completionsWire : messagesWire),
   reasoningIsSummary: false,
   needsCapabilities: true,
   capabilitiesPath: (model) => `/props?model=${encodeURIComponent(model)}&autoload=false`,
@@ -62,4 +65,7 @@ export const llama: Connection = {
   // llama.cpp has no server-side clearing, so the request is built without
   // the old tool results (toolResults.ts).
   clearsToolResultsHere: true,
+  // llama.cpp has nothing worth retrying.
+  maxRetries: 0,
+  errorMessage: readErrorMessage,
 };

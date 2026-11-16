@@ -4,6 +4,9 @@
 // holds all of it; the rest of the app asks (see index.ts) and never checks
 // the kind itself. No React, no I/O: pure, so the page and the server share it.
 
+import type { Api, ChatReply, ChatRequest, StreamDelta, Usage } from "../api.ts";
+import type { Tap } from "./tap.ts";
+
 // How much effort Claude puts into a reply (the API's output_config.effort).
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
@@ -64,7 +67,40 @@ export type Knob =
 // Settings that don't suit the model (the message says what to change).
 export class InvalidOptions extends Error {}
 
+// What a wire reads out of a reply stream, whichever wire it is: the pieces
+// the rest of the app understands. Later layers have wires produce these;
+// for now they name the shared vocabulary.
+export type StreamEvent =
+  | { type: "text"; text: string } // words of the reply
+  | { type: "thinking"; text: string } // reasoning words
+  | { type: "call"; id: string; name: string; arguments: string } // a whole tool call, arguments as JSON text
+  | { type: "usage"; usage: Usage }
+  | { type: "error"; message: string } // the provider ended the stream with an error
+  | { type: "stop"; reason?: string }; // the reply ended, with the provider's reason
+
+// What a wire is handed besides the request.
+export interface WireContext {
+  // How many of the newest tool results go whole, for a server that clears the rest.
+  keepToolResults?: number;
+}
+
+// One way of talking to a server: builds the request and reads the stream.
+// Several connections can share a wire (llama.cpp serves both).
+export interface Wire {
+  name: Api;
+  // The path a request to this wire goes to on the server.
+  path: string;
+  // A fresh reader of this wire's stream lines for the server's log (see tap.ts).
+  tap(): Tap;
+  // Streams one reply, calling onDelta for each piece of text or thinking.
+  stream(req: ChatRequest, onDelta: (d: StreamDelta) => void, signal: AbortSignal, ctx?: WireContext): Promise<ChatReply>;
+}
+
 export interface Connection {
+  // The wire this connection uses for an API ("anthropic" when the API is
+  // left out, as everywhere). A connection that doesn't serve the API gets
+  // the Messages wire, as before.
+  wire(api?: Api): Wire;
   // What the `reasoning` this connection streams is. True: a short summary
   // written to be read (Claude's), so the chat shows it open in the steps and
   // its last line on the live line. False: the model's raw thoughts (Qwen's),
@@ -98,6 +134,20 @@ export interface Connection {
   // Whether the app leaves old tool results out of the request itself (see
   // clearOldToolResults in toolResults.ts). False where the server does it.
   clearsToolResultsHere: boolean;
+  // How many times the SDK retries a failed request (never a stream under
+  // way). Undefined leaves the SDK's own default.
+  maxRetries: number | undefined;
+  // The message inside a provider's error body (the body as the SDK parsed
+  // it), or `fallback` when the body has none.
+  errorMessage(body: unknown, fallback: string): string;
+}
+
+// llama.cpp's errors are {error: {message}}, Anthropic's {type, error: {message}};
+// the OpenAI SDK hands over the inner object, {message}. All three are read here.
+export function readErrorMessage(body: unknown, fallback: string): string {
+  const b = body as any;
+  const found = b?.error?.message ?? b?.message;
+  return typeof found === "string" && found ? found : fallback;
 }
 
 // Reads a settings object that may be older: before ModelOptions a message

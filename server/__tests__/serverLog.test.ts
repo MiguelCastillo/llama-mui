@@ -18,6 +18,7 @@ vi.mock("node:os", async (importOriginal) => {
 const { load, save } = await import("../store.ts");
 const { connectorRoutes } = await import("../connectors.ts");
 const { usageReader } = await import("../upstreamLog.ts");
+const { tapForPath } = await import("../../src/connections/tap.ts");
 
 // A Messages API stream as Anthropic sends it: usage in message_start (the
 // input side) and message_delta (the output so far; the last one is the total).
@@ -313,6 +314,45 @@ describe("usageReader", () => {
     r.feed("data: " + "x".repeat(70 * 1024));
     r.feed("\n" + MESSAGES_STREAM);
     expect(r.result()?.output).toBe(480);
+  });
+});
+
+describe("the Chat Completions reader", () => {
+  const LLAMA =
+    'data: {"model":"qwen","choices":[{"delta":{"content":"hi"},"finish_reason":null}]}\n\n' +
+    'data: {"model":"qwen","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n' +
+    'data: {"model":"qwen","choices":[],"timings":{"cache_n":100,"prompt_n":20,"predicted_n":7}}\n\n' +
+    "data: [DONE]\n\n";
+
+  it("reads model, counts and stop reason from llama.cpp's timings, one character at a time included", () => {
+    const r = tapForPath("/v1/chat/completions")!;
+    for (const ch of LLAMA) r.feed(ch);
+    expect(r.result()).toEqual({ model: "qwen", input: 20, cacheRead: 100, output: 7, stopReason: "stop" });
+  });
+
+  it("reads OpenAI-style usage, taking cached tokens out of the input", () => {
+    const r = tapForPath("/v1/chat/completions")!;
+    r.feed('data: {"model":"gpt","choices":[],"usage":{"prompt_tokens":50,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":30}}}\n');
+    expect(r.result()).toMatchObject({ input: 20, cacheRead: 30, output: 4 });
+  });
+
+  it("keeps an error chunk with its type and a cut message", () => {
+    const r = tapForPath("/v1/chat/completions")!;
+    r.feed('data: {"error":{"type":"server_error","message":"' + "x".repeat(500) + '"}}\n');
+    const got = r.result();
+    expect(got?.streamError?.type).toBe("server_error");
+    expect(got?.streamError?.message).toHaveLength(200);
+    expect(got?.empty).toBeUndefined();
+  });
+
+  it("marks a reply with 0 output tokens as empty", () => {
+    const r = tapForPath("/v1/chat/completions")!;
+    r.feed('data: {"model":"qwen","choices":[],"timings":{"cache_n":0,"prompt_n":9,"predicted_n":0}}\n');
+    expect(r.result()?.empty).toBe(true);
+  });
+
+  it("has no reader for other paths", () => {
+    expect(tapForPath("/v1/models")).toBeUndefined();
   });
 });
 

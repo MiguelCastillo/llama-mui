@@ -1,5 +1,6 @@
 
-import { EFFORTS, type Capabilities, type Connection, type Effort, InvalidOptions, isEffort } from "./types.ts";
+import { messagesWire } from "./wires.ts";
+import { EFFORTS, type Capabilities, type Connection, type Effort, InvalidOptions, isEffort, readErrorMessage } from "./types.ts";
 
 // Anthropic's API. What a model takes comes from its own capabilities (the
 // Models API: GET /v1/models/<id>), so a model only gets the settings it
@@ -67,6 +68,8 @@ export function readCapabilities(model: any): Capabilities {
 }
 
 export const anthropic: Connection = {
+  // Anthropic serves only Messages, whatever the API says.
+  wire: () => messagesWire,
   reasoningIsSummary: true,
   needsCapabilities: true,
   capabilitiesPath: (model) => `/v1/models/${encodeURIComponent(model)}`,
@@ -127,4 +130,7 @@ export const anthropic: Connection = {
   headers: (caps): Record<string, string> => (caps?.clearsToolResults ? { "anthropic-beta": CONTEXT_EDITING_BETA } : {}),
   // Anthropic clears them (context_management in fields).
   clearsToolResultsHere: false,
+  // The SDK retries Anthropic's 429s and 529s; its default stands.
+  maxRetries: undefined,
+  errorMessage: readErrorMessage,
 };

@@ -14,14 +14,15 @@
 // (plan runs and replies run here). Only what is safe to keep goes in: the
 // connector's name, the path without its query, and numbers.
 //
-// A Messages API reply (`/v1/messages`, streamed) also gets the model and its
-// token counts, read from the stream's own usage events (see readUsage):
+// A streamed reply on a wire's path (`/v1/messages` or `/v1/chat/completions`)
+// also gets the model and its token counts, read by that wire's tap from the
+// stream's own usage events:
 // `tokens` is { input, cacheRead, cacheWrite, output }, which is what the bill
 // is made of (cacheWrite costs more than input, cacheRead much less), and
 // `cleared` says how many old tool results Anthropic left out of the request
 // and how many tokens that saved. Nothing of the reply's text is kept.
 //
-// Anthropic can also report a failure inside a stream that started fine (status
+// A provider can also report a failure inside a stream that started fine (status
 // 200, e.g. an overloaded_error): the line then has `streamError` { type,
 // message } (the provider's own wording, cut short), and `stopReason` says why a
 // reply that finished did so. `empty: true` marks a reply that ended with 0
@@ -30,6 +31,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Readable } from "node:stream";
 import { Transform } from "node:stream";
+import { messagesTap, tapForPath } from "../src/connections/tap.ts";
 import { errorFields, log } from "./log.ts";
 
 interface Open {
@@ -63,75 +65,9 @@ export interface Tracked {
   end(error?: unknown): void;
 }
 
-// The model and token counts a Messages API stream reports: message_start
-// carries the model and the input side, message_delta the output so far (the
-// last one is the total). Fed the stream in chunks, which can split a line.
-export interface Usage {
-  model?: string;
-  input?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  output?: number;
-  // What Anthropic's context editing left out of this request (old tool
-  // results, see src/toolResults.ts), when it did.
-  clearedToolUses?: number;
-  clearedTokens?: number;
-  // An `event: error` inside the stream: the provider's error type and message.
-  streamError?: { type: string; message: string };
-  // Why the reply stopped (message_delta's stop_reason), when it said.
-  stopReason?: string;
-}
-// Longest provider error message kept in the log.
-const MAX_ERROR_MESSAGE = 200;
-// Only the lines that can carry usage are parsed; a content line can be long,
-// so a partial line longer than this is dropped rather than kept.
-const MAX_LINE = 64 * 1024;
-export function usageReader() {
-  const usage: Usage = {};
-  let partial = "";
-  const take = (line: string) => {
-    if (!line.startsWith("data:") || !(line.includes('"usage"') || line.includes('"applied_edits"') || line.includes('"error"') || line.includes('"stop_reason"'))) return;
-    let e: any;
-    try {
-      e = JSON.parse(line.slice(5));
-    } catch {
-      return;
-    }
-    if (e?.type === "error" && e.error) {
-      usage.streamError = { type: String(e.error.type ?? "error").slice(0, 60), message: String(e.error.message ?? "").slice(0, MAX_ERROR_MESSAGE) };
-      return;
-    }
-    if (e?.type === "message_delta" && typeof e.delta?.stop_reason === "string") usage.stopReason = e.delta.stop_reason;
-    const edits = e?.type === "message_delta" ? e.context_management?.applied_edits : undefined;
-    if (Array.isArray(edits) && edits.length) {
-      const sum = (key: string) => edits.reduce((n: number, x: any) => n + (typeof x?.[key] === "number" ? x[key] : 0), 0);
-      usage.clearedToolUses = sum("cleared_tool_uses");
-      usage.clearedTokens = sum("cleared_input_tokens");
-    }
-    const u = e?.type === "message_start" ? e.message?.usage : e?.type === "message_delta" ? e.usage : undefined;
-    if (e?.type === "message_start" && typeof e.message?.model === "string") usage.model = e.message.model;
-    if (!u) return;
-    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
-    usage.input = num(u.input_tokens) ?? usage.input;
-    usage.cacheRead = num(u.cache_read_input_tokens) ?? usage.cacheRead;
-    usage.cacheWrite = num(u.cache_creation_input_tokens) ?? usage.cacheWrite;
-    usage.output = num(u.output_tokens) ?? usage.output;
-  };
-  return {
-    feed(chunk: Buffer | string) {
-      const lines = (partial + chunk.toString()).split("\n");
-      partial = lines.pop() ?? "";
-      if (partial.length > MAX_LINE) partial = "";
-      for (const line of lines) take(line.trimEnd());
-    },
-    // The counts read so far, or undefined when the stream had none.
-    result(): Usage | undefined {
-      if (partial) take(partial.trimEnd());
-      partial = "";
-      return usage.input === undefined && usage.output === undefined && !usage.streamError ? undefined : { ...usage };
-    },
-  };
-}
+// What the log reads from a stream is the wire's own business (see tap.ts in
+// src/connections): the same reader the tests use, kept under its old name.
+export const usageReader = messagesTap;
 
 export function track(req: IncomingMessage, res: ServerResponse, connector: string, fullPath: string): Tracked {
   const id = `${Date.now().toString(36)}${(serial++ % 1296).toString(36).padStart(2, "0")}`;
@@ -151,8 +87,8 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
   let clientGone = false;
   let upstreamError: unknown;
   let done = false;
-  // Token counts, for a Messages API reply only.
-  const usage = path === "/v1/messages" && method === "POST" ? usageReader() : undefined;
+  // Token counts, for a reply on a wire's path (Messages or Chat Completions).
+  const usage = method === "POST" ? tapForPath(path) : undefined;
 
   // Closed before the reply was fully written, and not because the model
   // server's body broke (the pipeline closes the response then): the other
@@ -198,7 +134,7 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
         : {}),
       ...(counted?.streamError ? { streamError: counted.streamError } : {}),
       ...(counted?.stopReason ? { stopReason: counted.stopReason } : {}),
-      ...(counted && !counted.streamError && (counted.output ?? 0) === 0 ? { empty: true } : {}),
+      ...(counted?.empty ? { empty: true } : {}),
       ...(counted?.clearedToolUses ? { cleared: { toolUses: counted.clearedToolUses, tokens: counted.clearedTokens ?? 0 } } : {}),
       ...extra,
     });

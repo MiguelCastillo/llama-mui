@@ -568,6 +568,16 @@ describe("streamChat with the Messages API", () => {
     expect((await collect("anthropic")).reply.blocks).toBeUndefined();
   });
 
+  it("shows a thinking block signed as narration as reply text, with its tool call", async () => {
+    const events = reply(btoa("narration")).filter((e: any) => !(e.index === 1));
+    events[2] = { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Let me read it." } };
+    serve(events);
+    const { reply: r, text, reasoning } = await collect("anthropic", "anthropic");
+    expect(text).toBe("Let me read it.");
+    expect(reasoning).toBe("");
+    expect(r.toolCalls).toHaveLength(1);
+  });
+
   it("keeps a signed reply's blocks as the API returned them", async () => {
     serve(reply("sig"));
     expect((await collect("anthropic", "anthropic")).reply.blocks).toEqual([

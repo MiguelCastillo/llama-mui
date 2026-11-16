@@ -5,9 +5,11 @@
 // adds each connector's key, so none of this code ever sees one.
 
 import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
 import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 export { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
+// Wording that failureLine (src/agent/helpers.ts) recognises.
+export { EMPTY_REPLY, STREAM_ERROR } from "./connections/wires/messages.ts";
+export { readUsage } from "./connections/wires/completions.ts";
 import { type Capabilities, type Effort, type ModelOptions, type Purpose, capabilitiesFromList, connection } from "./connections/index.ts";
 import { type Cleared, type CutState, clearOldToolResults, clearedBy, requestCount, rereads, resultCount } from "./toolResults.ts";
 export { EFFORTS, type Effort, isEffort, type ModelOptions, type Purpose, type Capabilities } from "./connections/index.ts";
@@ -240,12 +242,6 @@ function parseInput(args: string): Record<string, unknown> {
   }
 }
 
-// The tools' definitions are OpenAI-shaped (see fn in server/toolkit.ts).
-function toTool(t: any): Anthropic.Tool {
-  const f = t.function ?? t;
-  return { name: f.name, description: f.description, input_schema: f.parameters ?? f.input_schema };
-}
-
 // What a connector is, and which API chat speaks to it (see Connector in
 // server/store.ts).
 export type Kind = "llama" | "anthropic";
@@ -308,7 +304,7 @@ export function setApiOrigin(origin: string | null) {
   apiOrigin = origin ? origin.replace(/\/+$/, "") : null;
 }
 
-const originOf = () => apiOrigin ?? location.origin;
+export const originOf = () => apiOrigin ?? location.origin;
 
 // Which chat a request is made for, named in a header so the server's audit
 // log can say whose work it was. It is only a label for the log. The server
@@ -1173,7 +1169,7 @@ export async function streamChat(req: ChatRequest, onDelta: (d: StreamDelta) => 
   if (req.messages.some((m) => m.images?.length) && (await getCapabilities(req.connectorId, req.model, req.kind))?.images === false) {
     repaired = { ...repaired, messages: withoutImages(repaired.messages), images: undefined };
   }
-  const reply = await (repaired.api === "openai" ? streamCompletions(repaired, onDelta, signal) : streamMessages(repaired, onDelta, signal, keep));
+  const reply = await connection(req.kind).wire(repaired.api).stream(repaired, onDelta, signal, { keepToolResults: keep });
   return withClearing(reply, cleared, here);
 }
 
@@ -1203,31 +1199,9 @@ export function withoutImages(messages: ChatMessage[]): ChatMessage[] {
   });
 }
 
-// The Messages API requires a cap. Big enough for a step that writes a whole
-// file; llama.cpp stops sooner when the context fills.
-const MAX_TOKENS = 32768;
-
-// Wording that failureLine (src/agent/helpers.ts) recognises.
-export const STREAM_ERROR = "Stream error";
-export const EMPTY_REPLY = "The model sent nothing";
-
-// The message inside an API error. llama.cpp's errors are {error: {message}},
-// Anthropic's {type, error: {message}}.
-function apiErrorMessage(e: InstanceType<typeof Anthropic.APIError>): string {
-  const body = e.error as any;
-  return body?.error?.message ?? body?.message ?? e.message;
-}
-
-// What a request carries beyond the chat: the connection kind's module
-// decides, from the settings, the purpose and (for Claude) what the model can
-// do. Without capabilities (the ask failed) a Claude request carries nothing
-// optional, so it can't be refused for a setting the model lacks.
-async function requestFields(connectorId: string, kind: Kind | undefined, model: string, options: ModelOptions | undefined, purpose: Purpose) {
-  return (await requestParts(connectorId, kind, model, options, purpose)).fields;
-}
 // The fields and the headers they need (a beta a field belongs to).
 // `keepToolResults`: how many of the newest tool results go whole (toolResults.ts).
-async function requestParts(
+export async function requestParts(
   connectorId: string,
   kind: Kind | undefined,
   model: string,
@@ -1238,237 +1212,4 @@ async function requestParts(
   const conn = connection(kind);
   const caps = conn.needsCapabilities ? await getCapabilities(connectorId, model, kind) : undefined;
   return { fields: conn.fields(options, purpose, caps, keepToolResults), headers: conn.headers(caps) };
-}
-
-// The SDK's key is a placeholder: the dev server's proxy replaces it with the
-// connector's, which is why it's safe in a browser.
-async function streamMessages(
-  { connectorId, kind, model, messages, options, purpose, tools, images }: ChatRequest,
-  onDelta: (d: StreamDelta) => void,
-  signal: AbortSignal,
-  // How many of the newest tool results go whole, for a server that clears the rest.
-  keepToolResults?: number,
-): Promise<ChatReply> {
-  const client = new Anthropic({
-    baseURL: `${originOf()}/api/c/${connectorId}`,
-    apiKey: "set-by-the-server",
-    defaultHeaders: sessionHeaders(),
-    dangerouslyAllowBrowser: true,
-    // The SDK retries only failed requests (Anthropic's 429s and 529s), never
-    // a stream under way. llama.cpp has nothing worth retrying.
-    ...(kind === "anthropic" ? {} : { maxRetries: 0 }),
-  });
-  const { system, messages: wire } = toMessages(messages, images);
-  const extra = await requestParts(connectorId, kind, model, options, purpose, keepToolResults);
-  const params = {
-    model,
-    max_tokens: MAX_TOKENS,
-    messages: wire,
-    ...(system ? { system } : {}),
-    ...(tools?.length ? { tools: tools.map(toTool) } : {}),
-    ...extra.fields,
-  };
-
-  const calls = new Map<number, ToolCall>();
-  let final: Anthropic.Message | undefined;
-  let input = 0;
-  let cached = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  let output = 0;
-  // What Anthropic's context editing left out (old tool results).
-  let clearedResults = 0;
-  let clearedTokens = 0;
-  try {
-    final = await readStream(params);
-  } catch (e) {
-    // fetch's own TypeError, which failureLine reads as "couldn't reach".
-    if (e instanceof Anthropic.APIConnectionError && e.cause instanceof TypeError) throw e.cause;
-    if (e instanceof Anthropic.APIError && e.status) {
-      throw new Error(`POST /v1/messages: ${e.status} ${apiErrorMessage(e)}`);
-    }
-    // An error event inside a stream that started fine (e.g. overloaded_error)
-    // has no HTTP status; keep the provider's type and message.
-    if (e instanceof Anthropic.APIError) {
-      const type = (e.error as any)?.error?.type;
-      throw new Error(`${STREAM_ERROR} (${type ?? "unknown"}): ${apiErrorMessage(e)}`);
-    }
-    throw e;
-  }
-
-  async function readStream(body: object): Promise<Anthropic.Message> {
-    const stream = client.messages.stream(body as Anthropic.MessageStreamParams, { signal, headers: extra.headers });
-    for await (const event of stream) {
-      if (event.type === "message_start") {
-        input = event.message.usage.input_tokens ?? 0;
-        cacheRead = event.message.usage.cache_read_input_tokens ?? 0;
-        cacheWrite = event.message.usage.cache_creation_input_tokens ?? 0;
-        cached = cacheRead + cacheWrite;
-      } else if (event.type === "message_delta") {
-        output = event.usage.output_tokens ?? output;
-        const edits = (event as any).context_management?.applied_edits;
-        if (Array.isArray(edits)) {
-          for (const e of edits) {
-            clearedResults += typeof e?.cleared_tool_uses === "number" ? e.cleared_tool_uses : 0;
-            clearedTokens += typeof e?.cleared_input_tokens === "number" ? e.cleared_input_tokens : 0;
-          }
-        }
-      } else if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
-        calls.set(event.index, { id: event.content_block.id, name: event.content_block.name, arguments: "" });
-      } else if (event.type === "content_block_delta") {
-        const d = event.delta;
-        if (d.type === "text_delta") onDelta({ content: d.text });
-        else if (d.type === "thinking_delta") onDelta({ reasoning: d.thinking });
-        else if (d.type === "input_json_delta") {
-          const c = calls.get(event.index);
-          if (c) c.arguments += d.partial_json;
-        }
-      }
-    }
-    return stream.finalMessage();
-  }
-  // Claude's safety checks can stop a reply partway; without this it would
-  // just end, maybe empty.
-  if (final.stop_reason === "refusal") {
-    const category = (final as any).stop_details?.category;
-    throw new Error(`The model declined to answer${category ? ` (${category})` : ""}.`);
-  }
-  // A reply with no text, thinking or calls is a failure, not a quiet success.
-  if (!final.content.some((b) => (b.type === "text" ? b.text.trim() : true))) {
-    throw new Error(`${EMPTY_REPLY}${final.stop_reason ? ` (stop reason: ${final.stop_reason})` : ""}.`);
-  }
-  // llama.cpp signs nothing (an empty signature), so only Claude's replies
-  // need their blocks kept.
-  const signed = final.content.some((b) => b.type === "redacted_thinking" || (b.type === "thinking" && b.signature));
-  return {
-    toolCalls: [...calls.values()].map((c, i) => ({ ...c, id: c.id || `call_${i}`, arguments: c.arguments || "{}" })),
-    usage: input || cached || output ? {
-          contextTokens: input + cached + output,
-          promptTokens: input,
-          inputTokens: input,
-          outputTokens: output,
-          cacheReadTokens: cacheRead,
-          cacheWriteTokens: cacheWrite,
-          ...(clearedResults ? { clearedResults, clearedTokens } : {}),
-        }
-      : undefined,
-    ...(signed ? { blocks: final.content as Anthropic.ContentBlockParam[] } : {}),
-  };
-}
-
-// Converts to the OpenAI wire format, dropping UI-only fields like reasoning.
-// `images` maps image ids to base64 data (read per request, never saved).
-function toWire(m: ChatMessage, images?: Record<string, string>) {
-  if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
-  if (m.toolCalls?.length) {
-    return {
-      role: m.role,
-      content: m.content,
-      tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments } })),
-    };
-  }
-  // Build a content array when there are images (OpenAI wants an array of parts).
-  if (m.images?.length && images) {
-    const parts: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [];
-    for (const img of m.images) {
-      const data = images[img.id];
-      if (data) {
-        parts.push({ type: "image_url", image_url: { url: `data:${img.mediaType};base64,${data}` } });
-      } else {
-        parts.push({ type: "text", text: `[Image "${img.id}" missing — the file was deleted or not uploaded]` });
-      }
-    }
-    const text = [m.content, m.update, m.note].filter(Boolean).join("\n\n");
-    if (text) parts.push({ type: "text", text });
-    return { role: m.role, content: parts };
-  }
-  return { role: m.role, content: [m.content, m.update, m.note].filter(Boolean).join("\n\n") };
-}
-
-// llama.cpp puts a timings block on the last chunk: cache_n tokens reused,
-// prompt_n read this turn, predicted_n generated. OpenAI-style usage is the
-// fallback for servers that send that instead.
-export function readUsage(chunk: any): Usage | undefined {
-  const t = chunk.timings;
-  if (t && typeof t.prompt_n === "number") {
-    return {
-      contextTokens: (t.cache_n ?? 0) + t.prompt_n + (t.predicted_n ?? 0),
-      tokensPerSecond: t.predicted_per_second,
-      promptTokens: t.prompt_n,
-      inputTokens: t.prompt_n,
-      outputTokens: t.predicted_n ?? 0,
-      cacheReadTokens: t.cache_n ?? 0,
-    };
-  }
-  const u = chunk.usage;
-  if (u && typeof u.prompt_tokens === "number") {
-    // OpenAI counts cache hits inside prompt_tokens; take them out so input
-    // means fresh tokens here as for the other providers.
-    const cached = u.prompt_tokens_details?.cached_tokens;
-    const hit = typeof cached === "number" ? cached : 0;
-    return {
-      contextTokens: u.prompt_tokens + (u.completion_tokens ?? 0),
-      inputTokens: Math.max(0, u.prompt_tokens - hit),
-      outputTokens: u.completion_tokens ?? 0,
-      ...(typeof cached === "number" ? { cacheReadTokens: hit } : {}),
-    };
-  }
-  return undefined;
-}
-
-// OpenAI's Chat Completions, through OpenAI's SDK (same placeholder key as
-// streamMessages). Tool calls arrive as fragments spread over many chunks, so
-// they're assembled here and returned once the stream ends. The SDK hands
-// chunks over as parsed JSON, so llama.cpp's own fields (reasoning_content,
-// timings) are there, just not in its types.
-async function streamCompletions(
-  { connectorId, kind, model, messages, options, purpose, tools, images }: ChatRequest,
-  onDelta: (d: StreamDelta) => void,
-  signal: AbortSignal,
-): Promise<ChatReply> {
-  const client = new OpenAI({
-    baseURL: `${originOf()}/api/c/${connectorId}/v1`,
-    apiKey: "set-by-the-server",
-    defaultHeaders: sessionHeaders(),
-    dangerouslyAllowBrowser: true,
-    maxRetries: 0,
-  });
-  const params = {
-    model,
-    stream: true,
-    messages: messages.map((m) => toWire(m, images)),
-    ...(await requestFields(connectorId, kind, model, options, purpose)),
-    ...(tools?.length ? { tools } : {}),
-  };
-
-  // Keyed by the fragment's index; the id and name come in the first one.
-  const calls: ToolCall[] = [];
-  let usage: Usage | undefined;
-  try {
-    const stream = await client.chat.completions.create(params as OpenAI.ChatCompletionCreateParamsStreaming, { signal });
-    for await (const chunk of stream as AsyncIterable<any>) {
-      usage = readUsage(chunk) ?? usage;
-      const delta = chunk.choices?.[0]?.delta;
-      if (!delta) continue;
-      for (const f of delta.tool_calls ?? []) {
-        const c = (calls[f.index ?? 0] ??= { id: "", name: "", arguments: "" });
-        if (f.id) c.id = f.id;
-        if (f.function?.name) c.name += f.function.name;
-        if (f.function?.arguments) c.arguments += f.function.arguments;
-      }
-      if (delta.content || delta.reasoning_content) {
-        onDelta({ content: delta.content ?? undefined, reasoning: delta.reasoning_content ?? undefined });
-      }
-    }
-  } catch (e) {
-    // fetch's own TypeError, which failureLine reads as "couldn't reach".
-    if (e instanceof OpenAI.APIConnectionError && e.cause instanceof TypeError) throw e.cause;
-    if (e instanceof OpenAI.APIError && e.status) {
-      const err = e.error as any;
-      throw new Error(`POST /v1/chat/completions: ${e.status} ${err?.message ?? err?.error?.message ?? e.message}`);
-    }
-    throw e;
-  }
-  // Tool results must reference an id, so make one up if the server sent none.
-  return { toolCalls: calls.filter(Boolean).map((c, i) => ({ ...c, id: c.id || `call_${i}` })), usage };
 }

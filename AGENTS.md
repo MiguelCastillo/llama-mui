@@ -199,6 +199,22 @@ interface, and plain http on this computer only.
   Lines with none are on purpose: startup, the certificate, background timers and
   anything else not caused by a chat.
 
+## Vendors and wires
+
+- **A vendor connector picks a wire.** The modules in `src/connections/` (one per
+  vendor) hold what is vendor-specific: settings, validation, headers, retry
+  count, how an error body is read. Each one says which wire to use for an API.
+- **A wire builds the request and reads the stream.** The wire modules in
+  `src/connections/wires/` (Messages, Completions) turn a chat into a request
+  and the stream into common events: text, thinking, call, usage, error, stop.
+  Each wire also has a pure line reader the server log uses, so the page and the
+  server read a stream the same way. The log never holds reply text.
+- **`src/api.ts` only prepares the request** (repair, clearing, images) and hands
+  it to the connector's wire.
+- **To add a vendor, write one connector module** and register it in the
+  connection index; reuse an existing wire if the vendor speaks that protocol.
+  Keep this code pure (no React, no I/O beyond the stream).
+
 ## Before designing a change
 
 - Read the section of `docs/guide.md` for the area first, and search the code
