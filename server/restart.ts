@@ -26,7 +26,7 @@
 import { readdir } from "node:fs/promises";
 import { INTERRUPTED } from "../src/agent/helpers.ts";
 import type { ChatMessage, PlanStep } from "../src/api.ts";
-import { closeOpenToolCalls } from "../src/closeOpenToolCalls.ts";
+import { callsWaitingForAnswer, closeOpenToolCalls } from "../src/closeOpenToolCalls.ts";
 import { sessionsDir } from "./disk.ts";
 import * as hub from "./runHub.ts";
 import { reportInterrupted } from "./threadReport.ts";
@@ -47,7 +47,10 @@ export function markInterrupted(session: any, run: hub.RunState): any {
     : null;
 
   const unseen: ChatMessage[] = (run.notes ?? []).map((n) => ({ role: "user", content: n.text, notSeen: true }));
-  const messages = [...closeOpenToolCalls(Array.isArray(session.messages) ? session.messages : []), ...unseen];
+  const before: ChatMessage[] = Array.isArray(session.messages) ? session.messages : [];
+  // A run that stopped with a question pending never started that call.
+  const waitingCalls = run.ask ? callsWaitingForAnswer(before) : [];
+  const messages = [...closeOpenToolCalls(before, waitingCalls), ...unseen];
 
   const cutOff = run.kind === "turn" || run.streaming === true || wasRunning;
   // Messages waiting in the queue are kept, and paused: nothing is sent by itself after a restart.

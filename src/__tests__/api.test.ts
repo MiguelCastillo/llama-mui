@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { modelAnswer } from "./capabilityFixtures";
+import { MAY_HAVE_RUN_CALL } from "../closeOpenToolCalls";
 import { type Effort, readUsage, streamChat, toMessages, type ChatMessage, type ImageRef, type StreamDelta, type ToolCall } from "../api";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -385,7 +386,7 @@ const orphanHistory: ChatMessage[] = [
   { role: "assistant", content: "Reading it.", toolCalls: [{ id: "t1", name: "read_file", arguments: '{"path":"README.md"}' }] },
   { role: "user", content: "Are you there?" },
 ];
-const cutOff = "This call did not run: it was cut off before it finished (the page was reloaded while it waited).";
+const cutOff = MAY_HAVE_RUN_CALL;
 
 describe("streamChat with a tool call that never got a result", () => {
   const send = (api: "anthropic" | "openai") =>

@@ -16,7 +16,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 const hub = await import("../runHub.ts");
 const { INTERRUPTED_NOTE, markInterrupted, recoverInterruptedRuns } = await import("../restart.ts");
-const { UNFINISHED_CALL } = await import("../../src/closeOpenToolCalls.ts");
+const { UNFINISHED_CALL, MAY_HAVE_RUN_CALL } = await import("../../src/closeOpenToolCalls.ts");
 
 const file = (id: string) => path.join(home.dir, ".llama-mui", "sessions", id, "session.json");
 const put = async (id: string, session: object) => {
@@ -71,11 +71,33 @@ describe("markInterrupted", () => {
     });
   });
 
-  it("closes a tool call that never got a result, and says the reply was cut off", () => {
+  it("closes a started tool call (no question pending) with the may-have-run text", () => {
     const out = markInterrupted({ plan: [step("s2", "running")], messages: midStep, failed: null }, { status: "running", startedAt: 1 });
     expect(out.messages).toHaveLength(3);
-    expect(out.messages[2]).toMatchObject({ role: "tool", toolCallId: "call-1", content: UNFINISHED_CALL, planStep: "s2" });
+    expect(out.messages[2]).toMatchObject({ role: "tool", toolCallId: "call-1", content: MAY_HAVE_RUN_CALL, planStep: "s2" });
     expect(out.failed).toBe("interrupted");
+  });
+
+  it("closes a call that was waiting for approval with the did-not-run text", () => {
+    const out = markInterrupted(
+      { plan: [step("s2", "running")], messages: midStep, failed: null },
+      { status: "waiting", startedAt: 1, ask: waitingRun.ask } as any,
+    );
+    expect(out.messages[2]).toMatchObject({ role: "tool", toolCallId: "call-1", content: UNFINISHED_CALL, planStep: "s2" });
+  });
+
+  it("with two open calls and one waiting for approval, gives one of each text", () => {
+    const two = [
+      { role: "user", content: "Do it" },
+      { role: "assistant", content: "", toolCalls: [call, { id: "call-2", name: "run_command", arguments: "{}" }], planStep: "s2" },
+    ];
+    const out = markInterrupted(
+      { plan: [step("s2", "running")], messages: two, failed: null },
+      { status: "waiting", startedAt: 1, ask: waitingRun.ask } as any,
+    );
+    expect(out.messages).toHaveLength(4);
+    expect(out.messages[2]).toMatchObject({ toolCallId: "call-1", content: UNFINISHED_CALL });
+    expect(out.messages[3]).toMatchObject({ toolCallId: "call-2", content: MAY_HAVE_RUN_CALL });
   });
 
   it("puts a message no step had seen into the chat, marked as not seen", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage, ToolCall } from "../api";
-import { closeOpenToolCalls, UNFINISHED_CALL } from "../closeOpenToolCalls";
+import { callsWaitingForAnswer, closeOpenToolCalls, MAY_HAVE_RUN_CALL, UNFINISHED_CALL } from "../closeOpenToolCalls";
 
 const call = (id: string): ToolCall => ({ id, name: "read_file", arguments: "{}" });
 const assistant = (ids: string[], extra: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -13,7 +13,7 @@ const result = (id: string, content = "ok"): ChatMessage => ({ role: "tool", con
 const user = (content: string): ChatMessage => ({ role: "user", content });
 const synthetic = (id: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
   role: "tool",
-  content: UNFINISHED_CALL,
+  content: MAY_HAVE_RUN_CALL,
   toolCallId: id,
   stats: { ms: 0, tokens: 0 },
   ...extra,
@@ -24,6 +24,33 @@ describe("closeOpenToolCalls", () => {
     expect(UNFINISHED_CALL).toBe(
       "This call did not run: it was cut off before it finished (the page was reloaded while it waited).",
     );
+  });
+
+  it("has a short may-have-run text that does not mention a reload", () => {
+    expect(MAY_HAVE_RUN_CALL).toMatch(/may not have finished/);
+    expect(MAY_HAVE_RUN_CALL).toMatch(/Check the current state/);
+    expect(MAY_HAVE_RUN_CALL).not.toMatch(/reload/);
+  });
+
+  it("gives a call waiting for approval the did-not-run text", () => {
+    const out = closeOpenToolCalls([user("go"), assistant(["a"])], ["a"]);
+    expect(out[2]).toEqual(synthetic("a", { content: UNFINISHED_CALL }));
+  });
+
+  it("gives a started call (not waiting) the may-have-run text", () => {
+    const out = closeOpenToolCalls([user("go"), assistant(["a"])], []);
+    expect(out[2]).toMatchObject({ toolCallId: "a", content: MAY_HAVE_RUN_CALL });
+  });
+
+  it("with two open calls and one waiting, gives one of each", () => {
+    const out = closeOpenToolCalls([user("go"), assistant(["a", "b"])], ["b"]);
+    expect(out[2]).toMatchObject({ toolCallId: "a", content: MAY_HAVE_RUN_CALL });
+    expect(out[3]).toMatchObject({ toolCallId: "b", content: UNFINISHED_CALL });
+  });
+
+  it("finds the waiting call: the first open one in the last assistant message with any", () => {
+    expect(callsWaitingForAnswer([user("go"), assistant(["a", "b"]), result("a")])).toEqual(["b"]);
+    expect(callsWaitingForAnswer([user("go"), assistant(["a"]), result("a")])).toEqual([]);
   });
 
   it("leaves a chat without tool calls alone", () => {

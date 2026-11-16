@@ -163,7 +163,7 @@ describe("withSessionDefaults", () => {
     const s = withSessionDefaults(raw);
     expect(s.messages).toHaveLength(3);
     expect(s.messages[2]).toMatchObject({ role: "tool", toolCallId: "a", stats: { ms: 0, tokens: 0 } });
-    expect(s.messages[2].content).toMatch(/did not run/);
+    expect(s.messages[2].content).toMatch(/may not have finished/);
     // Loading a repaired session again changes nothing.
     expect(withSessionDefaults(s).messages).toEqual(s.messages);
   });
