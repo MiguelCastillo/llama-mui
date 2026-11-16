@@ -12,7 +12,7 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => dir, default: { ...actual, homedir: () => dir } };
 });
 
-const { handler } = await import("../plugin.ts");
+const { handler, connectionOf } = await import("../plugin.ts");
 const { auditDir } = await import("../audit.ts");
 
 let server: Server;
@@ -53,6 +53,21 @@ describe("api.request audit", () => {
     expect(typeof got[0].ms).toBe("number");
     expect(got[0].who).toHaveProperty("address");
     expect(JSON.stringify(got[0])).not.toContain("SECRET");
+  });
+
+  it("records the port, scheme and HTTP version the request came in on", async () => {
+    const before = lines().length;
+    await send("PUT", `/sessions/${id}`, { messages: [] });
+    const got = lines().slice(before);
+    expect(got[0]).toMatchObject({ port, scheme: "http", http: "1.1" });
+  });
+
+  it("reads an HTTP/2 request over https from the connection", () => {
+    const req = { httpVersion: "2.0", socket: { localPort: 5175, encrypted: true } } as never;
+    expect(connectionOf(req)).toEqual({ port: 5175, scheme: "https", http: "2" });
+    const old = { httpVersion: "1.1", socket: { localPort: 5172 } } as never;
+    expect(connectionOf(old)).toEqual({ port: 5172, scheme: "http", http: "1.1" });
+    expect(connectionOf({ httpVersion: "1.1" } as never)).toEqual({ scheme: "http", http: "1.1" });
   });
 
   it("records a save refused as stale, with the reason", async () => {

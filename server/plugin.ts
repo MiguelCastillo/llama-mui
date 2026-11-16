@@ -98,12 +98,27 @@ export function sessionFromHeader(req: Connect.IncomingMessage): string | undefi
 // What a run's calls to the server's own API name as their chat (see api.ts).
 setSessionLabel(() => currentCause().session);
 
+// How a request came in: the port of this server it reached, whether it was
+// over https or plain http, and the HTTP version (an https request to Vite is
+// HTTP/2, plain http is 1.1). A server listens on two ports, so the process id
+// alone does not say which one a request used. Read when the request arrives,
+// since a closed connection no longer knows its port.
+export function connectionOf(req: Connect.IncomingMessage): { port?: number; scheme: "https" | "http"; http: string } {
+  const socket = req.socket as (Connect.IncomingMessage["socket"] & { encrypted?: boolean }) | undefined;
+  return {
+    ...(typeof socket?.localPort === "number" ? { port: socket.localPort } : {}),
+    scheme: socket?.encrypted ? "https" : "http",
+    http: req.httpVersion === "2.0" ? "2" : req.httpVersion || "1.1",
+  };
+}
+
 export const handler: Connect.NextHandleFunction = (req, res) => {
   const started = Date.now();
   const why: Why = {};
   const request = newId();
   const method = req.method ?? "GET";
   const named = sessionFromHeader(req);
+  const via = connectionOf(req);
   res.once("close", () => {
     const status = res.statusCode;
     if (method === "GET" && status < 400) return;
@@ -120,6 +135,7 @@ export const handler: Connect.NextHandleFunction = (req, res) => {
       ...(why.reason ? { reason: why.reason } : {}),
       // A connection that closed before the answer was finished.
       ...(res.writableFinished ? {} : { aborted: true }),
+      ...via,
       who: whoOf(req),
     });
   });
