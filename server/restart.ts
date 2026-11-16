@@ -1,8 +1,12 @@
-// What a restart does to runs that were going. A run lives in the server's
-// memory, so when the server stops (a restart, a crash, closing the terminal)
+// What happens to a run whose server is gone. A run lives in its server's
+// memory, so when that server stops (a restart, a crash, closing the terminal)
 // the run is gone, and its record in session.json (see runHub.ts) is all that is
-// left of it. At start-up, each session whose file still has such a record is
-// settled, once:
+// left of it. Several servers can share the same sessions, so a record that is
+// not in this process's memory is not necessarily dead: its owner is dead only
+// when it has not checked in for 20 seconds (see ownerAlive in runRecord.ts).
+// Starting a server settles nothing and rewrites no session. A session whose
+// record has a dead owner is settled when it is opened (and before Resend or
+// Continue), once:
 //
 //  - a step that was running goes back to pending, with the note "Interrupted
 //    by a restart" (an answer the user had given it is kept, as Stop keeps it);
@@ -20,14 +24,13 @@
 //  - for a thread, the note in its parent says it did not finish.
 //
 // Nothing starts again by itself: the plan card shows Continue, and the user
-// decides. A restart that finds no record (the run had ended, or a save came
-// from a page) changes nothing.
+// decides. A session with no record (the run had ended, or a save came from a
+// page), or with a record whose owner is alive, is changed in no way.
 
 import { readdir } from "node:fs/promises";
 import { INTERRUPTED } from "../src/agent/helpers.ts";
 import type { ChatMessage, PlanStep } from "../src/api.ts";
 import { callsWaitingForAnswer, closeOpenToolCalls } from "../src/closeOpenToolCalls.ts";
-import { filesChangedSince } from "./auditChanges.ts";
 import { sessionsDir } from "./disk.ts";
 import * as hub from "./runHub.ts";
 import { effectOfCall } from "./tools.ts";
@@ -69,12 +72,12 @@ const more = (list: string[], max: number) => (list.length > max ? [...list.slic
 
 // The note for a step that was running: the plain words, then what was in
 // flight and which files changed, when known.
-export function interruptedNote(messages: ChatMessage[], changed: string[] = []): string {
+export function interruptedNote(messages: ChatMessage[], changed: string[] = [], why: string = INTERRUPTED_NOTE): string {
   const calls = callsInFlight(messages);
   const parts: string[] = [];
   if (calls.length) parts.push(`In progress: ${more(calls, MAX_CALLS).join("; ")}.`);
   if (changed.length) parts.push(`Files changed since the run started: ${more(changed, MAX_FILES).join(", ")}.`);
-  return parts.length ? `${INTERRUPTED_NOTE}. ${parts.join(" ")}` : INTERRUPTED_NOTE;
+  return parts.length ? `${why}. ${parts.join(" ")}` : why;
 }
 
 // A reply that was streaming when the app stopped is saved as it stood: a last
@@ -92,11 +95,11 @@ export function markCutOffReply(messages: ChatMessage[], run: hub.RunState): Cha
 }
 
 // The session as a restart leaves it, for the run record that was found with
-// it. Pure: the session it is given doesn't change. `changed` is what the audit
-// saw changed (see filesChangedSince), found by the caller.
-export function markInterrupted(session: any, run: hub.RunState, changed: string[] = []): any {
+// it. Pure: the session it is given doesn't change. `changed` is the list of
+// files the run record kept (its `changed` field), found by the caller.
+export function markInterrupted(session: any, run: hub.RunState, changed: string[] = [], why?: string): any {
   let wasRunning = false;
-  const note = interruptedNote(Array.isArray(session.messages) ? session.messages : [], changed);
+  const note = interruptedNote(Array.isArray(session.messages) ? session.messages : [], changed, why);
   const plan: PlanStep[] | null = Array.isArray(session.plan)
     ? session.plan.map((st: PlanStep) => {
         if (st.status !== "running") return st;
@@ -118,48 +121,50 @@ export function markInterrupted(session: any, run: hub.RunState, changed: string
   return { ...session, plan, messages, failed: cutOff ? INTERRUPTED : (session.failed ?? null), ...(waiting ? { queuePaused: true } : {}) };
 }
 
-// Settles every session with a stale run record. Resolves with the ids it
-// changed. One session that can't be read or written is a warning in the log
+// Settles one session if its run record has a dead owner (see settleStale in
+// runHub.ts): the run is marked interrupted and the record removed. A record
+// whose owner is alive, on any server, is left alone. True if it changed the
+// session. Called when a session is opened, and before Resend or Continue.
+export async function settleSession(id: string): Promise<boolean> {
+  let after: any = null;
+  let kind: hub.RunState["kind"];
+  const changed = await hub.settleStale(id, (session, run) => {
+    kind = run.kind;
+    return (after = markInterrupted(session, run, Array.isArray(run.changed) ? run.changed : []));
+  });
+  if (!changed) return false;
+  // A reply in a thread isn't the thread's plan: only a plan run is reported.
+  if (kind !== "turn") await reportInterrupted(id, after);
+  return true;
+}
+
+// The user takes over another server's live run: settled as interrupted at
+// once (the same way a dead owner's run is, but without the wait), the record
+// removed. Answers the old holder's port. Refused (409) when no other server
+// holds the floor (see takeOver in runHub.ts).
+export async function takeOverSession(id: string): Promise<{ port: number; reason: string }> {
+  let reason = "";
+  const done = await hub.takeOver(id, (session, run) => {
+    reason = `Interrupted: you took over from the server on port ${run.owner?.port ?? "unknown"}`;
+    return markInterrupted(session, run, Array.isArray(run.changed) ? run.changed : [], reason);
+  });
+  if (done.kind !== "turn") await reportInterrupted(id, done.session);
+  return { port: done.port, reason };
+}
+
+// Settles every session whose run record has a dead owner. Resolves with the
+// ids it changed. Not called at start-up. One session that can't be read or written is a warning in the log
 // and doesn't stop the others.
 export async function recoverInterruptedRuns(): Promise<string[]> {
   const names = await readdir(sessionsDir).catch(() => [] as string[]);
   const settled: string[] = [];
   for (const id of names) {
     try {
-      let after: any = null;
-      let kind: hub.RunState["kind"];
-      const changed = await hub.settleStale(id, (session, run) => {
-        kind = run.kind;
-        return (after = markInterrupted(session, run, filesChangedSince(id, run.startedAt)));
-      });
-      if (!changed) {
-        // No run to settle, but a queue that was left waiting stays paused.
-        await hub.pauseQueue(id);
-        continue;
-      }
-      settled.push(id);
-      // A reply in a thread isn't the thread's plan: only a plan run is reported.
-      if (kind !== "turn") await reportInterrupted(id, after);
+      if (await settleSession(id)) settled.push(id);
+      else await hub.pauseQueue(id); // no run to settle, but a queue left waiting stays paused
     } catch (e) {
       console.warn(`Couldn't settle the interrupted run in session ${id}: ${e}`);
     }
   }
   return settled;
-}
-
-let recovered: Promise<string[]> | undefined;
-
-// Once per process, however many servers start in it (dev and preview, a
-// restart of the dev server by a changed config): a run that began after the
-// first call is live, not stale, and is left alone anyway (see settleStale).
-export function recoverOnce(): Promise<string[]> {
-  return (recovered ??= recoverInterruptedRuns()
-    .then((ids) => {
-      if (ids.length) console.info(`${ids.length} plan run${ids.length === 1 ? " was" : "s were"} interrupted by the restart. Press Continue to go on.`);
-      return ids;
-    })
-    .catch((e) => {
-      console.warn(`Couldn't look for interrupted runs: ${e}`);
-      return [];
-    }));
 }

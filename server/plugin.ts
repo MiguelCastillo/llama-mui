@@ -27,8 +27,9 @@ import { modelAdminRoutes } from "./modelAdmin.ts";
 import { log } from "./log.ts";
 import { audit, noteSession, sessionExists, whoOf } from "./audit.ts";
 import { currentCause, newId, runWithCause } from "./auditContext.ts";
-import { recoverOnce } from "./restart.ts";
 import { stopAllRuns } from "./runners.ts";
+import { setOwnerPort } from "./runHub.ts";
+import { startSessionWatch } from "./sessionWatch.ts";
 import { whisperRoutes } from "./whisper.ts";
 
 async function route(r: Route) {
@@ -199,9 +200,9 @@ function serve(req: Connect.IncomingMessage, res: Parameters<Connect.NextHandleF
 // handles them. If `httpPort` is taken, the listener uses a free port instead
 // and the log and console say so.
 export function whenServing(httpServer: Server | null, app?: RequestListener, httpPort = 0) {
-  // A run that was going when the last server stopped is marked as interrupted
-  // (see restart.ts); this server's own runs end if it is closed meanwhile.
-  void recoverOnce();
+  // Starting a server never rewrites a session: another server may own a live
+  // run in it. A run whose owner is gone is settled when its session is opened
+  // (see restart.ts). This server's own runs end if it is closed meanwhile.
   httpServer?.once("close", () => void stopAllRuns());
   if (!httpServer) return;
   guardNetwork(httpServer);
@@ -209,6 +210,10 @@ export function whenServing(httpServer: Server | null, app?: RequestListener, ht
   const set = () => {
     const address = httpServer.address();
     setListenAddress(address);
+    if (address && typeof address === "object") setOwnerPort(address.port);
+    // Changes the other server writes to the shared session files reach this
+    // server's pages too (see sessionWatch.ts).
+    httpServer.once("close", startSessionWatch());
     if (!secure) {
       const origin = selfOrigin(address);
       if (origin) setApiOrigin(origin);

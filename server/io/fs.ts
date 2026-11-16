@@ -18,6 +18,7 @@ import { mkdirSync as nodeMkdirSync, writeFileSync } from "node:fs";
 import { dirname as dirnameOf } from "node:path";
 import { audit, noteSession } from "../audit.ts";
 import { currentCause, runWithoutCause } from "../auditContext.ts";
+import { noteChangedFile } from "../changedFiles.ts";
 import type { Why } from "./exec.ts";
 
 export type FsOp = "write" | "append" | "rename" | "remove" | "mkdir";
@@ -46,6 +47,8 @@ function record(why: string, op: FsOp, path: string, extra: { to?: string; bytes
     ...(extra.bytes !== undefined ? { bytes: extra.bytes } : {}),
     ...(error !== undefined ? { error: errorName(error) } : {}),
   });
+  // A separate call from the audit line: the run record keeps its own list.
+  if (session && error === undefined) noteChangedFile(session, path);
 }
 
 // Runs the change, then writes its one line, whether it worked or not.

@@ -140,62 +140,39 @@ describe("markInterrupted", () => {
   });
 });
 
-describe("the interrupted note, from the audit log", () => {
-  const auditDir = () => path.join(home.dir, ".llama-mui", "audit");
-  const today = () => path.join(auditDir(), `audit-${new Date().toISOString().slice(0, 10)}.log`);
-  const fsLine = (session: string, p: string, extra: object = {}, at = Date.now()) =>
-    JSON.stringify({ t: new Date(at).toISOString(), event: "io.fs", session, path: p, why: "write", ...extra });
-  const writeAudit = async (lines: string[]) => {
-    await mkdir(auditDir(), { recursive: true });
-    await writeFile(today(), lines.join("\n") + "\n");
-  };
+describe("the interrupted note, from the run record", () => {
   const started = { id: "call-1", name: "run_command", arguments: JSON.stringify({ command: "npm test -- --watch=false" }), started: true };
   const inFlight = [
     { role: "user", content: "Do it" },
     { role: "assistant", content: "", toolCalls: [started], planStep: "s1" },
   ];
   const noteOf = async (id: string) => (await get(id)).plan[0].note as string;
-  const settle = async (id: string, extra: object = {}) => {
-    await put(id, { plan: [step("s1", "running")], messages: inFlight, run: { status: "running", startedAt: Date.now() - 60_000 }, ...extra });
+  const settle = async (id: string, extra: object = {}, run: object = {}) => {
+    await put(id, { plan: [step("s1", "running")], messages: inFlight, run: { status: "running", startedAt: Date.now() - 60_000, ...run }, ...extra });
     await recoverInterruptedRuns();
     return noteOf(id);
   };
 
-  beforeEach(async () => {
-    await rm(auditDir(), { recursive: true, force: true });
-  });
-
-  it("names the call that was running and the files this chat changed, not another chat's", async () => {
-    await writeAudit([
-      fsLine("n1", "/work/a.ts"),
-      fsLine("other", "/work/theirs.ts"),
-      fsLine("n1", "/work/failed.ts", { error: "denied" }),
-      fsLine("n1", "/work/old.ts", {}, Date.now() - 3_600_000),
-      fsLine("n1", "/work/b.ts"),
-      "{half a line",
-    ]);
-    const note = await settle("n1");
+  it("names the call that was running and the files the record lists", async () => {
+    const note = await settle("n1", {}, { changed: ["/work/a.ts", "/work/b.ts"] });
     expect(note).toBe("Interrupted by a restart. In progress: run_command (npm test -- --watch=false). Files changed since the run started: /work/a.ts, /work/b.ts.");
-    expect(note).not.toContain("theirs");
   });
 
   it("lists a file changed by an earlier step of the same run under 'since the run started'", async () => {
-    await writeAudit([fsLine("n1b", "/work/from-step-1.ts", {}, Date.now() - 30_000)]);
     const earlier = [
       { role: "user", content: "Do it" },
       { role: "assistant", content: "", toolCalls: [{ id: "c0", name: "write_file", arguments: JSON.stringify({ path: "/work/from-step-1.ts" }), started: true }], planStep: "s0" },
       { role: "tool", toolCallId: "c0", content: "done" },
       { role: "assistant", content: "", toolCalls: [started], planStep: "s1" },
     ];
-    await settle("n1b", { messages: earlier, plan: [step("s0", "done"), step("s1", "running")] });
+    await settle("n1b", { messages: earlier, plan: [step("s0", "done"), step("s1", "running")] }, { changed: ["/work/from-step-1.ts"] });
     const note = (await get("n1b")).plan[1].note as string;
     expect(note).toContain("Files changed since the run started: /work/from-step-1.ts.");
     expect(note).not.toContain("since the step started");
   });
 
   it("lists ten files and says how many more", async () => {
-    await writeAudit(Array.from({ length: 13 }, (_, i) => fsLine("n2", `/work/f${i}.ts`, {}, Date.now() - 1000 + i)));
-    const note = await settle("n2");
+    const note = await settle("n2", {}, { changed: Array.from({ length: 13 }, (_, i) => `/work/f${i}.ts`) });
     expect(note).toContain("/work/f9.ts, and 3 more.");
     expect(note).not.toContain("/work/f10.ts");
   });
@@ -209,11 +186,9 @@ describe("the interrupted note, from the audit log", () => {
     expect(note).not.toContain("SECRET-CONTENT");
   });
 
-  it("keeps the plain note when the audit can't be read, or the chat has nothing to report", async () => {
-    // A folder where today's file should be: reading it fails.
-    await mkdir(today(), { recursive: true });
+  it("keeps the plain note when the chat has nothing to report", async () => {
     expect(await settle("n4", { messages: [{ role: "user", content: "Do it" }] })).toBe(INTERRUPTED_NOTE);
-    // The call is still named without the audit.
+    // The call is still named without a list of files.
     expect(await settle("n5")).toBe("Interrupted by a restart. In progress: run_command (npm test -- --watch=false).");
   });
 });
@@ -426,6 +401,20 @@ describe("recoverInterruptedRuns", () => {
     expect((await get("p2")).threads[0].status).toBe("done");
     expect((await get("p3")).revision).toBe(1);
     expect((await get("kid4")).plan[0].status).toBe("pending");
+  });
+
+  it("a record with a fresh check-in from another process is left alone, and a stale one is settled", async () => {
+    const owner = (checkedAt: number) => ({ pid: process.pid + 1, port: 5175, checkedAt });
+    const run = (checkedAt: number) => ({ status: "running", startedAt: 1, owner: owner(checkedAt) });
+    await put("other-live", { plan: [step("s1", "running")], messages: [], revision: 1, run: run(Date.now() - 5_000), queue: [{ id: "q", text: "x", options: {}, queuedAt: 1 }] });
+    await put("other-dead", { plan: [step("s1", "running")], messages: [], revision: 1, run: run(Date.now() - 21_000) });
+    const before = await readFile(file("other-live"), "utf8");
+    const ids = await recoverInterruptedRuns();
+    expect(ids).not.toContain("other-live");
+    expect(ids).toContain("other-dead");
+    // Not even the queue pause is written: the file is byte for byte the same.
+    expect(await readFile(file("other-live"), "utf8")).toBe(before);
+    expect((await get("other-dead")).run).toBeUndefined();
   });
 
   it("a session with a run in this process is not stale and is left alone", async () => {

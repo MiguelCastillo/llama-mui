@@ -873,6 +873,8 @@ export interface Session {
   // The server's record of a plan running in this session now. Read only: a
   // save never sends it. Missing when nothing runs.
   run?: { status: string; startedAt: number };
+  // Who holds the floor, while a run is live (read only, like `run`).
+  holder?: { port: number; mine: boolean };
   // Messages sent while a reply was running, waiting to be sent in order (at
   // most MAX_QUEUE). The server owns them, like the names: a save never changes
   // them, and a nested session starts with none. Older saved chats don't have it.

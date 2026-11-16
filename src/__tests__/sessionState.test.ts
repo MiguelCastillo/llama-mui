@@ -203,14 +203,14 @@ describe("sessionState", () => {
 
   it("keeps every saved session key in the state, except the ones the server owns", () => {
     // Session's own fields (api.ts): each is either held by the state or set by the server.
-    const serverOwned = ["userName", "group", "revision", "run"];
+    const serverOwned = ["userName", "group", "revision", "run", "holder"];
     // Typed as a record of every key, so a field added to Session fails to compile here until it is placed.
     const all: Record<keyof Session, true> = {
       id: true, title: true, model: true, connectorId: true, messages: true, contextStart: true, attachments: true,
       workingDir: true, usage: true, failed: true, plan: true, planProposal: true, planContext: true,
       planSummary: true, planAnchor: true, planId: true, pastPlans: true, promptDir: true, persona: true, personaText: true, toolResultCut: true, modelName: true,
       userName: true, group: true, todos: true, parentId: true, threads: true, autoApprove: true,
-      titleHint: true, planMovedIn: true, revision: true, run: true, queue: true, queuePaused: true,
+      titleHint: true, planMovedIn: true, revision: true, run: true, holder: true, queue: true, queuePaused: true,
     };
     const everySessionKey = Object.keys(all) as (keyof Session)[];
     const stateKeys = Object.keys(emptySessionState());

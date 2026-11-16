@@ -192,7 +192,7 @@ describe("GET /api/events", () => {
     const stream = await listen("/events");
     await stream.until((e) => e.length >= 1);
     expect(stream.events[0].type).toBe("snapshot");
-    expect(stream.events[0].data.runs).toEqual([{ id: "g-a", run: expect.objectContaining({ status: "running" }) }]);
+    expect(stream.events[0].data.runs).toEqual([{ id: "g-a", run: expect.objectContaining({ status: "running" }), holder: expect.objectContaining({ mine: true }) }]);
 
     hub.publish({ type: "step", id: "g-a", data: { step: "1" } });
     hub.publish({ type: "session", id: "g-a", data: { patch: { fields: {}, removed: [] } } });

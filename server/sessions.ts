@@ -12,6 +12,8 @@ import path from "node:path";
 import { sessionsDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
+import { holderOf, ownerAlive } from "./runRecord.ts";
+import { settleSession } from "./restart.ts";
 import { descendantIds } from "../src/sessionTree.ts";
 import { personaToSave } from "../src/persona.ts";
 import { worktreeStatuses } from "./worktreeStatus.ts";
@@ -51,7 +53,8 @@ let migration: Promise<void> | undefined;
 //   GET          → [summary], newest first; a summary is { id, title, updatedAt,
 //                  modelName, userName, group, todos, parentId } (see summaryOf)
 //   GET /<id>    → the saved session, with its `revision` (0 if it never had one)
-//                  and `run` while a plan is running in it in this process
+//                  and `run` while a plan is running in it, on any server (a
+//                  run whose owner is dead is settled as interrupted first)
 //   GET /<id>/worktrees → [{ name, branch, uncommitted, unmerged, base }], one per
 //                  worktree the session created (its create_worktree calls), read from git (see worktreeStatus.ts)
 //   PUT /<id>    → saves it; the server sets createdAt, updatedAt and revision;
@@ -78,7 +81,17 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
     const sessions = await Promise.all(names.map((n) => readSession(n).catch(() => null)));
     const list = sessions
       .filter((s) => s !== null)
-      .map(summaryOf)
+      // A record's owner is judged by the same 20-second test as everywhere
+      // else; nothing is written, a dead one is only shown as interrupted.
+      .map((s) => {
+        const live = hub.liveRun(s.id);
+        const holder = holderOf(live ?? s.run);
+        return {
+          ...summaryOf(s),
+          runStatus: live || ownerAlive(s.run) ? "running" : s.run ? "interrupted" : null,
+          ...(holder ? { holder } : {}),
+        };
+      })
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
     sendJson(res, 200, list);
     return true;
@@ -93,12 +106,15 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
   const id = parts[1];
 
   if (method === "GET") {
+    // A record whose owner is dead is settled now (marked interrupted, removed).
+    // One whose owner is alive, here or on another server, is shown as the live run.
+    if (await readSession(id)) await settleSession(id);
     const session = await readSession(id);
     if (!session) throw new HttpError(404, "No such session");
-    // `run` is the run live in this process, never a record a crash left in the file.
-    const { run: _recorded, ...saved } = session;
-    const run = hub.liveRun(id);
-    sendJson(res, 200, { ...saved, revision: revisionOf(session), ...(run ? { run } : {}) });
+    const { run: recorded, ...saved } = session;
+    const run = hub.liveRun(id) ?? (recorded && ownerAlive(recorded) ? recorded : null);
+    const holder = run ? holderOf(run) : null;
+    sendJson(res, 200, { ...saved, revision: revisionOf(session), ...(run ? { run } : {}), ...(holder ? { holder } : {}) });
     return true;
   }
   if (method === "PUT") {

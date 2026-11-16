@@ -22,6 +22,11 @@ import { stepLine } from "./agent/plan";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { PanelAction } from "./Panel";
 import { PlanStepRow, type StepEdit } from "./PlanStepRow";
+import { type Action, planState } from "./allowedActions";
+
+// The height of a row with one small button (30.75px), kept free while the plan
+// can still run, with or without buttons in it.
+const ACTION_ROW_HEIGHT = "1.9375rem";
 
 export function PlanView({
   steps,
@@ -42,6 +47,8 @@ export function PlanView({
   onPause,
   result,
   where,
+  footer,
+  allowed,
 }: {
   steps: PlanStep[];
   // One short sentence the model wrote on what this plan does; shown at the top.
@@ -82,6 +89,12 @@ export function PlanView({
   result?: string | null;
   // Where the work lives (worktreeLines), under the result; room for a merge button later.
   where?: string[];
+  // Shown at the very bottom of the card, under the buttons: the note that
+  // another server is running the plan, with its Take over button.
+  footer?: ReactNode;
+  // The actions the card may offer (see allowedActions.ts). Only a listed one
+  // is drawn, and only if its handler is here too. Without a list, none are.
+  allowed?: ReadonlySet<Action>;
 }) {
   // Once every step is done, nothing in the plan runs again: no rerun, edit
   // or cancel. Redoing work is a new plan, from a new message.
@@ -99,19 +112,18 @@ export function PlanView({
   // A disputed step waits for the user, so Run would only stop on it again.
   // A waiting step (a question for the user) reruns without an answer on
   // Continue; "Answer and continue" on the step passes one.
-  const next = steps.find((s) => s.status !== "done");
-  const unfinished =
-    next?.status === "pending" ||
-    next?.status === "failed" ||
-    next?.status === "waiting";
-  // A step that was stopped or interrupted by a restart is back to pending with
-  // a note saying so: the plan has started, so the button says Continue.
-  const started = steps.some((s) => s.status !== "pending" || !!s.note);
-  // Which buttons the bottom row shows.
-  const showRun = !!(unfinished && onRun && !running);
-  const showPause = !!(running && onPause);
-  const showClone = !!(onClone && readOnly);
-  const showDiscard = !!(onCancel && !readOnly && !running);
+  // (The rule for which buttons are allowed is allowedActions.ts; the label of
+  // the first says Continue for a plan that was stopped or interrupted by a
+  // restart, which is back to pending with a note saying so.)
+  const can = (a: Action) => !!allowed?.has(a);
+  // Which buttons the bottom row shows: only what is allowed.
+  const showRun = (can("run") || can("continue")) && !!onRun;
+  const showPause = can("pause") && !!onPause;
+  const showClone = can("clone") && !!onClone;
+  const showDiscard = can("discard") && !!onCancel;
+  // A plan that can still run keeps the row's room, so buttons coming and going
+  // don't make the card jump.
+  const keepRow = !planState(steps, !!running).finished;
 
   const save = () => {
     if (!editing) return;
@@ -233,11 +245,11 @@ export function PlanView({
         {/* The plan's actions are buttons at the bottom, as in the approval
           prompts: the main one filled (Run), the rest outlined (Pause, Clone,
           Discard). Removing the plan is for a plan that isn't running: pause it first. */}
-        {(showRun || showPause || showClone || showDiscard) && (
-          <Stack direction="row" spacing={1}>
+        {(keepRow || showRun || showPause || showClone || showDiscard) && (
+          <Stack direction="row" spacing={1} sx={keepRow ? { minHeight: ACTION_ROW_HEIGHT } : undefined}>
             {showRun && (
               <PanelAction
-                label={started ? "Continue" : "Run"}
+                label={can("continue") ? "Continue" : "Run"}
                 variant="contained"
                 color="primary"
                 onClick={onRun}
@@ -300,6 +312,7 @@ export function PlanView({
             onAnswer={onProposal}
           />
         )}
+        {footer}
       </Stack>
     </Paper>
   );

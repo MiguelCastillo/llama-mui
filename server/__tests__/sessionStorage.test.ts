@@ -369,4 +369,46 @@ describe("the run record on GET", () => {
     await hub.endRun("with-run");
     expect((await call("GET", ["with-run"])).body.run).toBeUndefined();
   });
+
+  const withRecord = async (id: string, run: object, extra: object = {}) => {
+    await call("PUT", [id], saved(id, extra));
+    const onDisk = JSON.parse(await readFile(sessionFile(id), "utf8"));
+    await writeFile(sessionFile(id), JSON.stringify({ ...onDisk, run }));
+  };
+
+  it("shows a run owned by another live process, and doesn't mark it cut off", async () => {
+    const run = { status: "running", startedAt: 5, streaming: true, request: "reply", owner: { pid: 999999, port: 5175, checkedAt: Date.now() } };
+    await withRecord("other-live", run, { messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "par" }] });
+    const before = await readFile(sessionFile("other-live"), "utf8");
+    const { body } = await call("GET", ["other-live"]);
+    expect(body.run).toMatchObject({ status: "running", owner: { port: 5175 } });
+    expect(body.failed ?? null).toBeNull();
+    expect(body.messages.some((m: any) => m.cutOff)).toBe(false);
+    // Nothing was rewritten.
+    expect(await readFile(sessionFile("other-live"), "utf8")).toBe(before);
+  });
+
+  it("settles a run whose owner is dead as interrupted, and saves it", async () => {
+    const run = { status: "running", startedAt: 5, streaming: true, request: "reply", owner: { pid: 999999, port: 5175, checkedAt: Date.now() - 21_000 } };
+    await withRecord("other-dead", run, { messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "par" }] });
+    const { body } = await call("GET", ["other-dead"]);
+    expect(body.run).toBeUndefined();
+    expect(body.failed).toBe("interrupted");
+    expect(body.messages[1].cutOff).toBe(true);
+    expect(JSON.parse(await readFile(sessionFile("other-dead"), "utf8")).run).toBeUndefined();
+  });
+
+  it("the list shows a live owner as running and a dead one as interrupted, without writing", async () => {
+    const owner = (age: number) => ({ pid: 999999, port: 5175, checkedAt: Date.now() - age });
+    await withRecord("list-live", { status: "running", startedAt: 5, owner: owner(1_000) });
+    await withRecord("list-dead", { status: "running", startedAt: 5, owner: owner(21_000) });
+    await call("PUT", ["list-none"], saved("list-none"));
+    const before = [await readFile(sessionFile("list-live"), "utf8"), await readFile(sessionFile("list-dead"), "utf8")];
+    const rows = (await call("GET", [])).body;
+    const status = (id: string) => rows.find((s: any) => s.id === id).runStatus;
+    expect(status("list-live")).toBe("running");
+    expect(status("list-dead")).toBe("interrupted");
+    expect(status("list-none")).toBeNull();
+    expect([await readFile(sessionFile("list-live"), "utf8"), await readFile(sessionFile("list-dead"), "utf8")]).toEqual(before);
+  });
 });

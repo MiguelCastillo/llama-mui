@@ -18,6 +18,10 @@
 //   approve  { askId, allow, always? }   yes or no to an access or approval question;
 //            always (changes, git or commands) also approves that kind for the
 //            rest of the session (see autoApprove.ts)
+//   takeover  ends another server's live run in this session now: it is settled
+//            as interrupted and its record removed (the old server stops itself
+//            at its next check-in). Refused ("not running elsewhere") when no
+//            run is live or this server holds it. Writes one audit line.
 //   autoapprove { kind, on }   turns one of those on or off
 //            (a no also turns down a question that asks for a path)
 //   answer   { askId, paths: [{ path, kind, asWorkingDir? }] }   the files or
@@ -82,6 +86,7 @@ import { startAsideFromOptions, startFromOptions, startTurnFromOptions } from ".
 import * as runners from "./runners.ts";
 import { AUTO_KINDS, type AutoKind, withAuto } from "../src/autoApprove.ts";
 import { sessionFolder } from "./sessionFile.ts";
+import { takeOverSession } from "./restart.ts";
 import { audit, noteSession, whoOf } from "./audit.ts";
 import { validateRefs } from "./images.ts";
 import { randomUUID } from "node:crypto";
@@ -400,6 +405,14 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
         );
       }
       break;
+    case "takeover": {
+      // Another server's live run is ended here and the session is settled as
+      // interrupted; the old server stops itself at its next check-in.
+      const { port, reason } = await takeOverSession(id);
+      noteSession(id);
+      audit("run.takenOver", { session: id, fromPort: port, reason, who: whoOf(req) });
+      break;
+    }
     case "autoapprove": {
       // Turns an approval-for-the-session on or off, from the chip in the chat.
       const kind = autoKindOf(body.kind);

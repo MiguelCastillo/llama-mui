@@ -58,6 +58,7 @@ import { runWithCause } from "./auditContext.ts";
 import { compactInstruction } from "./compactInstruction.ts";
 import { HttpError } from "./http.ts";
 import { forget as forgetReads } from "./reads.ts";
+import { settleSession } from "./restart.ts";
 import * as hub from "./runHub.ts";
 import { readSession, revisionOf } from "./sessionFile.ts";
 import { type AskReport, askModel, reportToParent } from "./threadReport.ts";
@@ -93,6 +94,10 @@ export const SAVE_MAX_WAIT = 5000;
 
 // How long Stop waits for the run to be over before it answers anyway.
 export const STOP_WAIT_MS = 10_000;
+
+// How often the owning server looks in the run record for an answer that
+// another server's page wrote there.
+export const ASK_POLL_MS = 300;
 
 interface Entry {
   id: string;
@@ -331,8 +336,22 @@ function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
   }
   return new Promise<Answer>((resolve) => {
     if (signal.aborted) return resolve(false);
+    const askId = randomUUID();
+    // An answer given on another server's page lands in the run record; this
+    // server looks for it there while the question is open.
+    const poll = setInterval(() => {
+      if (e.ask?.decide !== decide) return clearInterval(poll);
+      hub.pendingAnswer(e.id, askId).then(
+        (a) => {
+          if (a && e.ask?.decide === decide) decide(a.value as Answer);
+        },
+        () => {},
+      );
+    }, ASK_POLL_MS);
+    poll.unref?.();
     const decide = (answer: Answer) => {
       if (e.ask?.decide !== decide) return;
+      clearInterval(poll);
       signal.removeEventListener("abort", onAbort);
       e.ask = null;
       resolve(answer);
@@ -340,7 +359,7 @@ function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
     };
     const onAbort = () => dropAsk(e);
     signal.addEventListener("abort", onAbort);
-    e.ask = { id: randomUUID(), ask, decide };
+    e.ask = { id: askId, ask, decide };
     audit("ask.raised", { ...askContext(e, e.ask.id), ...askFacts(ask) });
     sync(e);
   });
@@ -590,6 +609,10 @@ async function launch(
   turn: { text: string; planning: boolean; images?: { id: string; mediaType: string }[]; replyTo?: string; compact?: boolean } | null,
 ): Promise<{ revision: number; done: Promise<void>; finished: Promise<void> }> {
   if (store.has(id)) throw turn ? busy() : alreadyRunning();
+  // A record left by a dead owner is settled first (marked interrupted), so the
+  // run starts from the session as the user sees it. A record whose owner is
+  // alive on another server is refused by the hub (beginRun), below.
+  await settleSession(id);
   const disk = await readSession(id);
   if (!disk) throw new HttpError(404, "No such session");
   // The revision and the run record are the hub's, not part of the session.
@@ -926,24 +949,33 @@ export async function stopRun(id: string, opts: { force?: boolean } = {}) {
 // is refused (409, reason "stale ask") and changes nothing. A location ask
 // takes the picked paths, or false for none; the others take true or false.
 export async function answerAsk(id: string, askId: string, answer: Answer) {
-  const e = liveEntry(id);
-  if (!e.ask || e.ask.id !== askId) {
+  // The answer goes into the run record, which any server can write; the first
+  // one there wins. The owner picks it up (at once if it is this server).
+  const out = await hub.submitAnswer(id, askId, answer, (ask) => {
+    const location = ask.kind === "location";
+    if (location && answer === true) {
+      return new HttpError(409, "That question asks for a file or folder. Pick one, or say no.", { reason: "wrong answer" });
+    }
+    // "plan" is never refused, whatever the question is: the work goes into a plan.
+    if (answer !== "plan" && !location && typeof answer !== "boolean") {
+      return new HttpError(409, "That question is a yes or no. A picked file or folder doesn't answer it.", {
+        reason: "wrong answer",
+      });
+    }
+    return null;
+  });
+  if (out.result === "none") throw notRunning();
+  if (out.result !== "taken") {
+    // Write only: the audit records the late answer, nothing reads it back.
+    noteSession(id);
+    audit("ask.late", { session: id, askId, reason: out.result === "late" ? "already answered" : "not pending", pid: process.pid });
     throw new HttpError(409, "That question was already answered, or the plan isn't waiting on it any more.", {
       reason: "stale ask",
     });
   }
-  const location = "needsLocation" in e.ask.ask;
-  if (location && answer === true) {
-    throw new HttpError(409, "That question asks for a file or folder. Pick one, or say no.", { reason: "wrong answer" });
-  }
-  // "plan" is never refused, whatever the question is: the work goes into a plan.
-  if (answer !== "plan" && !location && typeof answer !== "boolean") {
-    throw new HttpError(409, "That question is a yes or no. A picked file or folder doesn't answer it.", {
-      reason: "wrong answer",
-    });
-  }
-  e.ask.decide(answer);
-  await e.chain;
+  const e = store.get(id);
+  if (e?.ask?.id === askId) e.ask.decide(answer);
+  await e?.chain;
 }
 
 // Stops every run in this process and waits until each is over. For a server
@@ -953,6 +985,23 @@ export async function answerAsk(id: string, askId: string, answer: Answer) {
 export async function stopAllRuns() {
   await Promise.all([...store.keys()].map((id) => stopRun(id, { force: true }).catch(() => {})));
 }
+
+// The hub found that another server holds this session now (see checkIn in
+// runHub.ts). The run is cut off at once and writes nothing more: no final
+// save, no record change; the new holder owns the session file.
+hub.setLostFloorHandler((id) => {
+  const e = store.get(id);
+  if (!e) return;
+  store.delete(id);
+  e.stopRequested = true;
+  e.ended = true;
+  e.discarded = true;
+  clearSaveTimers(e);
+  e.kill.abort();
+  e.controller?.abort();
+  e.aside?.controller.abort();
+  dropAsk(e);
+});
 
 // For tests: drops every entry without saving, and lets the hub go of the sessions.
 export async function resetRunners() {

@@ -183,6 +183,16 @@ interface, and plain http on this computer only.
   `node:child_process` import, a global `fetch` or a file-changing `node:fs`
   import outside `server/io/` and its short reasoned allowlist (the audit and log
   writers and the lock file). `docs/guide.md`, "The audit log".
+- **The audit is write-only for the app. Recovery must never read it.** Deciding
+  whether a run is live, settling a dead one, and the "files changed" list in the
+  interrupted note all work from the run record in `session.json` (owner, check-in
+  time, changed files) and nothing else. The audit may be pruned, is not written
+  while auditing fails, and is not shared state between servers. Recovery code
+  (`server/restart.ts`, `server/runRecord.ts`, `settleStale` in `server/runHub.ts`)
+  must not import `server/audit.ts` or read `~/.llama-mui/audit`;
+  `server/__tests__/recoveryNeverReadsAudit.test.ts` fails if it does. If recovery
+  needs a fact, put it in the run record, written in its own call apart from the
+  audit line.
 - **To see everything for a chat, search for its id:**
   `grep <id> ~/.llama-mui/audit/*.log`. Every line caused by a chat carries it
   (a thread's run id is `<chat>:<n>`, so searching the chat id finds those too).

@@ -30,7 +30,15 @@
 import type { ServerResponse } from "node:http";
 import { HttpError, type Route } from "./http.ts";
 import * as hub from "./runHub.ts";
+import { holderOf } from "./runRecord.ts";
 import { sessionFolder } from "./sessionFile.ts";
+
+// A run's state with who holds the floor beside it, worked out here so the page
+// never has to decide which server is "this one". Without a run: as it was.
+const withHolder = <T extends { run?: any }>(data: T): T & { holder?: unknown } => {
+  const holder = data.run ? holderOf(data.run) : null;
+  return holder ? { ...data, holder } : data;
+};
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -77,10 +85,10 @@ export async function eventRoutes({ res, parts, method }: Route, heartbeatMs = H
   if (all) {
     // Listener and snapshot in the same step, so no run starts between them.
     const stop = hub.subscribe((e) => {
-      if (GLOBAL_TYPES.has(e.type)) send(e.type, { id: e.id, ...e.data });
+      if (GLOBAL_TYPES.has(e.type)) send(e.type, { id: e.id, ...(e.type === "status" ? withHolder(e.data) : e.data) });
     });
     const send = startStream(res, heartbeatMs, stop);
-    send("snapshot", { runs: hub.liveRuns() });
+    send("snapshot", { runs: hub.liveRuns().map((r) => withHolder(r)) });
     return true;
   }
 
@@ -89,11 +97,11 @@ export async function eventRoutes({ res, parts, method }: Route, heartbeatMs = H
   // Events that arrive between the snapshot being taken and it being sent wait here.
   let send: Send | undefined;
   const waiting: hub.HubEvent[] = [];
-  const watching = await hub.watch(id, (e) => (send ? send(e.type, { id: e.id, ...e.data }) : waiting.push(e)));
+  const watching = await hub.watch(id, (e) => (send ? send(e.type, { id: e.id, ...(e.type === "status" ? withHolder(e.data) : e.data) }) : waiting.push(e)));
   if (!watching) throw new HttpError(404, "No such session");
   const { session, revision, run, stop } = watching;
   send = startStream(res, heartbeatMs, stop);
-  send("snapshot", { id, session, revision, run });
-  for (const e of waiting.splice(0)) send(e.type, { id: e.id, ...e.data });
+  send("snapshot", { id, session, revision, ...withHolder({ run }) });
+  for (const e of waiting.splice(0)) send(e.type, { id: e.id, ...(e.type === "status" ? withHolder(e.data) : e.data) });
   return true;
 }

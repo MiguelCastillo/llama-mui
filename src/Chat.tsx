@@ -183,6 +183,8 @@ import {
   type NoteBox,
 } from "./agent/replyNotes";
 import type { NoteKindId } from "./replyNoteKinds";
+import HeldElsewhereLine from "./HeldElsewhereLine";
+import { allowedActions, planState } from "./allowedActions";
 import {
   PlanView,
   checkRoom,
@@ -502,6 +504,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // (`turnRunning`: a message was sent and the server is streaming the answer).
   // It is running until the run ends.
   const [runnerView, setRunnerView] = useState<RunnerView | null>(null);
+  // The port of another server that holds the floor of this session, or null
+  // (no one, or this server). Read with the session, then kept by the run's view.
+  const [heldPort, setHeldPort] = useState<number | null>(null);
   const runActive = !!runnerView && runnerView.status !== "stopped";
   const turnRunning = runActive && runnerView?.kind === "turn";
   const planRunning = runActive && !turnRunning;
@@ -710,6 +715,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // server saved it, and its revision is the one the next save sends) and the
   // open session is Chat's again.
   const mirrorView = (v: RunnerView) => {
+    setHeldPort(v.status !== "stopped" ? v.heldElsewhere?.port ?? null : null);
     if (v.session) applySession(v.session, true, v.status !== "stopped");
     // The run's error shows in its session, and clears only a run error, so
     // a message of Chat's own (a refusal, a server that can't be reached) isn't
@@ -743,11 +749,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // the server's event stream has sent it (see mirrorView).
   const loadSession = (id: string) => {
     setLoaded(false);
+    setHeldPort(null);
     loadedOk.current = false;
     dismiss(id);
     getSession(id)
       .then((s) => {
         applySession(s, !!s.run);
+        setHeldPort(s.holder && !s.holder.mine ? s.holder.port : null);
         loadedOk.current = true;
         // The run's view may have come while the session was read.
         const view = getView(id);
@@ -1938,7 +1946,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         showSteps={showSteps}
         failed={i === lastFailedTurnIndex ? failed : undefined}
         connectorName={connector ? connector.name || connector.kind : undefined}
-        onResend={i === lastFailedTurnIndex ? bubbleActions.retry : undefined}
+        onResend={i === lastFailedTurnIndex && allowed.has("resend") ? bubbleActions.retry : undefined}
         resendDisabled={i === lastFailedTurnIndex ? runActive : undefined}
         onEdit={t.parts[0].role === "user" && !t.parts[0].aside && !t.parts[0].planStep && !t.parts[0].compaction ? bubbleActions.edit : undefined}
         box={box}
@@ -1980,6 +1988,21 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return own.length ? own : null;
   };
   const canClone = (!plan || plan.every((st) => st.status === "done")) && !runActive;
+  const allowed = allowedActions({
+    loaded,
+    holder: heldPort !== null ? "elsewhere" : "none",
+    plan: plan ? planState(plan, runActive) : null,
+    canClone,
+    hasModel: !!model,
+  });
+  // A plan from an earlier round is finished: the one thing it offers is Clone.
+  const pastAllowed = allowedActions({
+    loaded,
+    holder: heldPort !== null ? "elsewhere" : "none",
+    plan: { finished: true, unfinished: false, started: true, running: false },
+    canClone,
+    hasModel: false,
+  });
   const planCards = [
     ...threads.map((t) => ({
       anchor: t.anchor,
@@ -2009,6 +2032,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             context={p.context}
             details={stepTurns}
             formatTime={formatSeconds}
+            allowed={pastAllowed}
             onClone={canClone ? () => clonePlan(p.steps, p.context, p.summary) : undefined}
           />
         </Box>
@@ -2028,10 +2052,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   where={ownWhere}
                   running={runActive}
                   since={planRunning ? taskSince : null}
+                  allowed={allowed}
                   onPause={planRunning ? () => showFailure(stopRunner(sessionId)) : undefined}
+                  footer={<HeldElsewhereLine port={heldPort} sessionId={sessionId} inPlan />}
                   counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
-                  onRun={runFromCard}
-                  onChange={(steps) => updateSession({ plan: steps })}
+                  onRun={allowed.has("run") || allowed.has("continue") ? runFromCard : undefined}
+                  onChange={allowed.has("edit") ? (steps) => updateSession({ plan: steps }) : undefined}
                   proposal={planProposal}
                   onProposal={answerProposal}
                   details={stepTurns}
@@ -2397,6 +2423,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         messages={
         <Container maxWidth={false} ref={contentRef} sx={{ maxWidth: CHAT_MAX_WIDTH }}>
           <Stack spacing={2}>
+            {/* With a plan, the note is at the bottom of the plan card instead. */}
+            {!plan && <HeldElsewhereLine port={heldPort} sessionId={sessionId} />}
             {connector === null ? (
               <Stack spacing={2} sx={{ alignItems: "center", mt: 8 }}>
                 {(connectors ?? []).length === 0 ? (
@@ -2528,7 +2556,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             // Held down (or tapped again while stopping): also cuts short a running tool call.
             onStopAll={turnRunning ? () => showFailure(stopRunner(sessionId, { force: true })) : undefined}
             stopping={turnRunning && !!runnerView?.stopping}
-            disabled={!model && !planRunning}
+            disabled={!allowed.has("send")}
             planRunning={planRunning}
             tellPlan={tellPlan}
             onTellPlan={setTellPlan}

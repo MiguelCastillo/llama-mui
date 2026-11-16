@@ -37,6 +37,9 @@ export interface RunnerView {
   // (counting from 1) that will see each. Once a step starts they are in the
   // chat, marked "Seen by step N".
   notes: { id: string; text: string; step: number }[];
+  // Set only while another server holds the floor of this session (it is
+  // running there): its port. Null when no one does, or this server does.
+  heldElsewhere?: { port: number } | null;
 }
 
 // A run is in progress from when it starts until it ends: running and waiting

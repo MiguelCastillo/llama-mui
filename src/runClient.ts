@@ -75,9 +75,16 @@ interface WireRun {
   notes?: { id: string; text: string; step: number; stepId: string }[];
 }
 
+// Who holds the floor of a run, as the server works it out (server/runRecord.ts).
+interface WireHolder {
+  port: number;
+  mine: boolean;
+}
+
 interface Live {
   id: string;
   run: WireRun;
+  holder: WireHolder | null;
   // The run's session while a listener has it open; null otherwise.
   session: Session | null;
   // A command the server refused or couldn't be sent, until the next event.
@@ -155,6 +162,8 @@ function viewOf(l: Live): RunnerView {
     aside: !!l.run.aside,
     startedAt: l.run.startedAt,
     notes: (l.run.notes ?? []).map(({ id, text, step }) => ({ id, text, step })),
+    // Only when another server holds the floor; nothing otherwise.
+    heldElsewhere: l.holder && !l.holder.mine ? { port: l.holder.port } : null,
   };
 }
 
@@ -189,16 +198,17 @@ function listen(source: EventSource, type: string, fn: (data: any) => void) {
 }
 
 // A run exists (new, or changed).
-function ensureLive(id: string, run: WireRun) {
+function ensureLive(id: string, run: WireRun, holder: WireHolder | null = null) {
   const known = lives.get(id);
   if (known) {
     known.run = run;
+    known.holder = holder;
     known.commandError = null;
     touch(known);
     return;
   }
   stopped.delete(id);
-  const l = { id, run, session: null, commandError: null, source: null, ask: null } as unknown as Live;
+  const l = { id, run, holder, session: null, commandError: null, source: null, ask: null } as unknown as Live;
   lives.set(id, l);
   bump(id);
   l.view = viewOf(l);
@@ -266,8 +276,8 @@ function dropped(id: string) {
   changed();
 }
 
-const onStatus = (id: string, data: { run: WireRun | null; error?: string }) =>
-  data.run ? ensureLive(id, data.run) : void endRun(id, data.error);
+const onStatus = (id: string, data: { run: WireRun | null; holder?: WireHolder; error?: string }) =>
+  data.run ? ensureLive(id, data.run, data.holder ?? null) : void endRun(id, data.error);
 
 // The stream for the whole app.
 function connect() {
@@ -276,10 +286,10 @@ function connect() {
   if (!events) return;
   globalEvents = events;
   const source = events.source;
-  listen(source, "snapshot", (data: { runs: { id: string; run: WireRun }[] }) => {
+  listen(source, "snapshot", (data: { runs: { id: string; run: WireRun; holder?: WireHolder }[] }) => {
     const ids = new Set(data.runs.map((r) => r.id));
     for (const id of [...lives.keys()]) if (!ids.has(id)) void endRun(id);
-    for (const r of data.runs) ensureLive(r.id, r.run);
+    for (const r of data.runs) ensureLive(r.id, r.run, r.holder ?? null);
   });
   listen(source, "status", (data) => onStatus(data.id, data));
   listen(source, "removed", (data) => dropped(data.id));
@@ -295,12 +305,13 @@ function syncWatch(id: string) {
     const source = new EventSource(`/api/sessions/${id}/events`);
     l.source = source;
     const current = () => lives.get(id) === l;
-    listen(source, "snapshot", (data: { session: Session; run: WireRun | null }) => {
+    listen(source, "snapshot", (data: { session: Session; run: WireRun | null; holder?: WireHolder }) => {
       if (!current()) return;
       l.session = data.session;
       if (!data.run) void endRun(id);
       else {
         l.run = data.run;
+        l.holder = data.holder ?? null;
         l.commandError = null;
         touch(l);
       }
