@@ -1200,6 +1200,10 @@ export function withoutImages(messages: ChatMessage[]): ChatMessage[] {
 // file; llama.cpp stops sooner when the context fills.
 const MAX_TOKENS = 32768;
 
+// Wording that failureLine (src/agent/helpers.ts) recognises.
+export const STREAM_ERROR = "Stream error";
+export const EMPTY_REPLY = "The model sent nothing";
+
 // The message inside an API error. llama.cpp's errors are {error: {message}},
 // Anthropic's {type, error: {message}}.
 function apiErrorMessage(e: InstanceType<typeof Anthropic.APIError>): string {
@@ -1276,6 +1280,12 @@ async function streamMessages(
     if (e instanceof Anthropic.APIError && e.status) {
       throw new Error(`POST /v1/messages: ${e.status} ${apiErrorMessage(e)}`);
     }
+    // An error event inside a stream that started fine (e.g. overloaded_error)
+    // has no HTTP status; keep the provider's type and message.
+    if (e instanceof Anthropic.APIError) {
+      const type = (e.error as any)?.error?.type;
+      throw new Error(`${STREAM_ERROR} (${type ?? "unknown"}): ${apiErrorMessage(e)}`);
+    }
     throw e;
   }
 
@@ -1315,6 +1325,10 @@ async function streamMessages(
   if (final.stop_reason === "refusal") {
     const category = (final as any).stop_details?.category;
     throw new Error(`The model declined to answer${category ? ` (${category})` : ""}.`);
+  }
+  // A reply with no text, thinking or calls is a failure, not a quiet success.
+  if (!final.content.some((b) => (b.type === "text" ? b.text.trim() : true))) {
+    throw new Error(`${EMPTY_REPLY}${final.stop_reason ? ` (stop reason: ${final.stop_reason})` : ""}.`);
   }
   // llama.cpp signs nothing (an empty signature), so only Claude's replies
   // need their blocks kept.

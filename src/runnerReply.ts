@@ -195,7 +195,21 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
       planId: now.planId ?? null,
     };
 
-    const result = await runTurn(
+    // A turn that throws before its own error handling (building the request,
+    // say) would leave the saved copy at "interrupted" for good, with no reason.
+    // Save the reason, then let the error go on as before.
+    const guarded = async <T,>(run: () => Promise<T>): Promise<T> => {
+      try {
+        return await run();
+      } catch (e) {
+        if (!controller.signal.aborted && !planStep) failed = String(e);
+        streaming = false;
+        syncFailed();
+        throw e;
+      }
+    };
+
+    const result = await guarded(() => runTurn(
       {
         connectorId: connector.id,
         kind: connector.kind,
@@ -226,7 +240,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
         ...(clearCount !== undefined ? { clearCount } : {}),
       },
       callbacks,
-    );
+    ));
 
     // Where the cut ended: further on if the turn was heavy on its own, so the
     // next turn goes on from there instead of sending those results again.

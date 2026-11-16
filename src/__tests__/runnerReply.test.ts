@@ -354,6 +354,17 @@ describe("makeReply", () => {
     expect(h.session().failed).toBe("boom");
   });
 
+  it("keeps the reason when the turn throws before handling its own error", async () => {
+    const h = makeHandle({ plan: undefined });
+    mockRunTurn.mockImplementation(async (_config: RunTurnConfig, cb: RunTurnCallbacks) => {
+      cb.setAbort(new AbortController());
+      throw new Error("Anthropic overloaded");
+    });
+    await expect(makeReply(h.handle)("go", [])).rejects.toThrow("overloaded");
+    // Not left as "interrupted": the saved session says why.
+    expect(h.session().failed).toBe("Error: Anthropic overloaded");
+  });
+
   it("writes plan, todos, attachments and past plans into the session", async () => {
     const h = makeHandle();
     mockRunTurn.mockImplementation(async (config: RunTurnConfig, cb: RunTurnCallbacks) => {

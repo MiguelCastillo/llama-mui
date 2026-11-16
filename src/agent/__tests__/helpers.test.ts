@@ -174,6 +174,23 @@ describe("failureLine", () => {
     expect(failureLine("Something went wrong")).toBe("The llama server returned an error.");
   });
 
+  it("shows the provider's message for an error event inside a stream", () => {
+    expect(failureLine("Error: Stream error (overloaded_error): Overloaded", "Anthropic (work)")).toBe(
+      "Anthropic (work) returned an error: Overloaded",
+    );
+  });
+
+  it("cuts a long stream error message", () => {
+    const line = failureLine(`Stream error (x): ${"y".repeat(400)}`, "Anthropic");
+    expect(line).toBe(`Anthropic returned an error: ${"y".repeat(160)}…`);
+  });
+
+  it("says so plainly when the model sent nothing", () => {
+    expect(failureLine("Error: The model sent nothing (stop reason: end_turn).")).toBe(
+      "The model sent nothing (stop reason: end_turn).",
+    );
+  });
+
   it("handles empty string", () => {
     expect(failureLine("")).toBe("The llama server returned an error.");
   });

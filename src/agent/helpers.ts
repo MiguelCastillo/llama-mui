@@ -66,5 +66,13 @@ export function failureLine(failed: string, who = "the llama server"): string {
       return `${sentence} rejected the request: ${cut}`;
     }
   }
+  // An error event inside a stream, or an empty reply (wording from src/api.ts).
+  const streamed = /^(?:Error: )?Stream error \(([^)]*)\):\s*([\s\S]*)$/.exec(failed);
+  if (streamed) {
+    const message = streamed[2].replace(/\s+/g, " ").trim() || streamed[1];
+    return `${sentence} returned an error: ${message.length > MESSAGE_CUT ? `${message.slice(0, MESSAGE_CUT).trimEnd()}…` : message}`;
+  }
+  const plain = /^(?:Error: )?(The model (?:sent nothing|declined)[^\n]*)$/.exec(failed);
+  if (plain) return plain[1];
   return `${sentence} returned an error.`;
 }

@@ -395,6 +395,9 @@ describe("streamChat with a tool call that never got a result", () => {
   it("sends a tool_result for it with the Messages API", async () => {
     const requests = serve([
       { type: "message_start", message: { id: "m1", type: "message", role: "assistant", content: [], model: "qwen", stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+      { type: "content_block_stop", index: 0 },
       { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
       { type: "message_stop" },
     ]);
@@ -437,6 +440,9 @@ describe("streamChat with a reply that was cut off when the app stopped", () => 
 
     const anth = serve([
       { type: "message_start", message: { id: "m1", type: "message", role: "assistant", content: [], model: "qwen", stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+      { type: "content_block_stop", index: 0 },
       { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
       { type: "message_stop" },
     ]);
@@ -476,6 +482,9 @@ describe("streamChat after a reply that made a note call", () => {
   it("sends the reply's text, its calls and their answers with the Messages API, and no note fields", async () => {
     const requests = serve([
       { type: "message_start", message: { id: "m1", type: "message", role: "assistant", content: [], model: "qwen", stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+      { type: "content_block_stop", index: 0 },
       { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
       { type: "message_stop" },
     ]);
@@ -625,6 +634,23 @@ describe("streamChat with the Messages API", () => {
   it("reports llama.cpp's error message with the status", async () => {
     serve([{ error: { code: 400, message: "model 'qwen' not found", type: "invalid_request_error" } }], 400);
     await expect(collect("anthropic")).rejects.toThrow("POST /v1/messages: 400 model 'qwen' not found");
+  });
+
+  it("reports an error event inside a stream that started fine", async () => {
+    serve([
+      reply("sig")[0],
+      { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+    ]);
+    await expect(collect("anthropic", "anthropic")).rejects.toThrow("Stream error (overloaded_error): Overloaded");
+  });
+
+  it("fails an empty reply, with the stop reason", async () => {
+    serve([
+      reply("")[0],
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 0 } },
+      { type: "message_stop" },
+    ]);
+    await expect(collect("anthropic")).rejects.toThrow("The model sent nothing (stop reason: end_turn).");
   });
 
   it("reports Anthropic's error message with the status", async () => {

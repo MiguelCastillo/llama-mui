@@ -61,6 +61,15 @@ beforeAll(async () => {
     if (req.url === "/v1/ok") {
       res.setHeader("Content-Type", "text/event-stream");
       res.end("data: hello\n\ndata: [DONE]\n\n");
+    } else if (req.url === "/v1/messages?case=error") {
+      // A 200 stream that fails midway, as Anthropic does when overloaded.
+      res.setHeader("Content-Type", "text/event-stream");
+      res.write('event: message_start\ndata: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":7,"output_tokens":0}}}\n\n');
+      res.end('event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n');
+    } else if (req.url === "/v1/messages?case=empty") {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.write('event: message_start\ndata: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":7,"output_tokens":0}}}\n\n');
+      res.end('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n');
     } else if (req.url === "/v1/messages") {
       // In three pieces that cut lines in half, as a network can.
       res.setHeader("Content-Type", "text/event-stream");
@@ -187,6 +196,31 @@ describe("requests to a model server", () => {
     expect(JSON.stringify(end)).not.toContain("Hello");
   });
 
+  it("record an error event inside a 200 stream, and no empty flag for it", async () => {
+    await (await post("/v1/messages?case=error")).text();
+    const start = (await lines()).filter((l) => l.event === "upstream.start" && l.path === "/v1/messages").pop();
+    const end = await ended(start.id);
+    expect(end).toMatchObject({ outcome: "done", status: 200, streamError: { type: "overloaded_error", message: "Overloaded" } });
+    expect(end.empty).toBeUndefined();
+  });
+
+  it("mark a reply that ended with 0 output tokens as empty, with its stop reason", async () => {
+    await (await post("/v1/messages?case=empty")).text();
+    const start = (await lines()).filter((l) => l.event === "upstream.start" && l.path === "/v1/messages").pop();
+    const end = await ended(start.id);
+    expect(end).toMatchObject({ outcome: "done", empty: true, stopReason: "end_turn", tokens: { output: 0 } });
+    expect(end.streamError).toBeUndefined();
+  });
+
+  it("show a stop reason and no empty or error mark for a normal reply", async () => {
+    await (await post("/v1/messages")).text();
+    const start = (await lines()).filter((l) => l.event === "upstream.start" && l.path === "/v1/messages").pop();
+    const end = await ended(start.id);
+    expect(end.stopReason).toBe("end_turn");
+    expect(end.empty).toBeUndefined();
+    expect(end.streamError).toBeUndefined();
+  });
+
   it("give no token counts for other paths", async () => {
     await (await post("/v1/ok")).text();
     const start = (await lines()).filter((l) => l.event === "upstream.start" && l.path === "/v1/ok").pop();
@@ -249,7 +283,23 @@ describe("usageReader", () => {
   it("reads the counts however the stream is cut, one character at a time included", () => {
     const r = usageReader();
     for (const ch of MESSAGES_STREAM) r.feed(ch);
-    expect(r.result()).toEqual({ model: "claude-sonnet-5-5", input: 12, cacheRead: 60000, cacheWrite: 3000, output: 480 });
+    expect(r.result()).toEqual({ model: "claude-sonnet-5-5", input: 12, cacheRead: 60000, cacheWrite: 3000, output: 480, stopReason: "end_turn" });
+  });
+
+  it("keeps an error event inside the stream, with its type and a cut message", () => {
+    const r = usageReader();
+    r.feed('data: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":5,"output_tokens":0}}}\n');
+    r.feed("event: error\n");
+    r.feed('data: {"type":"error","error":{"type":"overloaded_error","message":"' + "x".repeat(500) + '"}}\n');
+    const got = r.result();
+    expect(got?.streamError?.type).toBe("overloaded_error");
+    expect(got?.streamError?.message).toHaveLength(200);
+  });
+
+  it("reads the stop reason from message_delta", () => {
+    const r = usageReader();
+    r.feed('data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}\n');
+    expect(r.result()).toMatchObject({ stopReason: "end_turn", output: 3 });
   });
 
   it("gives nothing for a stream without usage", () => {

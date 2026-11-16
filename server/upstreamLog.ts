@@ -20,6 +20,12 @@
 // is made of (cacheWrite costs more than input, cacheRead much less), and
 // `cleared` says how many old tool results Anthropic left out of the request
 // and how many tokens that saved. Nothing of the reply's text is kept.
+//
+// Anthropic can also report a failure inside a stream that started fine (status
+// 200, e.g. an overloaded_error): the line then has `streamError` { type,
+// message } (the provider's own wording, cut short), and `stopReason` says why a
+// reply that finished did so. `empty: true` marks a reply that ended with 0
+// output tokens: the model sent nothing, which the status alone never shows.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Readable } from "node:stream";
@@ -70,7 +76,13 @@ export interface Usage {
   // results, see src/toolResults.ts), when it did.
   clearedToolUses?: number;
   clearedTokens?: number;
+  // An `event: error` inside the stream: the provider's error type and message.
+  streamError?: { type: string; message: string };
+  // Why the reply stopped (message_delta's stop_reason), when it said.
+  stopReason?: string;
 }
+// Longest provider error message kept in the log.
+const MAX_ERROR_MESSAGE = 200;
 // Only the lines that can carry usage are parsed; a content line can be long,
 // so a partial line longer than this is dropped rather than kept.
 const MAX_LINE = 64 * 1024;
@@ -78,13 +90,18 @@ export function usageReader() {
   const usage: Usage = {};
   let partial = "";
   const take = (line: string) => {
-    if (!line.startsWith("data:") || !(line.includes('"usage"') || line.includes('"applied_edits"'))) return;
+    if (!line.startsWith("data:") || !(line.includes('"usage"') || line.includes('"applied_edits"') || line.includes('"error"') || line.includes('"stop_reason"'))) return;
     let e: any;
     try {
       e = JSON.parse(line.slice(5));
     } catch {
       return;
     }
+    if (e?.type === "error" && e.error) {
+      usage.streamError = { type: String(e.error.type ?? "error").slice(0, 60), message: String(e.error.message ?? "").slice(0, MAX_ERROR_MESSAGE) };
+      return;
+    }
+    if (e?.type === "message_delta" && typeof e.delta?.stop_reason === "string") usage.stopReason = e.delta.stop_reason;
     const edits = e?.type === "message_delta" ? e.context_management?.applied_edits : undefined;
     if (Array.isArray(edits) && edits.length) {
       const sum = (key: string) => edits.reduce((n: number, x: any) => n + (typeof x?.[key] === "number" ? x[key] : 0), 0);
@@ -111,7 +128,7 @@ export function usageReader() {
     result(): Usage | undefined {
       if (partial) take(partial.trimEnd());
       partial = "";
-      return usage.input === undefined && usage.output === undefined ? undefined : { ...usage };
+      return usage.input === undefined && usage.output === undefined && !usage.streamError ? undefined : { ...usage };
     },
   };
 }
@@ -179,6 +196,9 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
       ...(counted
         ? { tokens: { input: counted.input ?? 0, cacheRead: counted.cacheRead ?? 0, cacheWrite: counted.cacheWrite ?? 0, output: counted.output ?? 0 } }
         : {}),
+      ...(counted?.streamError ? { streamError: counted.streamError } : {}),
+      ...(counted?.stopReason ? { stopReason: counted.stopReason } : {}),
+      ...(counted && !counted.streamError && (counted.output ?? 0) === 0 ? { empty: true } : {}),
       ...(counted?.clearedToolUses ? { cleared: { toolUses: counted.clearedToolUses, tokens: counted.clearedTokens ?? 0 } } : {}),
       ...extra,
     });
