@@ -103,6 +103,28 @@ describe("session routes", () => {
     expect((await call("GET", ["conn-none"])).body.connectorId).toBeUndefined();
   });
 
+  it("saves a session with a draft and no messages, loads the draft back and lists it as a draft", async () => {
+    const put = await call("PUT", ["draft-1"], saved("draft-1", { messages: [], draft: "half a thought" }));
+    expect(put.status).toBe(200);
+    expect(put.body.draft).toBe("half a thought");
+    expect(JSON.parse(await readFile(sessionFile("draft-1"), "utf8")).draft).toBe("half a thought");
+    const got = (await call("GET", ["draft-1"])).body;
+    expect(got).toMatchObject({ draft: "half a thought", messages: [] });
+    const row = (await call("GET", [])).body.find((s: any) => s.id === "draft-1");
+    expect(row.draft).toBe("half a thought");
+  });
+
+  it("lists a session without a draft, or with messages, as not a draft, and drops a blank or non-text draft", async () => {
+    await call("PUT", ["draft-none"], saved("draft-none", { messages: [] }));
+    await call("PUT", ["draft-blank"], saved("draft-blank", { messages: [], draft: "  \n" }));
+    await call("PUT", ["draft-num"], saved("draft-num", { messages: [], draft: 5 }));
+    await call("PUT", ["draft-sent"], saved("draft-sent", { draft: "already sent" }));
+    const rows = (await call("GET", [])).body;
+    for (const id of ["draft-none", "draft-blank", "draft-num", "draft-sent"]) expect(rows.find((s: any) => s.id === id).draft).toBeNull();
+    expect("draft" in JSON.parse(await readFile(sessionFile("draft-blank"), "utf8"))).toBe(false);
+    expect((await call("GET", ["draft-none"])).body.draft).toBeUndefined();
+  });
+
   it("carries parentId in the list and in the PUT and PATCH answers, and null without one", async () => {
     const put = await call("PUT", ["child-1"], saved("child-1", { parentId: "abc" }));
     expect(put.body.parentId).toBe("abc");

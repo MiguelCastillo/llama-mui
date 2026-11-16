@@ -23,12 +23,19 @@ export type BoxContent = { text: string; images: PendingImage[]; documents: Pend
 
 export type MessageBox = {
   // What is in the box now. The same object until something changes, so it
-  // can be read with useSyncExternalStore.
+  // can be read with useSyncExternalStore. The text is for the chat the box is
+  // for (see sessionId), so a chat that reads it for another chat (one opened
+  // meanwhile) gets that chat's saved draft instead (see textFor).
   get: () => BoxContent;
   // Nothing typed (spaces don't count) and no images: what Edit needs.
   isEmpty: () => boolean;
-  // The chat whose draft the box holds.
+  // The chat the box is for now: the one the chat component opened it for,
+  // which is what the box's own text belongs to.
   sessionId: () => string;
+  // The text for chat `id`: the box's own text when it is for that chat,
+  // else that chat's saved draft (the box's text belongs to another chat,
+  // opened meanwhile).
+  textFor: (id: string) => string;
   // Shows chat `id`'s saved draft. The images stay, as they did before.
   show: (id: string) => void;
   // Replaces the text and keeps it as the draft of the chat shown.
@@ -51,6 +58,10 @@ export type Drafts = { load: (id: string) => string; save: (id: string, text: st
 
 export function createMessageBox(sessionId: string, drafts: Drafts = { load: loadDraft, save: saveDraft }): MessageBox {
   let shown = sessionId;
+  // The chat the box's own text belongs to: a change made for it (a send, a
+  // voice transcription) updates it, and it is what the box shows until
+  // another chat is opened.
+  let owner = sessionId;
   let content: BoxContent = { text: drafts.load(sessionId), images: [], documents: [] };
   const listeners = new Set<() => void>();
   const fillListeners = new Set<() => void>();
@@ -60,20 +71,30 @@ export function createMessageBox(sessionId: string, drafts: Drafts = { load: loa
   };
   const setTextFor = (id: string, text: string) => {
     drafts.save(id, text);
-    if (id === shown && text !== content.text) change({ text });
+    if (id === owner && text !== content.text) change({ text });
   };
+  // The text for chat `id`: the box's own text when it belongs to that chat,
+  // otherwise the chat's saved draft (the box's text belongs to another chat,
+  // opened meanwhile).
+  const textFor = (id: string) => (owner === id ? content.text : drafts.load(id));
   const listen = (set: Set<() => void>) => (listener: () => void) => {
     set.add(listener);
     return () => void set.delete(listener);
   };
   return {
     get: () => content,
-    isEmpty: () => content.text.trim() === "" && content.images.length === 0 && content.documents.length === 0,
+    // Nothing typed (spaces don't count) and no images: what Edit needs.
+    isEmpty: () => !content.text.trim() && content.images.length === 0 && content.documents.length === 0,
+    // The text for chat `id` (see textFor above), for the chat that reads it.
+    textFor: (id: string) => textFor(id),
+    // The chat the box is for now: the one shown, which is what the box's own
+    // text belongs to.
     sessionId: () => shown,
     show: (id) => {
       if (id === shown) return;
       shown = id;
       change({ text: drafts.load(id) });
+      owner = id;
     },
     setText: (text) => setTextFor(shown, text),
     setTextFor,

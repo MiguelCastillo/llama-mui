@@ -17,7 +17,7 @@ import { settleSession } from "./restart.ts";
 import { descendantIds } from "../src/sessionTree.ts";
 import { personaToSave } from "../src/persona.ts";
 import { worktreeStatuses } from "./worktreeStatus.ts";
-import { convertWorkingDir, deleteSession, queueFieldsOf, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
+import { convertWorkingDir, deleteSession, draftOf, queueFieldsOf, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
 
 // Other modules (and tests) have always got these from here.
 export { openTodoList, sessionFolder, summaryOf } from "./sessionFile.ts";
@@ -141,10 +141,13 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
         const queue = queueFieldsOf(old);
         // The persona's name is fixed once the chat has started: a save can
         // choose it before then, never change it after (see personaToSave).
-        const { persona: _sentPersona, ...others } = rest;
+        const { persona: _sentPersona, draft: sentDraft, ...others } = rest;
         const persona = personaToSave(old, _sentPersona);
+        // The unsent text, kept only while it has text; a blank one is dropped.
+        const draft = draftOf(sentDraft);
         return {
           ...others,
+          ...(draft ? { draft } : {}),
           ...connection,
           ...(persona ? { persona } : {}),
           id,

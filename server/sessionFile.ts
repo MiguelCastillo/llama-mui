@@ -106,12 +106,21 @@ export function openTodoList(todos: unknown): { id: string; summary: string }[] 
     .map((t) => ({ id: t.id, summary: t.summary }));
 }
 
+// The unsent text a session holds as its draft. Missing, not text, or blank
+// (from an older chat or a bad save) is "".
+export const draftOf = (draft: unknown): string => (typeof draft === "string" && draft.trim() ? draft : "");
+
 // The row the sessions list shows for a saved session. The list, a save and a
 // rename all answer with it, so the client can swap a row for the answer
 // without losing a field (a nested session would jump to the top level
 // without its parentId).
 export function summaryOf(s: any) {
+  const draft = draftOf(s.draft);
+  const hasMessages = Array.isArray(s.messages) && s.messages.length > 0;
   return {
+    // The start of the unsent text, only while the session has no message yet:
+    // that is what makes the list show it as a draft. Null otherwise.
+    draft: draft && !hasMessages ? draft.slice(0, 200) : null,
     id: String(s.id),
     title: String(s.title),
     updatedAt: Number(s.updatedAt),

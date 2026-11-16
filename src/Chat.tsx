@@ -266,6 +266,7 @@ function saveSessionId(id: string) {
   }
 }
 
+
 function loadFlag(key: string, fallback: boolean): boolean {
   try {
     const v = localStorage.getItem(key);
@@ -661,7 +662,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What is in the message box (text and images), kept outside React state so
   // typing doesn't redraw the chat: only the box and the Edit buttons on
   // screen read it (see messageBox.ts). The chat puts text in the box with
-  // box.fill.
+  // box.fill. Each chat's unsent text is kept in the browser per chat (see
+  // drafts.ts), so a new chat's draft survives switching to another chat and
+  // coming back, and a refresh brings it back too.
   const [box] = useState(() => createMessageBox(sessionId));
   // The position of the user message being edited: sending then replaces it and
   // everything after it. Null when the box is for a new message.
@@ -756,6 +759,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .then((s) => {
         applySession(s, !!s.run);
         setHeldPort(s.holder && !s.holder.mine ? s.holder.port : null);
+        // A draft saved on the server (a chat with words in it, not yet sent)
+        // goes in the box, replacing this browser's own copy. It is counted as
+        // saved, so opening the chat doesn't save it again.
+        if (s.draft?.trim() && !s.messages?.length && openId.current === id) {
+          box.setTextFor(id, s.draft);
+          savedKey.current += "\u0000" + s.draft;
+        }
         loadedOk.current = true;
         // The run's view may have come while the session was read.
         const view = getView(id);
@@ -848,9 +858,26 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // A session with a run is saved by the run, which holds the newer copy; the
     // server would refuse this page's save anyway. Nothing is saved either
     // while Run is being sent (see startRun).
-    if (!loaded || messages.length === 0 || runnerActive(sessionId) || starting.current === sessionId) return;
-    const session = snapshot();
-    const key = stateKey(session);
+    if (!loaded || runnerActive(sessionId) || starting.current === sessionId) return;
+    // A chat with no messages is saved only as a draft: while the box has
+    // text, that text is saved with it. Once the box is empty again, the
+    // draft's session is deleted, so an empty new chat is never kept.
+    const draft = messages.length === 0 ? box.textFor(sessionId) : "";
+    if (messages.length === 0) {
+      if (!draft.trim()) {
+        const listed = sessions.find((x) => x.id === sessionId);
+        if (listed?.draft) {
+          const removedId = sessionId;
+          savedKey.current = "";
+          deleteSession(removedId)
+            .then(() => setSessions((ss) => removeRow(ss, removedId)))
+            .catch((e) => showSessionError(removedId, e.message));
+        }
+        return;
+      }
+    }
+    const session = draft.trim() ? { ...snapshot(), draft } : snapshot();
+    const key = stateKey(session) + (draft.trim() ? "\u0000" + draft : "");
     if (key === savedKey.current) return;
     savedKey.current = key;
     const savedId = sessionId;
@@ -871,6 +898,23 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // modelName too: the model often names a session before its first save, when
   // the rename (PATCH) has no file to change yet, so the next save carries it.
   }, [loaded, session, model, connectorId]);
+
+  // Typing in an empty chat saves (or clears) its draft a moment after the
+  // text stops changing. The box is outside React state, so it is listened to
+  // directly, and the latest saveNow is called.
+  const saveNowRef = useRef(saveNow);
+  saveNowRef.current = saveNow;
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = box.subscribe(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => saveNowRef.current(), 800);
+    });
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [box]);
 
   // Set by openSession: once that session has loaded, the chat box scrolls to
   // its plan card instead of the end.
@@ -1593,6 +1637,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     } catch (e) {
       // Not saved after all, or not started: the next save must try again.
       if (savedKey.current === key) savedKey.current = "";
+      // Only a session that was not on the server before this send is removed.
+      // One that was listed (a saved draft) stays: the failed send puts the
+      // text back in the box, and the next save keeps it as the draft again.
       if (!listed && before.length === 0) {
         deleteSession(id)
           .then(() => setSessions((ss) => ss.filter((x) => x.id !== id)))
@@ -2541,6 +2588,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           <UsageWarning refreshKey={turnRunning} sx={{ mb: 1 }} />
           <Composer
             box={box}
+            sessionId={sessionId}
             enterSends={!narrow}
             placeholder={planRunning ? (tellPlan ? "Message the plan" : "Ask a side question") : "Message"}
             onSend={send}
@@ -2630,6 +2678,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 // about 100 ms each in a 300-message one.
 function Composer({
   box,
+  sessionId,
   placeholder,
   onSend,
   onEditLast,
@@ -2666,6 +2715,8 @@ function Composer({
   // What is in the box, and the chat whose draft it is (see messageBox.ts).
   // The chat puts text in it with box.fill, and the box then takes focus.
   box: MessageBox;
+  // The chat that is open: its draft is what the box shows.
+  sessionId: string;
   placeholder: string;
   // Resolves to whether the message went. `accepted` is called as soon as the
   // send is certain to start (never for a refused one), so the box can clear
@@ -2703,8 +2754,22 @@ function Composer({
 }) {
   // The box's text and images. Opening another chat shows its draft (the chat
   // tells the store), and every change of the text is kept as that chat's
-  // draft, so a refresh brings it back.
-  const { text, images: pendingImages, documents: pendingDocuments } = useSyncExternalStore(box.subscribe, box.get);
+  // draft, so a refresh brings it back. The text is read for the chat that is
+  // open: a change made while another chat was opened meanwhile (a send ending
+  // after the switch, a voice transcription) belongs to the chat it was made
+  // in, so the box's own text is not shown here.
+  // The snapshot is the same object until the box or this chat's text changes:
+  // a new object on every read would make React redraw without end.
+  const shown = useRef<{ base: ReturnType<MessageBox["get"]>; text: string; value: ReturnType<MessageBox["get"]> } | null>(null);
+  const readBox = () => {
+    const base = box.get();
+    const text = box.textFor(sessionId);
+    if (!shown.current || shown.current.base !== base || shown.current.text !== text) {
+      shown.current = { base, text, value: { ...base, text } };
+    }
+    return shown.current.value;
+  };
+  const { text, images: pendingImages, documents: pendingDocuments } = useSyncExternalStore(box.subscribe, readBox);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Visual cue when a file is being dragged over the composer.
   const [dragOver, setDragOver] = useState(false);

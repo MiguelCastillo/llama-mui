@@ -74,8 +74,10 @@ export function ago(t: number): string {
   return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-// The display title for a session: userName wins, then modelName, then title.
+// The display title for a session: userName wins, then (for a draft) the start
+// of its text, then modelName, then title.
 function displayTitle(s: SessionSummary): string {
+  if (s.draft && s.userName == null) return s.draft.trim().replace(/\s+/g, " ").slice(0, 60);
   return s.userName ?? s.modelName ?? s.title;
 }
 
@@ -210,6 +212,12 @@ function SessionRow({ node, depth, ctx }: { node: SessionNode; depth: number; ct
           ) : (
             <>
               <ListItemText primary={title} slotProps={{ primary: { noWrap: true, variant: "body1" } }} />
+              {/* Words typed here and not yet sent (see the session's draft). */}
+              {s.draft && (
+                <Typography variant="caption" color="text.secondary" sx={{ mx: 0.5, flexShrink: 0 }}>
+                  Draft
+                </Typography>
+              )}
               {/* A plan here is waiting on you; the open session shows its own prompt. */}
               {s.id !== currentId && attention.has(s.id) && (
                 <StatusIcon

@@ -791,6 +791,10 @@ export interface Session {
   // last-used connection. A saved id may name a connection since deleted.
   connectorId?: string;
   messages: ChatMessage[];
+  // Text typed but not sent yet, kept on the server so any device can pick it
+  // up. Only a session with no messages holds one. Missing: none (""); older
+  // chats don't have it.
+  draft?: string;
   contextStart: number;
   // The extra files and folders the model may read. The working directory is
   // not one of them: it is `workingDir`.
@@ -992,6 +996,9 @@ export interface SessionSummary {
   modelName?: string | null;
   userName?: string | null;
   group?: string | null;
+  // The start of the unsent text of a session with no messages yet; non-empty
+  // means the list shows it as a draft. Null or missing: a normal chat.
+  draft?: string | null;
   // The session's open todos, without descriptions; see openTodoList in server/sessions.ts.
   todos?: { id: string; summary: string }[];
   // The session this one is nested under (its direct parent, any session). The
