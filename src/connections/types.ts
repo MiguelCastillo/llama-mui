@@ -140,7 +140,26 @@ export interface Connection {
   // The message inside a provider's error body (the body as the SDK parsed
   // it), or `fallback` when the body has none.
   errorMessage(body: unknown, fallback: string): string;
+  // What one thinking block from this connection is: the model's reasoning, a
+  // note it wrote for the user between tool calls, or "unknown" when this
+  // connection can't tell (the caller logs that, and shows it as reasoning).
+  // `sent` is the request fields this connection's own `fields` returned for
+  // the request, so the connection can see what it asked for (Claude's
+  // thinking display) without the caller knowing what that means. Every
+  // connection answers; one with no notes always says "reasoning". Shared code
+  // (wires, the log) asks this and never reads signatures or settings itself.
+  classifyThinking(block: ThinkingBlock, sent: Record<string, unknown>): ThinkingKind;
 }
+
+// A thinking block as a wire (or the server's log) collected it: whether it
+// has any words, and the signature when the connection sends one (Claude does;
+// llama.cpp doesn't). Not the words themselves: telling what a block is never
+// needs them, and the log must not keep them.
+export interface ThinkingBlock {
+  hasText: boolean;
+  signature?: string;
+}
+export type ThinkingKind = "reasoning" | "progress" | "unknown";
 
 // llama.cpp's errors are {error: {message}}, Anthropic's {type, error: {message}};
 // the OpenAI SDK hands over the inner object, {message}. All three are read here.

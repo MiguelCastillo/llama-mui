@@ -1,8 +1,19 @@
-// Client for the dev server's /api routes: settings, attachments, the model's
-// tools, and the model's API, proxied per connector at /api/c/<id>/v1: each
-// connector speaks Anthropic's Messages (/v1/messages) or OpenAI's Chat
-// Completions (/v1/chat/completions); llama.cpp serves both. The dev server
-// adds each connector's key, so none of this code ever sees one.
+// The page's one client for the dev server, and the types its data shares:
+// settings, connectors and their models, sessions, attachments, tools, phone
+// pairing, usage, and sending a chat. A chat goes to the model's API, proxied
+// per connector at /api/c/<id>/v1: each connector speaks Anthropic's Messages
+// (/v1/messages) or OpenAI's Chat Completions (/v1/chat/completions); llama.cpp
+// serves both. The dev server adds each connector's key, so none of this code
+// ever sees one.
+//
+// What does NOT go here: anything only one vendor does (Claude's headers,
+// signatures, stream fields, how to read one of its blocks, what an error from
+// it means). That belongs in the vendor's connector in src/connections/, and
+// this file asks the connector and uses the answer. This file is shared by
+// every vendor, so it must never check a vendor's field itself, and never work
+// because another vendor leaves a field out. It may carry a vendor's data it
+// doesn't read (Claude's saved thinking blocks ride on a message untouched).
+// See "Vendors and wires" in AGENTS.md.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";

@@ -2239,7 +2239,12 @@ the `tail -f` command that follows it, when it starts. Each line has `t` (time),
   (see [What a Claude chat costs](#what-a-claude-chat-costs); `output` includes
   all the thinking). When Anthropic left old tool results out of the request
   (see [Tool result trimming](#tool-result-trimming)), `cleared` says how many and
-  the tokens that saved: `{ toolUses, tokens }`. Nothing of the reply's text is kept. To add up a day:
+  the tokens that saved: `{ toolUses, tokens }`. When a Claude reply had thinking
+  blocks the connection could not classify (neither a note for you nor reasoning:
+  the signature's layout, which Anthropic doesn't document, was unreadable or
+  held a label never seen), `thinkingUnclassified` says how many; it is absent
+  when there were none. Nothing of the reply's text, and none of a thinking
+  block's words or signature, is kept. To add up a day:
   `grep '"tokens"' ~/.llama-mui/logs/server-<day>.log`.
 - `llama.watch`, `llama.down`, `llama.up`, `llama.model`: every 15 seconds the
   server asks each llama server for its models and writes a line only when

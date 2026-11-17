@@ -68,4 +68,7 @@ export const llama: Connection = {
   // llama.cpp has nothing worth retrying.
   maxRetries: 0,
   errorMessage: readErrorMessage,
+  // llama.cpp writes no notes for the user between tool calls: its thinking is
+  // always the model's own reasoning, whatever the block carries.
+  classifyThinking: () => "reasoning",
 };

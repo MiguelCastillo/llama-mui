@@ -1,5 +1,6 @@
 
 import { messagesWire } from "./wires.ts";
+import { signatureLabel } from "./anthropicSignature.ts";
 import { EFFORTS, type Capabilities, type Connection, type Effort, InvalidOptions, isEffort, readErrorMessage } from "./types.ts";
 
 // Anthropic's API. What a model takes comes from its own capabilities (the
@@ -133,4 +134,21 @@ export const anthropic: Connection = {
   // The SDK retries Anthropic's 429s and 529s; its default stands.
   maxRetries: undefined,
   errorMessage: readErrorMessage,
+
+  // What a thinking block is. Asked for display "updates" (see fields): reasoning
+  // blocks come back empty, so any text is a note for the user. Otherwise
+  // ("summarized") both kinds are plain text, and the label in the signature
+  // is the only hint (see anthropicSignature.ts): "narration" is a note,
+  // "thinking" is reasoning. Anything else (no label, an unseen label, a
+  // signature that doesn't read) is "unknown", so a changed format shows up in
+  // the log instead of being guessed.
+  classifyThinking(block, sent) {
+    const asked = (sent.thinking as { display?: unknown } | undefined)?.display === "updates";
+    if (asked) return block.hasText ? "progress" : "reasoning";
+    const read = signatureLabel(block.signature);
+    if (read === "unreadable") return "unknown";
+    if (read.label === "narration") return "progress";
+    if (read.label === "thinking") return "reasoning";
+    return "unknown";
+  },
 };

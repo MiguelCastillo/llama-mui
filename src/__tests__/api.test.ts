@@ -1,3 +1,4 @@
+import { NARRATION_SIGNATURE, THINKING_SIGNATURE } from "./realSignatures";
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { modelAnswer } from "./capabilityFixtures";
 import { MAY_HAVE_RUN_CALL } from "../closeOpenToolCalls";
@@ -568,14 +569,46 @@ describe("streamChat with the Messages API", () => {
     expect((await collect("anthropic")).reply.blocks).toBeUndefined();
   });
 
-  it("shows a thinking block signed as narration as reply text, with its tool call", async () => {
-    const events = reply(btoa("narration")).filter((e: any) => !(e.index === 1));
+  // Claude's own labelled signatures, saved from a real chat.
+  const noteEvents = (signature: string) => {
+    const events = reply(signature).filter((e: any) => !(e.index === 1));
     events[2] = { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Let me read it." } };
-    serve(events);
+    return events;
+  };
+
+  it("shows a Claude thinking block labelled narration as the round's text, with its tool call", async () => {
+    serve(noteEvents(NARRATION_SIGNATURE));
     const { reply: r, text, reasoning } = await collect("anthropic", "anthropic");
     expect(text).toBe("Let me read it.");
     expect(reasoning).toBe("");
     expect(r.toolCalls).toHaveLength(1);
+  });
+
+  it("keeps a Claude thinking block labelled thinking as reasoning, not text", async () => {
+    serve(noteEvents(THINKING_SIGNATURE));
+    const { text, reasoning } = await collect("anthropic", "anthropic");
+    expect(text).toBe("");
+    expect(reasoning).toBe("Let me read it.");
+  });
+
+  it("keeps a block it can't tell as reasoning", async () => {
+    serve(noteEvents("not a real signature"));
+    const { text, reasoning } = await collect("anthropic", "anthropic");
+    expect(text).toBe("");
+    expect(reasoning).toBe("Let me read it.");
+  });
+
+  it("keeps the narration block unchanged in the saved blocks", async () => {
+    serve(noteEvents(NARRATION_SIGNATURE));
+    const { reply: r } = await collect("anthropic", "anthropic");
+    expect(r.blocks?.[0]).toEqual({ type: "thinking", thinking: "Let me read it.", signature: NARRATION_SIGNATURE });
+  });
+
+  it("leaves a llama.cpp thinking block as reasoning, whatever it carries", async () => {
+    serve(noteEvents(NARRATION_SIGNATURE));
+    const { text, reasoning } = await collect("anthropic", "llama");
+    expect(text).toBe("");
+    expect(reasoning).toBe("Let me read it.");
   });
 
   it("keeps a signed reply's blocks as the API returned them", async () => {

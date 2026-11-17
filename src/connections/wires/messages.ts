@@ -22,17 +22,6 @@ function toTool(t: any): Anthropic.Tool {
   return { name: f.name, description: f.description, input_schema: f.parameters ?? f.input_schema };
 }
 
-// A thinking block whose signature decodes to "narration" holds words the
-// model wrote before a tool call, which belong in the reply.
-export function isNarration(signature?: string): boolean {
-  if (!signature) return false;
-  try {
-    return atob(signature) === "narration";
-  } catch {
-    return false;
-  }
-}
-
 export async function streamMessages(
   { connectorId, kind, model, messages, options, purpose, tools, images }: ChatRequest,
   onDelta: (d: StreamDelta) => void,
@@ -110,12 +99,16 @@ export async function streamMessages(
       } else if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
         calls.set(event.index, { id: event.content_block.id, name: event.content_block.name, arguments: "" });
       } else if (event.type === "content_block_stop" && thinking.has(event.index)) {
-        // The provider marks narration only in the signature, which comes last,
-        // so a thinking block is held until it closes and then sent as reply
-        // text (narration) or as reasoning.
+        // What a thinking block is can be known only when it closes (Claude's
+        // signature comes last), so it is held until then and the connection
+        // is asked: words the model wrote for the user before a tool call go
+        // out as the round's text, the rest as reasoning. The wire reads no
+        // signature and no setting itself (see classifyThinking). A block it
+        // can't tell is reasoning, as before.
         const words = thinking.get(event.index)!;
         thinking.delete(event.index);
-        onDelta(isNarration(signatures.get(event.index)) ? { content: words } : { reasoning: words });
+        const kind = conn.classifyThinking({ hasText: words.trim().length > 0, signature: signatures.get(event.index) }, extra.fields);
+        onDelta(kind === "progress" ? { content: words } : { reasoning: words });
       } else if (event.type === "content_block_delta") {
         const d = event.delta;
         if (d.type === "text_delta") onDelta({ content: d.text });

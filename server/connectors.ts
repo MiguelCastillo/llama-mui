@@ -104,9 +104,13 @@ async function proxy(req: IncomingMessage, res: ServerResponse, id: string, rest
   res.on("close", () => controller.abort());
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
-  const tracked = track(req, res, c.name, rest);
+  const tracked = track(req, res, c.name, rest, kindOf(c));
   let upstream: Response;
   try {
+    const payload = hasBody ? new Uint8Array(await readBody(req)) : undefined;
+    // The log reads what the request asked for (a stream's thinking blocks mean
+    // different things by it), see upstreamLog.ts.
+    if (payload) tracked.sent(payload);
     upstream = await auditedFetch(
       `${c.url}${rest}`,
       {
@@ -117,7 +121,7 @@ async function proxy(req: IncomingMessage, res: ServerResponse, id: string, rest
           ...(typeof req.headers["anthropic-version"] === "string" && { "anthropic-version": req.headers["anthropic-version"] }),
           ...(typeof req.headers["anthropic-beta"] === "string" && { "anthropic-beta": req.headers["anthropic-beta"] }),
         },
-        body: hasBody ? new Uint8Array(await readBody(req)) : undefined,
+        body: payload,
         signal: controller.signal,
       },
       { why: "model.proxy" },

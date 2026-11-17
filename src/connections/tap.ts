@@ -21,6 +21,10 @@ export interface StreamFacts {
   stopReason?: string;
   // The reply ended with 0 output tokens and no error: the model sent nothing.
   empty?: true;
+  // The reply's thinking blocks as they streamed (Messages only): whether each
+  // had words and its signature, never the words. The log asks the connection
+  // what each is (see classifyThinking in types.ts); this reader judges nothing.
+  thinking?: { hasText: boolean; signature?: string }[];
 }
 
 // Fed the stream in chunks (which can split a line).
@@ -73,13 +77,29 @@ function lineTap(wants: (line: string, facts: StreamFacts) => boolean, read: (e:
 
 // Messages API: message_start carries the model and the input side,
 // message_delta the output so far (the last one is the total) and the stop reason.
-export const messagesTap = (): Tap =>
-  lineTap(
-    (line) => line.includes('"usage"') || line.includes('"applied_edits"') || line.includes('"error"') || line.includes('"stop_reason"'),
+export const messagesTap = (): Tap => {
+  // Thinking blocks by their index in the reply: words seen (not kept) and signature.
+  const blocks = new Map<number, { hasText: boolean; signature?: string }>();
+  return lineTap(
+    (line) =>
+      line.includes('"usage"') ||
+      line.includes('"applied_edits"') ||
+      line.includes('"error"') ||
+      line.includes('"stop_reason"') ||
+      line.includes('"thinking"') ||
+      line.includes('"signature_delta"'),
     (e, facts) => {
       if (e?.type === "error" && e.error) {
         facts.streamError = cutError(e.error.type, e.error.message);
         return;
+      }
+      if (e?.type === "content_block_start" && e.content_block?.type === "thinking" && typeof e.index === "number") {
+        blocks.set(e.index, { hasText: typeof e.content_block.thinking === "string" && e.content_block.thinking.trim() !== "" });
+        facts.thinking = [...blocks.values()];
+      } else if (e?.type === "content_block_delta" && typeof e.index === "number") {
+        const b = blocks.get(e.index);
+        if (b && e.delta?.type === "thinking_delta" && typeof e.delta.thinking === "string" && e.delta.thinking.trim() !== "") b.hasText = true;
+        else if (b && e.delta?.type === "signature_delta" && typeof e.delta.signature === "string") b.signature = e.delta.signature;
       }
       if (e?.type === "message_delta" && typeof e.delta?.stop_reason === "string") facts.stopReason = e.delta.stop_reason;
       const edits = e?.type === "message_delta" ? e.context_management?.applied_edits : undefined;
@@ -97,6 +117,7 @@ export const messagesTap = (): Tap =>
       facts.output = num(u.output_tokens) ?? facts.output;
     },
   );
+};
 
 // Chat Completions: the model rides on the first chunk, the stop reason on the
 // last chunk with choices, and the counts on a chunk of their own: OpenAI's

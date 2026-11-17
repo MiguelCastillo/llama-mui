@@ -13,6 +13,18 @@ works, and this file says how to change it.
   next (see the missing-path error in `runTool`, and what `create_worktree`
   returns). It asks for approval only where the user is really deciding
   something.
+- **Vendor-specific behaviour lives in that vendor's module, and shared code
+  never guesses.** Anything only one vendor does (its settings, headers, stream
+  fields, signatures, how to read a block, what an error means) goes in that
+  vendor's connector in `src/connections/`. Code that several vendors share (a
+  wire, `src/api.ts`, the agent loop, the UI) asks the connector a question and
+  uses the answer; it must not check a vendor's field itself, and must never
+  work because another vendor happens to leave that field out. If a change
+  needs the shared code to know something vendor-specific, add the question to
+  the connector interface (every vendor answers it, even if the answer is "no")
+  before writing the change. This is a rule, not a preference: decide it when
+  planning, so it is never found in review and fixed by a refactor. See
+  "Vendors and wires".
 - **Safety belongs to the environment, not the tools.** A sandbox, network rules
   and where secrets live stop damage whatever a tool does. A check inside a tool
   is a stand-in until the environment does the job; when one takes over, the
@@ -209,8 +221,18 @@ interface, and plain http on this computer only.
   and the stream into common events: text, thinking, call, usage, error, stop.
   Each wire also has a pure line reader the server log uses, so the page and the
   server read a stream the same way. The log never holds reply text.
-- **`src/api.ts` only prepares the request** (repair, clearing, images) and hands
-  it to the connector's wire.
+- **Deciding what a piece of the stream means is vendor-specific too.** Claude's
+  thinking blocks, signatures and progress notes are read by Claude's connector;
+  the Messages wire is shared with llama.cpp, so it collects a block's text and
+  signature and asks the connector what the block is (reasoning, a progress
+  note, or can't tell). llama.cpp's connector answers "reasoning" without
+  looking at a signature. The same goes for the server log's line readers:
+  vendor-specific reading comes from the connector, not from the shared reader.
+- **`src/api.ts` is the page's shared client**, not a vendor's: the calls to the
+  server (settings, connectors, sessions, tools, phones, usage) and the shared
+  types. For a chat it prepares the request (repair, clearing, images) and hands
+  it to the connector's wire. It holds no vendor-specific logic; it may carry a
+  vendor's data (Claude's saved thinking blocks) without reading it.
 - **To add a vendor, write one connector module** and register it in the
   connection index; reuse an existing wire if the vendor speaks that protocol.
   Keep this code pure (no React, no I/O beyond the stream).
@@ -221,6 +243,9 @@ interface, and plain http on this computer only.
   by the problem ("what already shrinks what is sent?"), not only by the words
   in the request: the code may name the same thing differently (what the UI
   calls compacting, `src/toolResults.ts` calls clearing and the cut).
+- Before writing or planning, name which vendors the change touches and which
+  module each piece goes in. If a plan step edits shared code to handle one
+  vendor's quirk, stop and fix the plan first (see the vendor principle above).
 - Say in your first message what already exists and how the change fits it.
   When a rule of the same kind is there, extend it or reuse its constants
   instead of adding a second one.

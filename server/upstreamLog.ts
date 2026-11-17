@@ -22,6 +22,13 @@
 // `cleared` says how many old tool results Anthropic left out of the request
 // and how many tokens that saved. Nothing of the reply's text is kept.
 //
+// A reply's thinking blocks are sorted by the connector's own answer (see
+// classifyThinking in src/connections/types.ts; the log judges nothing itself).
+// `thinkingUnclassified` is how many the connection could not tell, present only
+// when there were some: Claude marks a note for the user in a signature whose
+// layout is not documented, so a block it can't read shows up here. The words
+// of a block are never read or kept.
+//
 // A provider can also report a failure inside a stream that started fine (status
 // 200, e.g. an overloaded_error): the line then has `streamError` { type,
 // message } (the provider's own wording, cut short), and `stopReason` says why a
@@ -31,7 +38,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Readable } from "node:stream";
 import { Transform } from "node:stream";
+import { connection } from "../src/connections/index.ts";
 import { messagesTap, tapForPath } from "../src/connections/tap.ts";
+import type { Kind } from "../src/api.ts";
 import { errorFields, log } from "./log.ts";
 
 interface Open {
@@ -59,6 +68,10 @@ export interface Tracked {
   // Watches the model server's body, to tell its connection breaking (the body
   // errors first) from whoever asked hanging up (the response closes first).
   watch(body: Readable): void;
+  // The request's body as it was sent (bytes), so the log can see what the
+  // request asked for. Only read for a streamed reply on a wire's path; a body
+  // that isn't JSON is ignored.
+  sent(body: Uint8Array): void;
   // The request never got an answer.
   failed(e: unknown): void;
   // The body has finished or broken: pass the error pipeline rejected with, if any.
@@ -69,7 +82,9 @@ export interface Tracked {
 // src/connections): the same reader the tests use, kept under its old name.
 export const usageReader = messagesTap;
 
-export function track(req: IncomingMessage, res: ServerResponse, connector: string, fullPath: string): Tracked {
+// `kind` is the connector's kind, for asking its connection what a stream's
+// thinking blocks are.
+export function track(req: IncomingMessage, res: ServerResponse, connector: string, fullPath: string, kind?: Kind): Tracked {
   const id = `${Date.now().toString(36)}${(serial++ % 1296).toString(36).padStart(2, "0")}`;
   const path = fullPath.split("?")[0];
   const method = req.method ?? "GET";
@@ -89,6 +104,8 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
   let done = false;
   // Token counts, for a reply on a wire's path (Messages or Chat Completions).
   const usage = method === "POST" ? tapForPath(path) : undefined;
+  // The request's own fields (thinking settings and the like), once seen.
+  let sentFields: Record<string, unknown> = {};
 
   // Closed before the reply was fully written, and not because the model
   // server's body broke (the pipeline closes the response then): the other
@@ -115,6 +132,8 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
     const ms = Date.now() - startedAt;
     if (outcome === "done" && (method === "GET" || method === "HEAD") && ms < SLOW_MS) return;
     const counted = usage?.result();
+    // Thinking blocks the connection can't tell (never the words, see above).
+    const unclassified = kind && counted?.thinking ? counted.thinking.filter((b) => connection(kind).classifyThinking(b, sentFields) === "unknown").length : 0;
     log("upstream.end", {
       id,
       outcome,
@@ -135,6 +154,7 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
       ...(counted?.streamError ? { streamError: counted.streamError } : {}),
       ...(counted?.stopReason ? { stopReason: counted.stopReason } : {}),
       ...(counted?.empty ? { empty: true } : {}),
+      ...(unclassified ? { thinkingUnclassified: unclassified } : {}),
       ...(counted?.clearedToolUses ? { cleared: { toolUses: counted.clearedToolUses, tokens: counted.clearedTokens ?? 0 } } : {}),
       ...extra,
     });
@@ -146,6 +166,15 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
       body.once("error", (e) => {
         if (!clientGone) upstreamError = e ?? "error";
       });
+    },
+    sent(body) {
+      if (!usage || !kind) return;
+      try {
+        const parsed = JSON.parse(Buffer.from(body).toString());
+        if (parsed && typeof parsed === "object") sentFields = parsed;
+      } catch {
+        // Not JSON: nothing to read.
+      }
     },
     answered(s) {
       status = s;
