@@ -78,6 +78,7 @@ import {
   type ChatMessage,
   type StepStats,
   type ToolCall,
+  type Experiments,
   type ModelSettings,
   type Preferences,
   type Attachment,
@@ -99,6 +100,7 @@ import {
   type Connector,
   type Model,
   getConnectors,
+  getExperiments,
   getModelSettings,
   getPreferences,
   getToolContext,
@@ -435,6 +437,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Attachments are extra files and folders this chat's disk tools may read,
   // besides the working directory; New chat clears them. The working directory
   // is where relative paths and commands start; it is chosen in Session
+  // The Experimental switches (Settings → Models). Read again each time the
+  // chat shows, and added to each message's settings when it is sent.
+  const [experiments, setExperiments] = useState<Experiments | null>(null);
   // settings, not one of the attachments, and New chat clears it.
   const attachedPaths = (as: Attachment[]) => as.map((a) => a.path);
   // The working directory the system prompt names. Fixed by the session's
@@ -1202,6 +1207,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   }, [visible]);
 
   // The personas on offer for the picker (see PersonaPicker). Read again when
+    // A failure leaves them off: the message goes out as it did before experiments.
+    getExperiments()
+      .then(setExperiments)
+      .catch(() => setExperiments(null));
   // the chat is shown, so a file added in Settings' folder appears.
   const [personaList, setPersonaList] = useState<PersonaList | null>(null);
   useEffect(() => {
@@ -1239,7 +1248,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // llama.cpp; effort for a Claude model that takes it, from what the model
   // says it can do).
   const modelCapabilities = models.find((m) => m.id === model)?.capabilities;
-  const modelOptions = optionsFor(connector?.kind, { ...modelSettings?.defaults, ...modelSettings?.models[model] }, modelCapabilities);
+  const modelOptions = optionsFor(connector?.kind, { ...modelSettings?.defaults, ...modelSettings?.models[model] }, modelCapabilities, experiments ?? undefined);
 
   // A prompt from a plan step shows in the plan card, under the step (see
   // PlanView); others show at the bottom of the chat.

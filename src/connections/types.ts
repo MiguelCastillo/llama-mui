@@ -19,6 +19,21 @@ export const isEffort = (v: unknown): v is Effort => typeof v === "string" && (E
 export interface ModelOptions {
   think?: boolean;
   effort?: Effort;
+  // Claude's: the "progress notes" experiment is on for this message (see
+  // Experiments below and withExperiments). Not a saved per-model setting: the
+  // page adds it to each message from the experiments, so a queued message
+  // keeps the value it was sent with.
+  progressNotes?: boolean;
+}
+
+// Switches for features still being tried (Settings → Models, "Experimental"),
+// each off until the user turns it on. Saved on the server (server/store.ts).
+// A connection turns the ones it knows into settings on a message
+// (withExperiments); the others ignore them.
+export interface Experiments {
+  // Claude: ask for the notes it writes before a tool call, apart from its
+  // reasoning (thinking display "updates").
+  progressNotes: boolean;
 }
 
 // What a model can do, as its connection says (a fact about the model, not a
@@ -44,6 +59,9 @@ export interface Capabilities {
   // Claude's: Anthropic can clear old tool results on its side (context
   // editing's clear_tool_uses), so the request asks it to (see toolResults.ts).
   clearsToolResults?: boolean;
+  // Claude's: the model writes progress notes between tool calls, so thinking
+  // display "updates" (a beta) shows them apart from reasoning.
+  progressUpdates?: boolean;
   // llama.cpp's: the reasoning_effort values its template renders distinctly,
   // lowest first. Not used for anything yet; empty for Qwen.
   reasoningEffortLevels?: string[];
@@ -130,7 +148,12 @@ export interface Connection {
   // while nothing is cleared.
   fields(options: ModelOptions | undefined, purpose: Purpose, caps?: Capabilities, keepToolResults?: number): Record<string, unknown>;
   // Headers the request needs for those fields (a beta a field belongs to).
-  headers(caps?: Capabilities): Record<string, string>;
+  headers(caps?: Capabilities, options?: ModelOptions): Record<string, string>;
+  // The message's settings with the experiments this connection knows added
+  // to them, for this model. A connection with no experiment returns the
+  // settings as they are. Shared code calls this and never reads an
+  // experiment itself.
+  withExperiments(options: ModelOptions, experiments: Partial<Experiments> | undefined, caps?: Capabilities): ModelOptions;
   // Whether the app leaves old tool results out of the request itself (see
   // clearOldToolResults in toolResults.ts). False where the server does it.
   clearsToolResultsHere: boolean;
@@ -178,5 +201,6 @@ export function readModelOptions(o: { modelOptions?: unknown; thinkOn?: unknown;
   return {
     ...(typeof src.think === "boolean" ? { think: src.think } : {}),
     ...(isEffort(src.effort) ? { effort: src.effort } : {}),
+    ...(typeof src.progressNotes === "boolean" ? { progressNotes: src.progressNotes } : {}),
   };
 }

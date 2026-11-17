@@ -10,7 +10,7 @@ import { mkdir, rename, writeAtomicBatched } from "./io/fs.ts";
 import os from "node:os";
 import path from "node:path";
 import { openKeys, sealKeys } from "./secrets.ts";
-import type { Effort } from "../src/api.ts";
+import type { Effort, Experiments } from "../src/api.ts";
 
 export interface Connector {
   id: string;
@@ -46,6 +46,14 @@ export interface Preferences {
   showModelName: boolean;
 }
 
+// Features still being tried, each a switch that is off until the user turns
+// it on (Settings → Models, "Experimental"). One named key each, so another is
+// one more line in Experiments and in EXPERIMENT_DEFAULTS; a key this version doesn't
+// know is left out when settings load, and an old file without a key gets its
+// default.
+// The type is in src/connections/types.ts, where each connection reads it.
+export const EXPERIMENT_DEFAULTS: Experiments = { progressNotes: false };
+
 // Options for one model, keyed by its id (e.g. "unsloth/Qwen3.5-9B-GGUF:Q4_K_M"),
 // so they follow the model to any server that has it.
 export interface ModelSettings {
@@ -65,6 +73,7 @@ export interface Store {
   // Tools are on by default, so new ones show up enabled.
   disabledTools: string[];
   preferences: Preferences;
+  experiments: Experiments;
   models: Record<string, ModelSettings>;
   // A command that checks a folder's code (a typecheck, tests), by the
   // folder's path; chat runs it after each plan step. See docs/guide.md,
@@ -105,6 +114,7 @@ const empty = (): Store => ({
   toolsEnabled: true,
   disabledTools: [],
   preferences: { showContextMeter: true, renderMarkdown: true, freshPlanSteps: true, showModelName: false },
+  experiments: { ...EXPERIMENT_DEFAULTS },
   models: {},
   checkCommands: {},
   defaultPersona: "Builder",
@@ -159,6 +169,11 @@ async function loadNow(): Promise<Store> {
   // steps" was a preference once; an old file may still hold it, so it's dropped.
   const preferences: Preferences = { ...base.preferences, ...raw.preferences };
   delete (preferences as any).showSteps;
+  // Known experiments only, each a boolean; anything else in the file is dropped.
+  const experiments = { ...EXPERIMENT_DEFAULTS };
+  for (const key of Object.keys(EXPERIMENT_DEFAULTS) as (keyof Experiments)[]) {
+    if (typeof raw.experiments?.[key] === "boolean") experiments[key] = raw.experiments[key];
+  }
   const { keys, locked: lockedIds } = await openKeys();
   // Keys an older version left in the file: moved into .keys, read back to
   // check, and only then taken out of the file. They win over what .keys holds,
@@ -170,13 +185,14 @@ async function loadNow(): Promise<Store> {
     const back = (await openKeys()).keys;
     if (legacy.some((c) => back[c.id] !== c.apiKey)) throw new Error("Couldn't check the API keys after encrypting them; settings.json was left as it was.");
     Object.assign(keys, merged);
-    await writeSettings({ ...base, ...raw, connectors, preferences });
+    await writeSettings({ ...base, ...raw, connectors, preferences, experiments });
   }
   const store: Store = {
     ...base,
     ...raw,
     connectors: connectors.map((c) => ({ ...c, apiKey: keys[c.id] ?? "" })),
     preferences,
+    experiments,
   };
   locked.set(store, lockedIds);
   return store;

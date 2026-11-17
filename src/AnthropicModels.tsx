@@ -12,6 +12,7 @@ import {
 } from "@mui/material";
 import DefaultButton from "./DefaultButton";
 import { type Connector, type Effort, type Model, type ModelSettings, listModels } from "./api";
+import ExperimentalSection from "./ExperimentalSection";
 import ModelKnobs from "./ModelKnobs";
 import ModelBadgeIcons from "./ModelBadgeIcons";
 import { lifecycleNote } from "./modelBadges";
@@ -94,6 +95,9 @@ export default function AnthropicModels({
           right end.
         </Typography>
       )}
+
+      {/* Switches for features still being tried; each is off until turned on. */}
+      <ExperimentalSection />
     </Stack>
   );
 }

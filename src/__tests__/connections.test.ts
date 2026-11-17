@@ -26,6 +26,8 @@ const PURPOSES: Purpose[] = [
   { kind: "background" },
 ];
 const ADAPTIVE = { type: "adaptive", display: "summarized" };
+// What Sonnet 5.5 and Opus 5.5 ask for when the progress-notes experiment is on.
+const UPDATES = { type: "adaptive", display: "updates" };
 
 describe("reading a model's capabilities", () => {
   it("reads Haiku 4.5: no adaptive thinking, no effort", () => {
@@ -188,6 +190,73 @@ describe("Claude's request fields", () => {
   });
   it("keep thinking, with no effort, for a background call", () => {
     expect(claude.fields(undefined, { kind: "background" }, opus)).toEqual({ thinking: ADAPTIVE, cache_control: { type: "ephemeral" } });
+  });
+});
+
+describe("the progress-notes experiment (Claude)", () => {
+  const NOTES = { progressNotes: true };
+  const BOTH = { "anthropic-beta": "context-management-2025-06-27,thinking-display-updates-2026-08-18" };
+  const clearing = { ...sonnet, clearsToolResults: true };
+
+  it("is off by default: summarized display and no updates beta, whatever the model", () => {
+    for (const caps of [sonnet, opus]) {
+      expect((claude.fields({}, PURPOSES[0], caps) as any).thinking).toEqual(ADAPTIVE);
+      expect(claude.headers(caps, {})).toEqual({});
+      expect(claude.headers(caps, { progressNotes: false })).toEqual({});
+    }
+    expect(claude.headers(clearing, {})).toEqual({ "anthropic-beta": "context-management-2025-06-27" });
+  });
+
+  it("when on, asks for updates and sends the beta, joined with context editing in one value", () => {
+    expect((claude.fields(NOTES, PURPOSES[0], sonnet) as any).thinking).toEqual(UPDATES);
+    expect((claude.fields(NOTES, { kind: "background" }, opus) as any).thinking).toEqual(UPDATES);
+    expect(claude.headers(sonnet, NOTES)).toEqual({ "anthropic-beta": "thinking-display-updates-2026-08-18" });
+    expect(claude.headers(clearing, NOTES)).toEqual(BOTH);
+  });
+
+  it("does nothing for a model that doesn't write notes, or that doesn't think adaptively", () => {
+    expect((claude.fields(NOTES, PURPOSES[0], haiku) as any).thinking).toBeUndefined();
+    expect(claude.headers(haiku, NOTES)).toEqual({});
+    const plain = { adaptiveThinking: true, efforts: [] as never[] };
+    expect((claude.fields(NOTES, PURPOSES[0], plain) as any).thinking).toEqual(ADAPTIVE);
+    expect(claude.headers(plain, NOTES)).toEqual({});
+    expect(claude.headers(undefined, NOTES)).toEqual({});
+  });
+
+  it("withExperiments adds it only for a model that writes notes, and only when on", () => {
+    expect(claude.withExperiments({ effort: "high" }, { progressNotes: true }, sonnet)).toEqual({ effort: "high", progressNotes: true });
+    expect(claude.withExperiments({ effort: "high" }, { progressNotes: false }, sonnet)).toEqual({ effort: "high" });
+    expect(claude.withExperiments({}, undefined, sonnet)).toEqual({});
+    expect(claude.withExperiments({}, { progressNotes: true }, haiku)).toEqual({});
+    expect(claude.withExperiments({}, { progressNotes: true }, undefined)).toEqual({});
+  });
+
+  it("optionsFor carries it from the experiments to the message", () => {
+    expect(optionsFor("anthropic", { effort: "high" }, sonnet, { progressNotes: true })).toEqual({ effort: "high", progressNotes: true });
+    expect(optionsFor("anthropic", { effort: "high" }, sonnet, { progressNotes: false })).toEqual({ effort: "high" });
+    expect(optionsFor("anthropic", {}, haiku, { progressNotes: true })).toEqual({});
+  });
+
+  it("is checked and kept by validate, shape-checked and kept in a saved queue", () => {
+    expect(claude.validate({ progressNotes: true }, sonnet)).toEqual({ progressNotes: true });
+    expect(claude.validate({ progressNotes: true, effort: "high" }, sonnet)).toEqual({ progressNotes: true, effort: "high" });
+    expect(claude.validate({ progressNotes: true }, haiku)).toEqual({});
+    expect(claude.validate({ progressNotes: false }, sonnet)).toEqual({});
+    expect(claude.validate({ progressNotes: true })).toEqual({ progressNotes: true });
+    expect(() => claude.validate({ progressNotes: "yes" }, sonnet)).toThrow(/progressNotes must be true or false/);
+    expect(validateShape({ progressNotes: true })).toEqual({ progressNotes: true });
+    expect(readModelOptions({ modelOptions: { think: true, progressNotes: true } })).toEqual({ think: true, progressNotes: true });
+    expect(readModelOptions({ modelOptions: { progressNotes: "yes" } })).toEqual({});
+  });
+});
+
+describe("llama.cpp and the progress-notes experiment", () => {
+  it("ignores it everywhere", () => {
+    expect(llama.withExperiments({ think: true }, { progressNotes: true })).toEqual({ think: true });
+    expect(optionsFor("llama", { think: true }, readProps(QWEN_PROPS), { progressNotes: true })).toEqual({ think: true });
+    expect(llama.validate({ think: true, progressNotes: true })).toEqual({ think: true });
+    expect(llama.headers(undefined, { progressNotes: true })).toEqual({});
+    expect(JSON.stringify(llama.fields({ progressNotes: true }, PURPOSES[0]))).not.toContain("updates");
   });
 });
 

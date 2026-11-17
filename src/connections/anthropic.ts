@@ -1,7 +1,7 @@
 
 import { messagesWire } from "./wires.ts";
 import { signatureLabel } from "./anthropicSignature.ts";
-import { EFFORTS, type Capabilities, type Connection, type Effort, InvalidOptions, isEffort, readErrorMessage } from "./types.ts";
+import { EFFORTS, type Capabilities, type Connection, type Effort, InvalidOptions, type ModelOptions, isEffort, readErrorMessage } from "./types.ts";
 
 // Anthropic's API. What a model takes comes from its own capabilities (the
 // Models API: GET /v1/models/<id>), so a model only gets the settings it
@@ -38,6 +38,51 @@ import { EFFORTS, type Capabilities, type Connection, type Effort, InvalidOption
 export const CONTEXT_EDITING_BETA = "context-management-2025-06-27";
 const CLEAR_TRIGGER_TOKENS = 1024;
 
+// The beta behind thinking display "updates" (docs: build-with-claude/thinking,
+// "Controlling thinking display"). What the API does when "updates" is asked
+// for without this header, or on a model that doesn't write notes, is NOT
+// checked (an error or a quiet fallback to "summarized"). Send one real request
+// and read its upstream log line before relying on either.
+export const THINKING_UPDATES_BETA = "thinking-display-updates-2026-08-18";
+
+// WHY THERE IS A LIST, NOT A LOOKUP. Which models write a progress note before
+// a tool call is named only in prose in the docs, section "Progress updates
+// between tool calls": Fable 5, 5.1, 5.2, Mythos 5.1, 5.2, Opus 5.5, Sonnet 5.5.
+//   https://platform.claude.com/docs/en/build-with-claude/thinking
+// The Models API does not say:
+//   https://platform.claude.com/docs/en/api/models/list
+// Checked against the live GET /v1/models list for this account (thinking.types
+// per model):
+//
+//   model                         thinking types           writes notes (docs)
+//   claude-fable-5, -5-1, -5-2    adaptive                 yes
+//   claude-opus-5-5               adaptive                 yes
+//   claude-sonnet-5-5             adaptive, between_tools  yes
+//   claude-opus-5, sonnet-5,
+//     haiku-5-5, opus-4-7/4-8     adaptive, disabled       no
+//   claude-sonnet-4-6, opus-4-6   enabled, adaptive, off   no
+//   claude-opus-4-5, sonnet-4-5,
+//     haiku-4-5                   enabled, disabled        no
+//
+// So "between_tools" is a different feature: only Sonnet 5.5 reports it, and
+// reading it would drop Fable and Opus 5.5. The API lists no display modes
+// ("summarized"/"updates") either, and its "line" field (fable, opus, …) is too
+// wide a unit (Haiku and older Opus don't write notes) and the docs say not to
+// infer a line from an id. Mythos wasn't on the account, so its id spelling is
+// a guess from the docs' naming. If the API ever adds a capability for this,
+// read that and delete the list.
+//
+// A dated id (…-20260101) counts too. Add a model here when the docs name it.
+// Under "summarized" notes can't be told from reasoning; under "updates"
+// reasoning is empty and any thinking text is a note.
+const PROGRESS_UPDATE_MODEL = /^claude-(fable-5(-[12])?|mythos-5-[12]|opus-5-5|sonnet-5-5)(-\d{8})?$/;
+// Thinking display "updates" is asked for only when the message says so (the
+// Experimental switch, see withExperiments), the model writes notes and thinks
+// adaptively; otherwise the display stays "summarized" and no beta is sent.
+const asksForUpdates = (options: ModelOptions | undefined, caps: Capabilities | undefined): boolean =>
+  options?.progressNotes === true && !!caps?.progressUpdates && !!caps.adaptiveThinking;
+export const writesProgressUpdates = (id: unknown): boolean => typeof id === "string" && PROGRESS_UPDATE_MODEL.test(id);
+
 // A "supported" flag the API reports, or undefined when it doesn't say.
 const flag = (x: any): boolean | undefined => (typeof x?.supported === "boolean" ? x.supported : undefined);
 const count = (n: unknown): number | undefined => (typeof n === "number" && n > 0 ? n : undefined);
@@ -63,6 +108,7 @@ export function readCapabilities(model: any): Capabilities {
   set("contextSize", count(model?.max_input_tokens));
   set("maxOutput", count(model?.max_tokens));
   set("clearsToolResults", flag(c.context_management?.clear_tool_uses_20250919));
+  if (writesProgressUpdates(model?.id)) out.progressUpdates = true;
   if (model?.lifecycle === "deprecated" || model?.lifecycle === "retired") out.deprecated = true;
   set("retiresAt", typeof model?.retires_at === "string" ? model.retires_at : undefined);
   return out;
@@ -93,7 +139,11 @@ export const anthropic: Connection = {
   validate(raw, caps) {
     const o: any = raw ?? {};
     // Think is llama.cpp's; it is dropped, not refused.
-    if (o.effort === undefined || o.effort === null) return {};
+    const out: ModelOptions = {};
+    if (o.progressNotes !== undefined && typeof o.progressNotes !== "boolean") throw new InvalidOptions("progressNotes must be true or false");
+    // Kept only for a model that writes notes: for any other it does nothing.
+    if (o.progressNotes === true && (!caps || caps.progressUpdates)) out.progressNotes = true;
+    if (o.effort === undefined || o.effort === null) return out;
     if (!isEffort(o.effort)) throw new InvalidOptions(`effort must be one of ${EFFORTS.join(", ")}`);
     if (caps && !caps.efforts.includes(o.effort)) {
       throw new InvalidOptions(
@@ -102,12 +152,16 @@ export const anthropic: Connection = {
           : "This model has no effort setting.",
       );
     }
-    return { effort: o.effort as Effort };
+    return { ...out, effort: o.effort as Effort };
   },
+
+  // The progress-notes experiment, for a model that writes notes.
+  withExperiments: (options, experiments, caps) =>
+    experiments?.progressNotes === true && caps?.progressUpdates ? { ...options, progressNotes: true } : options,
 
   fields(options, _purpose, caps, keepToolResults) {
     return {
-      ...(caps?.adaptiveThinking ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
+      ...(caps?.adaptiveThinking ? { thinking: { type: "adaptive", display: asksForUpdates(options, caps) ? "updates" : "summarized" } } : {}),
       ...(options?.effort && caps?.efforts.includes(options.effort) ? { output_config: { effort: options.effort } } : {}),
       // Caches the conversation so far: each tool round resends it all, and
       // cached tokens cost a tenth.
@@ -128,7 +182,15 @@ export const anthropic: Connection = {
     };
   },
 
-  headers: (caps): Record<string, string> => (caps?.clearsToolResults ? { "anthropic-beta": CONTEXT_EDITING_BETA } : {}),
+  // One anthropic-beta value, the betas comma-separated. "updates" is only
+  // sent with adaptive thinking, the same condition as in fields().
+  headers(caps, options): Record<string, string> {
+    const betas = [
+      ...(caps?.clearsToolResults ? [CONTEXT_EDITING_BETA] : []),
+      ...(asksForUpdates(options, caps) ? [THINKING_UPDATES_BETA] : []),
+    ];
+    return betas.length ? { "anthropic-beta": betas.join(",") } : {};
+  },
   // Anthropic clears them (context_management in fields).
   clearsToolResultsHere: false,
   // The SDK retries Anthropic's 429s and 529s; its default stands.

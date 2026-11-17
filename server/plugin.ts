@@ -19,6 +19,7 @@ import { modelSettingRoutes } from "./models.ts";
 import { guardNetwork, loadOtherDevices } from "./lan.ts";
 import { isAllowed, isPairing, phoneRoutes, setListenAddress } from "./phones.ts";
 import { preferenceRoutes } from "./preferences.ts";
+import { experimentRoutes } from "./experiments.ts";
 import { usageRoutes } from "./usageRoutes.ts";
 import { selfOrigin } from "./selfOrigin.ts";
 import { sessionRoutes } from "./sessions.ts";
@@ -40,6 +41,7 @@ async function route(r: Route) {
   if (await toolRoutes(r)) return;
   if (await attachmentRoutes(r)) return;
   if (await preferenceRoutes(r)) return;
+  if (await experimentRoutes(r)) return;
   if (await usageRoutes(r)) return;
   if (await modelSettingRoutes(r)) return;
   if (await commandRoutes(r)) return;

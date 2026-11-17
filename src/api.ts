@@ -21,9 +21,9 @@ export { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 // Wording that failureLine (src/agent/helpers.ts) recognises.
 export { EMPTY_REPLY, STREAM_ERROR } from "./connections/wires/messages.ts";
 export { readUsage } from "./connections/wires/completions.ts";
-import { type Capabilities, type Effort, type ModelOptions, type Purpose, capabilitiesFromList, connection } from "./connections/index.ts";
+import { type Capabilities, type Effort, type Experiments, type ModelOptions, type Purpose, capabilitiesFromList, connection } from "./connections/index.ts";
 import { type Cleared, type CutState, clearOldToolResults, clearedBy, requestCount, rereads, resultCount } from "./toolResults.ts";
-export { EFFORTS, type Effort, isEffort, type ModelOptions, type Purpose, type Capabilities } from "./connections/index.ts";
+export { EFFORTS, type Effort, isEffort, type ModelOptions, type Purpose, type Capabilities, type Experiments } from "./connections/index.ts";
 
 export type ModelStatus = "loaded" | "loading" | "unloaded" | string;
 
@@ -522,6 +522,12 @@ export const getPreferences = () => call<Preferences>("GET", "/api/preferences")
 export const updatePreferences = (changes: Partial<Preferences>) => call<Preferences>("PATCH", "/api/preferences", changes);
 
 // Personas: how the agent is told to work. `problems` are plain messages about
+// Switches for features still being tried (Settings → Models, "Experimental"),
+// each off until turned on (the type is in src/connections/types.ts). A key
+// this version doesn't know is ignored.
+export const getExperiments = () => call<Experiments>("GET", "/api/experiments");
+export const updateExperiments = (changes: Partial<Experiments>) => call<Experiments>("PATCH", "/api/experiments", changes);
+
 // persona files that couldn't be used, or a default that no longer exists.
 export interface PersonaInfo {
   name: string;
@@ -1222,5 +1228,5 @@ export async function requestParts(
 ) {
   const conn = connection(kind);
   const caps = conn.needsCapabilities ? await getCapabilities(connectorId, model, kind) : undefined;
-  return { fields: conn.fields(options, purpose, caps, keepToolResults), headers: conn.headers(caps) };
+  return { fields: conn.fields(options, purpose, caps, keepToolResults), headers: conn.headers(caps, options) };
 }

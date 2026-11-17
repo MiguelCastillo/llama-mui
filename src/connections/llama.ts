@@ -62,6 +62,8 @@ export const llama: Connection = {
   // Not in the SDK's types, but both SDKs send the field.
   fields: (options, purpose) => ({ chat_template_kwargs: { enable_thinking: thinks(options, purpose) } }),
   headers: () => ({}),
+  // llama.cpp has no experiment: the settings are left as they are.
+  withExperiments: (options) => options,
   // llama.cpp has no server-side clearing, so the request is built without
   // the old tool results (toolResults.ts).
   clearsToolResultsHere: true,

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type ChatMessage, forgetCapabilities, getCapabilities, listModels, listModelsAdmin, streamChat, withoutImages } from "../api";
+import { type ChatMessage, forgetCapabilities, getCapabilities, listModels, listModelsAdmin, requestParts, streamChat, withoutImages } from "../api";
 import { LIST_ENTRY, MODELS, PLAIN_PROPS, QWEN_PROPS, modelAnswer } from "./capabilityFixtures";
 
 // What each model server says about its models reaches the app: the list's
@@ -163,5 +163,45 @@ describe("a request never sends an image to a model that says it takes none", ()
     expect(out[0].content).toContain("An image was attached here but not sent");
     expect(out[1]).toBe(chat[1]);
     expect(chat[0].images).toHaveLength(1);
+  });
+});
+
+describe("thinking display by model, with the progress-notes experiment", () => {
+  const parts = (model: string, options?: { progressNotes?: boolean }) => requestParts("c1", "anthropic", model, options, { kind: "reply", round: 0 }, 3);
+  const display = (p: { fields: any }) => p.fields.thinking?.display;
+  const ON = { progressNotes: true };
+
+  it("off: every model stays on 'summarized' and no updates beta is sent", async () => {
+    const p = await parts("claude-sonnet-5-5");
+    expect(display(p)).toBe("summarized");
+    expect(p.headers).not.toHaveProperty("anthropic-beta", expect.stringContaining("thinking-display-updates"));
+    expect(display(await parts("claude-opus-5-5", { progressNotes: false }))).toBe("summarized");
+  });
+
+  it("on: a model that writes notes asks for 'updates' and sends both betas in one value", async () => {
+    // Sonnet 5.5 as the Models API reports it, with context editing on.
+    MODELS["claude-sonnet-5-5"] = {
+      ...MODELS["claude-sonnet-5-5"],
+      capabilities: { ...(MODELS["claude-sonnet-5-5"] as any).capabilities, context_management: { supported: true, clear_tool_uses_20250919: { supported: true } } },
+    };
+    const p = await parts("claude-sonnet-5-5", ON);
+    expect(display(p)).toBe("updates");
+    expect(p.headers).toEqual({ "anthropic-beta": "context-management-2025-06-27,thinking-display-updates-2026-08-18" });
+  });
+
+  it("on, without context editing: only the updates beta is sent", async () => {
+    const p = await parts("claude-opus-5-5", ON);
+    expect(display(p)).toBe("updates");
+    expect(p.headers).toEqual({ "anthropic-beta": "thinking-display-updates-2026-08-18" });
+  });
+
+  it("on, but a model that doesn't write notes stays on 'summarized' with no updates beta, or no thinking at all", async () => {
+    MODELS["claude-sonnet-5"] = { id: "claude-sonnet-5", capabilities: (MODELS["claude-opus-5-5"] as any).capabilities };
+    const p = await parts("claude-sonnet-5", ON);
+    expect(display(p)).toBe("summarized");
+    expect(p.headers).toEqual({});
+    const haiku = await parts("claude-haiku-4-5-20251001", ON);
+    expect(haiku.fields).not.toHaveProperty("thinking");
+    expect(haiku.headers).toEqual({});
   });
 });
