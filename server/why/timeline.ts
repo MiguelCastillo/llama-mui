@@ -120,6 +120,26 @@ const toEntry = (rec: Record<string, unknown>, source: string, chatId: string): 
   return { t, pid, source, event, fields, line: `${time} pid=${pid ?? "?"} ${event}${fields ? " " + fields : ""} [${source}]` };
 };
 
+// Folds a run of consecutive lines that say the same thing (same process,
+// source, event and fields, ignoring the request id) into the first line plus
+// a count and the time of the last one. Nothing is dropped: a repeated line is
+// still listed once, and its count says how many there were.
+export function collapse(sorted: Entry[]): Entry[] {
+  const key = (e: Entry) => `${e.pid}|${e.source}|${e.event}|${e.fields.replace(/request=\S+ ?/, "").trim()}`;
+  const out: Entry[] = [];
+  let i = 0;
+  while (i < sorted.length) {
+    let j = i + 1;
+    while (j < sorted.length && key(sorted[j]) === key(sorted[i])) j++;
+    const n = j - i;
+    const first = sorted[i];
+    if (n === 1) out.push(first);
+    else out.push({ ...first, line: `${first.line} (${n} times, last at ${new Date(sorted[j - 1].t).toISOString()})` });
+    i = j;
+  }
+  return out;
+}
+
 export async function collectTimeline(
   chatId: string,
   opts: { root?: string; window?: Window | null; sources?: Source[] } = {},
@@ -146,7 +166,7 @@ export async function collectTimeline(
   // Processes involved: any that wrote a line about the chat inside the window.
   const pids = [...new Set(chatEntries.filter((e) => inWindow(e.t) && e.pid !== null).map((e) => e.pid as number))];
   const seen = new Set<string>();
-  const entries = [...chatEntries.filter((e) => inWindow(e.t)), ...lifeEntries.filter((e) => e.pid !== null && pids.includes(e.pid))]
+  const sorted = [...chatEntries.filter((e) => inWindow(e.t)), ...lifeEntries.filter((e) => e.pid !== null && pids.includes(e.pid))]
     .filter((e) => {
       const key = `${e.t}|${e.pid}|${e.event}|${e.fields}|${e.source}`;
       if (seen.has(key)) return false;
@@ -154,6 +174,7 @@ export async function collectTimeline(
       return true;
     })
     .sort((a, b) => a.t - b.t);
+  const entries = collapse(sorted);
 
   const missing: string[] = [];
   if (!chatEntries.length) missing.push("No line in any server log or audit file carries this chat's id.");

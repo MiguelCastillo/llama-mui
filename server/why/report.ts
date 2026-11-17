@@ -1,12 +1,11 @@
 // Builds the plain-text report of the `why` command (see docs/guide.md).
 //
 // Read only, and not recovery code: recovery must never import this file
-// (it pulls in the timeline, which reads the audit). It runs the three
-// sources (chat, timeline, servers) and prints five sections: Chat, Run
-// record, Timeline, Servers, Missing. It never prints message text.
+// (it pulls in the timeline, which reads the audit). It runs the two
+// sources (chat, timeline) and prints four sections: Chat, Run record,
+// Timeline, Missing. It never prints message text.
 
 import { defaultRoot, findChat, type ChatFacts } from "./chat.ts";
-import { collectServers, describeServer, realDeps, type Deps } from "./servers.ts";
 import { collectTimeline, type Window } from "./timeline.ts";
 
 const WINDOW_MS = 5 * 60 * 1000;
@@ -58,10 +57,8 @@ function runSection(c: ChatFacts, now: number): string[] {
 
 export interface ReportOptions {
   root?: string;
-  repo?: string;
   at?: string | null;
   now?: number;
-  deps?: Deps;
 }
 
 // Returns the whole report as text. Always a string; the caller exits 0.
@@ -84,17 +81,13 @@ export async function buildReport(query: string, opts: ReportOptions = {}): Prom
     if (!window) missing.push(`"${opts.at}" is not a time like 10:48, so the whole log is shown.`);
   }
   const tl = await collectTimeline(chat.id, { root, window });
-  const sv = await collectServers({ root, repo: opts.repo, deps: opts.deps ?? realDeps });
-  missing.push(...tl.missing, ...sv.missing);
+  missing.push(...tl.missing);
   if (chat.run?.owner && chat.run.owner.serverId === null) missing.push("The run record has no server id, so the owner is known by port only.");
   if (chat.run?.owner && chat.run.owner.pid === null) missing.push("The run record has no process number for its owner.");
 
   const out: string[] = [...chatSection(chat), "", ...runSection(chat, now), "", `Timeline${window ? ` (within 5 minutes of ${opts.at})` : ""}`];
   if (tl.entries.length) for (const e of tl.entries) out.push(`  ${e.line}`);
   else out.push("  no lines found");
-  out.push("", "Servers");
-  if (sv.servers.length) for (const s of sv.servers) out.push(`  ${describeServer(s)}`);
-  else out.push("  none found listening");
   out.push("", "Missing");
   const uniq = [...new Set(missing)];
   if (uniq.length) for (const m of uniq) out.push(`  - ${m}`);

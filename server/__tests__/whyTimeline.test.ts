@@ -68,6 +68,19 @@ describe("collectTimeline", () => {
     expect(none.missing[0]).toContain("carries this chat's id");
   });
 
+  it("folds a run of the same line into one with a count, and keeps different lines apart", async () => {
+    const root = fixture();
+    const lines = [0, 1, 2].map((i) => j({ t: `2026-11-17T10:46:0${i}.000Z`, pid: 1, event: "io.exec", session: ID, request: `r${i}`, why: "git.status" }));
+    lines.push(j({ t: "2026-11-17T10:46:05.000Z", pid: 1, event: "io.exec", session: ID, request: "r9", why: "terminal.run" }));
+    writeFileSync(path.join(root, "audit", "audit-2026-11-17-b.log"), lines.join("\n"));
+    const r = await collectTimeline(ID, { root });
+    const exec = r.entries.filter((e) => e.event === "io.exec");
+    expect(exec).toHaveLength(2);
+    expect(exec[0].line).toContain("(3 times, last at 2026-11-17T10:46:02.000Z)");
+    expect(exec[1].line).toContain("why=terminal.run");
+    expect(exec[1].line).not.toContain("times");
+  });
+
   it("takes extra sources from a list", async () => {
     const extra = { name: "extra", read: async () => ({ chat: [{ t: "2026-11-17T11:00:00.000Z", pid: 9, event: "run.start", session: ID }], lifecycle: [] }) };
     const r = await collectTimeline(ID, { root: fixture(), sources: [extra] });

@@ -2485,7 +2485,7 @@ there), run `npm run why -- <chat id or title words>`, optionally with
 It only reads; it exits 0 even when facts are missing. If several chats match
 the words, it lists them and stops: run it again with one id.
 
-It prints five sections:
+It prints four sections:
 
 - **Chat**: title, id, the chat it is a thread of (or the threads it started),
   each plan step with its status and note, how the chat was saved as ended
@@ -2496,16 +2496,13 @@ It prints five sections:
 - **Timeline**: one line per event, oldest first, from the server logs and the
   audit that carry the chat id, plus the start, listening, shutdown and close
   lines of the processes involved. No arguments, prompts or reply text.
-- **Servers**: each listening server (page port, API port, process number,
-  start time) and whether code under `server/` or `src/` changed since it
-  started.
 - **Missing**: what the command looked for and could not find. Read it as the
   limit of the answer: "no run started/ended events in any log" means the logs
   cannot say when the run began or ended, so only the saved record and the
   server close lines can; a missing server id means the owner is known by port
   only. A fact in Missing is not guessed anywhere else in the report.
 
-The command lives in `server/why/`, one file per source (chat, timeline,
-servers) and one that builds the text. It is not recovery code: recovery never
+The command lives in `server/why/`, one file per source (chat, timeline)
+and one that builds the text. It starts no program. It is not recovery code: recovery never
 reads the audit, so recovery code must not import it. A new source is added by
 adding it to the report's list of sources.

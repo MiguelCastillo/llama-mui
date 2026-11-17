@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildReport, windowAt } from "../why/report";
-import type { Deps } from "../why/servers";
 
 const j = (o: object) => JSON.stringify(o);
 const ID = "aaaa1111-2222-3333-4444-555566667777";
@@ -46,12 +45,11 @@ function fixture() {
   return r;
 }
 
-const deps: Deps = { isAlive: () => true, gitLog: async () => "" };
-
 describe("why: report", () => {
   it("explains a chat ended by a restart, with all five sections", async () => {
-    const text = await buildReport(ID, { root: fixture(), now: NOW, deps });
-    for (const h of ["Chat", "Run record", "Timeline", "Servers", "Missing"]) expect(text).toMatch(new RegExp(`^${h}`, "m"));
+    const text = await buildReport(ID, { root: fixture(), now: NOW });
+    for (const h of ["Chat", "Run record", "Timeline", "Missing"]) expect(text).toMatch(new RegExp(`^${h}`, "m"));
+    expect(text).not.toMatch(/^Servers/m);
     expect(text).toContain("ended by (saved apart from the run): restart");
     expect(text).toContain("2. [paused] Do the next thing (note: Paused)");
     expect(text).toContain("owner: port=5172 serverId=? pid=10");
@@ -65,15 +63,15 @@ describe("why: report", () => {
 
   it("lists matches when title words are ambiguous, and says so when none match", async () => {
     const r = fixture();
-    expect(await buildReport("nothing-like-this", { root: r, now: NOW, deps })).toMatch(/No chat matches/);
-    expect(await buildReport("Approval buttons", { root: r, now: NOW, deps })).toContain(ID);
+    expect(await buildReport("nothing-like-this", { root: r, now: NOW })).toMatch(/No chat matches/);
+    expect(await buildReport("Approval buttons", { root: r, now: NOW })).toContain(ID);
   });
 
   it("keeps lines outside the --at window out, and reports a bad time", async () => {
     const r = fixture();
-    const near = await buildReport(ID, { root: r, now: NOW + 3600000, at: "10:48", deps });
+    const near = await buildReport(ID, { root: r, now: NOW + 3600000, at: "10:48" });
     expect(near).toBeTypeOf("string");
-    const bad = await buildReport(ID, { root: r, now: NOW, at: "banana", deps });
+    const bad = await buildReport(ID, { root: r, now: NOW, at: "banana" });
     expect(bad).toContain('"banana" is not a time');
   });
 
