@@ -3219,7 +3219,9 @@ function Composer({
             </IconButton>
           </Tooltip>
         )}
-        {onStop || onStopAside ? (
+        {/* While a reply streams, the Stop button and the mic/send button sit side by side:
+            on a phone there is no Enter key, so the send button is the only way to queue a message. */}
+        {(onStop || onStopAside) && (
           <StopButton
             title={onStop ? "Stop the reply (Esc)" : "Stop the side question (the plan goes on)"}
             label={onStop ? "Stop" : "Stop the side question"}
@@ -3228,7 +3230,8 @@ function Composer({
             stopping={!!onStop && stopping}
             sx={{ ...roundButtonSx, border: 1, borderColor: "error.main", color: "error.main", "&:hover": { bgcolor: "action.hover" } }}
           />
-        ) : showMic ? (
+        )}
+        {showMic ? (
           // Nothing typed: the round button records a voice message. It turns into Send as soon as there is something to send.
           <Tooltip title={voice.isRecording ? "Stop recording" : voice.isTranscribing ? "Transcribing…" : "Record voice message"}>
             <span>
