@@ -5,6 +5,7 @@ import type {
   PastPlan,
   PlanStep,
   PlanThread,
+  ProjectInstructionsFixed,
   QueuedMessage,
   Todo,
   Usage,
@@ -39,6 +40,8 @@ export interface SessionState {
   persona: string | undefined;
   // The persona's text as the prompt has it (see Session.personaText).
   personaText: string | undefined;
+  // The project's instructions as the prompt has it (see Session.projectInstructions).
+  projectInstructions: ProjectInstructionsFixed | null | undefined;
   // Where the cut of old tool results stood, kept through the page's saves
   // (see Session.toolResultCut).
   toolResultCut: CutState | undefined;
@@ -88,6 +91,7 @@ export function emptySessionState(): SessionState {
     promptDir: undefined,
     persona: undefined,
     personaText: undefined,
+  projectInstructions: undefined,
     toolResultCut: undefined,
     usage: null,
     failed: null,
@@ -167,6 +171,12 @@ export function fromSession(
     promptDir: s.promptDir,
     persona: cleanPersona(s.persona),
     personaText: typeof s.personaText === "string" ? s.personaText : undefined,
+    projectInstructions: s.projectInstructions === null
+      ? null
+      : s.projectInstructions && typeof s.projectInstructions.text === "string"
+        ? // Only file and text are kept: a chat saved earlier may carry an old `cut` field, which is ignored.
+          { file: s.projectInstructions.file, text: s.projectInstructions.text }
+        : undefined,
     toolResultCut: s.toolResultCut,
     usage: s.usage,
     failed: shownFailure(s.failed, running),

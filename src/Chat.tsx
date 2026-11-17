@@ -1,5 +1,6 @@
 import { Fragment, memo, useCallback, type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import ChatUsageButton from "./ChatUsageButton";
+import ProjectInstructionsLine from "./ProjectInstructionsLine";
 import { StopButton } from "./StopButton";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import { isImageFile, prepareImage, revokePreview } from "./images";
@@ -417,6 +418,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     promptDir: fixedPromptDir,
     persona,
     personaText,
+    projectInstructions,
     usage,
     failed,
     endedBy,
@@ -1258,10 +1260,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (!visible) return;
     // The session this was asked for: a failure that arrives later belongs to it.
     const askedFor = sessionId;
-    getToolContext(workingDir, attachedPaths(attachments), promptDir, undefined, persona, personaText)
+    getToolContext(workingDir, attachedPaths(attachments), promptDir, undefined, persona, personaText, projectInstructions)
       .then(setToolContext)
       .catch((e) => showSessionError(askedFor, e.message));
-  }, [visible, attachments, workingDir, promptDir, persona, personaText, contextVersion]);
+  }, [visible, attachments, workingDir, promptDir, persona, personaText, projectInstructions, contextVersion]);
 
   // On only when the user wants tools and some are ready in this chat.
   const toolsOn = toolContext.offered.length > 0;
@@ -2178,7 +2180,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // moment to bring the system prompt up to date: it names the working
     // directory as it is now, the persona's text as its file is now (the
     // persona itself stays), and the next reply's update lists the attachments.
-    updateSession({ promptDir: undefined, personaText: undefined });
+    updateSession({ promptDir: undefined, personaText: undefined, projectInstructions: undefined });
   };
 
   // A click on the empty chat's suggestions: a starter is sent as the first
@@ -3930,6 +3932,8 @@ const MessageBubble = memo(function MessageBubble({
         // table and a hover toolbar (Copy for now; more tools will join it).
         <Panel variant={isAside ? "replyAside" : "reply"} error={hasError} tools={replyTools}>
           {content}
+      {/* Which project file the model was given, from this message's update. */}
+      {isUser && !isAside && <ProjectInstructionsLine update={parts[0].update} />}
         </Panel>
       )}
       {/* A message sent to a running plan: which step saw it. */}

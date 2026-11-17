@@ -619,6 +619,12 @@ export const setToolEnabled = (name: string, enabled: boolean) => call("PUT", `/
 
 // The definitions and system prompt are the same in every chat; see
 // toolsSystemPrompt in server/tools.ts.
+// The project's instructions file as the system prompt has it.
+export interface ProjectInstructionsFixed {
+  file: string;
+  text: string;
+}
+
 export interface ToolContext {
   // Definitions of every tool, for the model, including ones that are off.
   definitions: unknown[];
@@ -631,6 +637,9 @@ export interface ToolContext {
   persona?: string;
   // The persona text the prompt was built with. The chat fixes it at its first reply.
   personaText?: string;
+  // The project's instructions the prompt was built with (null: none). The
+  // chat fixes it at its first reply. Missing from an older server.
+  projectInstructions?: ProjectInstructionsFixed | null;
   // What's attached and what's off, for a ChatMessage's `update`.
   update: string;
   // The working directory's check command, by folder; empty if it has none.
@@ -669,6 +678,7 @@ export const getToolContext = (
   chatId?: string,
   persona?: string,
   personaText?: string,
+  projectInstructions?: ProjectInstructionsFixed | null,
 ) =>
   call<ToolContext>("POST", "/api/tools/context", {
     workingDir,
@@ -677,6 +687,8 @@ export const getToolContext = (
     ...(chatId ? { chatId } : {}),
     ...(persona ? { persona } : {}),
     ...(personaText !== undefined ? { personaText } : {}),
+    // null is a fixed "no file"; left out, the server reads the file.
+    ...(projectInstructions !== undefined ? { projectInstructions } : {}),
   });
 
 // Using llama-mui from a phone (see server/phones.ts). Managing is for the
@@ -862,6 +874,9 @@ export interface Session {
   // and again after Clear context, like promptDir, so editing the file never
   // changes a running chat's prompt. Missing until then.
   personaText?: string;
+  // The project's instructions as the prompt has them, fixed like personaText:
+  // null once fixed with no file; missing until the first reply.
+  projectInstructions?: ProjectInstructionsFixed | null;
   // The name the model gave the session on its first reply (if any).
   // The user can override it with a rename. Displayed title is userName,
   // else modelName, else title (first message). Never overwritten by save.

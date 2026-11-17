@@ -81,6 +81,13 @@ so exporting requires copying the whole folder. Code that writes session data
 must never be handed a key. The app doesn't scrub
 anything for you.
 
+**This file is loaded into every chat by the app.** When a chat's working
+directory has an `AGENTS.md`, its text goes into the model's system prompt (see
+`docs/guide.md`, "What the model is told"), whole and never cut. It should still
+stay short (under 20,000 characters; the chat shows a gentle recommendation
+beyond that), with the most important principles first. Loading is not enforcement: a model can still ignore a principle, so each
+principle also needs a test that fails when it is broken.
+
 ## Session files
 
 Two servers (dev and prod) can share `~/.llama-mui`. Every write of a session goes

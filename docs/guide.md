@@ -624,6 +624,23 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   applies, and ideas and actions become plain "Idea: …" and bold
   "Your action: …" lines. Behaviour every user would want belongs in the
   start or baseline, not in a rules file.
+- **The project's own instructions** come from a file in the chat's working
+  directory: `AGENTS.md`, and only that. Other context files (a `CLAUDE.md`, or
+  several at once) are not loaded on their own; letting you choose more files
+  is planned, and the reader keeps the file names as a list for it. They are the project's own principles, not your
+  preferences, and the prompt labels them so: "Project instructions from
+  <file> in the working directory. They are the project's own principles, not
+  the user's preferences; follow them". They sit after your rules, the tool
+  instructions and the plan rules, just before the working directory line, so
+  every chat in one project shares the same cached start. They are sent with
+  tools on or off. The whole file is always sent, never cut. A chat fixes them at its first reply, like its persona: editing the
+  file later doesn't change a running chat, only new chats. When a chat fixes
+  them, the chat shows "Project instructions loaded: <file>" (and, over 20,000
+  characters, a gentle line "Project instructions are long (N characters);
+  keeping <file> under 20,000 is recommended", shown in the chat only and never
+  sent to the model); with no file nothing is shown. They are loaded without asking, even from a project you only just
+  downloaded. Asking first (trust) is not built yet; the place for it is a
+  small check in the reader that for now always says yes.
 - **Your rules** tune that and govern the model; tools are only
   helpers under them. They are a plain file, `~/.llama-mui/rules.md`. When
   you ask the model to remember something it proposes one line and you

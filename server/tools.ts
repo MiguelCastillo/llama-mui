@@ -25,6 +25,7 @@ import { FETCH_TOOLS } from "./fetch.ts";
 import { INSPECT_TOOLS } from "./inspect.ts";
 import { PLAN_TOOLS, planInstructions } from "./plan.ts";
 import { personaForChat } from "./personaChoice.ts";
+import { type ProjectInstructions, RECOMMENDED_PROJECT_INSTRUCTIONS, readProjectInstructions } from "./projectInstructions.ts";
 import { BUILDER_NAME, type Persona, loadPersonas, personaPromptText } from "./personas.ts";
 import { cleanPersona } from "../src/persona.ts";
 import { readSession, sessionFolder } from "./sessionFile.ts";
@@ -238,21 +239,36 @@ function toolsSystemPrompt(
   sessionLine: string | null = null,
   personaText = "",
   skillsText = "",
+  project: ProjectInstructions | null = null,
 ): string {
   // The built-in way of working comes first (the same for everyone), then the
   // user's rules, which tune it; the tools' help, the home folder and the
-  // working directory follow, and only when there are tools.
+  // working directory follow, and only when there are tools. The project's
+  // own instructions go just before the working directory (shared by every
+  // chat in a project, so the cache stays shared); with tools off they end
+  // the prompt, since the principles apply either way.
   const rules = governingRules(rulesText);
   const start = [workingRules(withTools, personaText), ...(rules ? [rules] : [])];
-  if (!withTools) return start.join("\n\n");
+  const projectPart = project ? [projectInstructionsText(project)] : [];
+  if (!withTools) return [...start, ...projectPart].join("\n\n");
   return [
     ...start,
     "You have tools. Use one when it helps answer the question; otherwise answer directly.",
     ...GROUPS.map((g) => g.instructions).filter(Boolean),
     ...(skillsText ? [skillsText] : []),
     `The user's home folder is ${os.homedir()}.`,
+    ...projectPart,
     promptDir ? `Working directory: ${promptDir}` : "There's no working directory: use absolute paths.",
     ...(sessionLine ? [sessionLine] : []),
+  ].join("\n\n");
+}
+
+// The project's instructions as the prompt has them, under a label that says
+// whose they are: the project's principles, not the user's preferences.
+export function projectInstructionsText(p: ProjectInstructions): string {
+  return [
+    `Project instructions from ${p.file} in the working directory. They are the project's own principles, not the user's preferences; follow them.`,
+    p.text,
   ].join("\n\n");
 }
 
@@ -287,7 +303,26 @@ export function sessionNote(chatId: string, host: unknown): string | null {
 // (see `update` on ChatMessage). The working directory, if it's not the one
 // the system prompt names; the attachments (the working directory is not one);
 // and tools that are off.
-async function chatUpdate(ctx: ToolContext, promptDir: string | null, personaNote: string | null = null): Promise<string> {
+// The line saying which project instructions the prompt carries, and that they
+// are loaded, plus a gentle recommendation when the text is longer than
+// RECOMMENDED_PROJECT_INSTRUCTIONS (the whole text is sent either way); nothing
+// when there is no file. Stated from the fixed text, so it is the same on every
+// request of a chat and is sent with its first message only.
+export function projectNoteText(p: ProjectInstructions | null): string | null {
+  if (!p) return null;
+  const loaded = `Project instructions loaded: ${p.file}`;
+  if (p.text.length <= RECOMMENDED_PROJECT_INSTRUCTIONS) return loaded;
+  const count = p.text.length.toLocaleString("en-US");
+  const limit = RECOMMENDED_PROJECT_INSTRUCTIONS.toLocaleString("en-US");
+  return `${loaded}\nProject instructions are long (${count} characters); keeping ${p.file} under ${limit} is recommended.`;
+}
+
+async function chatUpdate(
+  ctx: ToolContext,
+  promptDir: string | null,
+  personaNote: string | null = null,
+  projectNote: string | null = null,
+): Promise<string> {
   const dir = ctx.workingDir;
   const others = ctx.attachments;
   const off = TOOLS.filter((t) => !isOffered(ctx, t)).map((t) => t.name);
@@ -295,6 +330,7 @@ async function chatUpdate(ctx: ToolContext, promptDir: string | null, personaNot
     "Chat update:",
     ...(dir !== promptDir ? [dir ? `The working directory is now ${dir}.` : "There's no working directory now."] : []),
     ...(personaNote ? [personaNote] : []),
+    ...(projectNote ? [projectNote] : []),
     others.length ? `Also attached:\n${others.map((d) => `- ${d}`).join("\n")}` : "Nothing else is attached.",
     ...(!ctx.store.toolsEnabled
       ? ["Tools are turned off in Settings, so calls to any of them fail."]
@@ -597,6 +633,16 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
       personaText = personaPromptText(chosen.persona);
       personaNote = chosen.note;
     }
+    // The project's instructions (AGENTS.md in the prompt's working directory)
+    // are fixed the same way: the page sends back what the chat fixed, an
+    // object, or null for "fixed: none"; only an unfixed chat reads the file.
+    const sent = body.projectInstructions;
+    const project: ProjectInstructions | null =
+      sent === null
+        ? null
+        : sent && typeof sent === "object" && typeof sent.file === "string" && typeof sent.text === "string"
+          ? { file: sent.file, text: sent.text }
+          : await readProjectInstructions(promptDir);
     sendJson(res, 200, {
       definitions: TOOLS.map((t) => t.definition),
       // The user's rules go out with or without tools; the rest only with them.
@@ -607,12 +653,15 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
         offered.includes("inspect_page") ? sessionNote(ctx.chatId, req.headers?.host) : null,
         personaText,
         skillsPromptText((await loadSkills()).skills),
+        project,
       ),
       offered,
+      // What the prompt was built with, for the chat to fix at its first reply.
+      projectInstructions: project,
       persona: personaName,
       // The text the prompt was built with, for the chat to fix at its first reply.
       personaText,
-      update: await chatUpdate(ctx, promptDir, personaNote),
+      update: await chatUpdate(ctx, promptDir, personaNote, projectNoteText(project)),
       // The working directory's only: attachments have none (see SessionSettings).
       checkCommands: ctx.workingDir && ctx.store.checkCommands[ctx.workingDir]
         ? { [ctx.workingDir]: ctx.store.checkCommands[ctx.workingDir] }

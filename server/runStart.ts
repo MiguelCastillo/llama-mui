@@ -66,6 +66,7 @@ export async function buildEnv(session: any, options: RunOptions): Promise<Runne
       typeof session.id === "string" ? session.id : undefined,
       cleanPersona(session.persona),
       typeof session.personaText === "string" ? session.personaText : undefined,
+      session.projectInstructions === null || typeof session.projectInstructions === "object" ? session.projectInstructions : undefined,
     ),
   );
   return {

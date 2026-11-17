@@ -72,6 +72,9 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     // The persona's text too, so editing its file waits for Clear context or a new chat.
     const fixedText = toolContext.personaText;
     h.edit((s) => (s.personaText === undefined && typeof fixedText === "string" ? { ...s, personaText: fixedText } : s));
+    // And the project's instructions (null: fixed with no file).
+    const fixedProject = toolContext.projectInstructions;
+    h.edit((s) => (s.projectInstructions === undefined && fixedProject !== undefined ? { ...s, projectInstructions: fixedProject } : s));
     const forgotten = before.slice(0, start);
     // Attachments and tools that are off go the same way, as `update`, and
     // only when they changed since the last one the model saw.
@@ -274,6 +277,7 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
           usage: null,
           promptDir: undefined,
           personaText: undefined,
+          projectInstructions: undefined,
         }));
       }
     }
