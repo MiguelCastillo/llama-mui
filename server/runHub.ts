@@ -241,7 +241,10 @@ export function watch(
     if (!prev) return null;
     const live = runs.get(id);
     const session = copyForEvents(live?.session?.() ?? prev);
-    const run = live ? copyRun(live.state) : null;
+    // No run here: a record whose owner is alive is another server's run, shown
+    // as the run (the same as opening the session does), so nobody is told "no run".
+    const recorded = prev.run && typeof prev.run === "object" && ownerAlive(prev.run) ? (copyRun(prev.run) as RunState) : null;
+    const run = live ? copyRun(live.state) : recorded;
     const unsubscribe = subscribe((e) => void (e.id === id && listener(e)));
     return { session, revision: revisionOf(prev), run, stop: unsubscribe };
   });

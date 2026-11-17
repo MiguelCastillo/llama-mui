@@ -12,7 +12,9 @@
 //                                   `removed`, `thread`. Never the chat itself.
 //   GET /api/sessions/<id>/events   one session, for the page that has it open.
 //                                   First event `snapshot`: { id, session, revision,
-//                                   run } (run is null when nothing runs). Then
+//                                   run, actions } (run is null when nothing runs;
+//                                   actions is what the server lets the page offer,
+//                                   see allowedActions.ts; `status` carries it too). Then
 //                                   every event of that session: `status`, `step`,
 //                                   `ask`, `session` (a patch, see sessionPatch.ts),
 //                                   `saved`, `removed`, `thread`, `ack`.
@@ -30,8 +32,9 @@
 import type { ServerResponse } from "node:http";
 import { HttpError, type Route } from "./http.ts";
 import * as hub from "./runHub.ts";
-import { holderOf } from "./runRecord.ts";
-import { sessionFolder } from "./sessionFile.ts";
+import { CHECK_IN_MS, holderOf, ownerAlive } from "./runRecord.ts";
+import { sessionFolder, readSession } from "./sessionFile.ts";
+import { sessionActions } from "./allowedActions.ts";
 
 // A run's state with who holds the floor beside it, worked out here so the page
 // never has to decide which server is "this one". Without a run: as it was.
@@ -41,6 +44,10 @@ const withHolder = <T extends { run?: any }>(data: T): T & { holder?: unknown } 
 };
 
 export const HEARTBEAT_MS = 15_000;
+
+// What the page was told, boiled down to compare: the list and who holds the run.
+const actionsKey = (run: any, actions: string[]) =>
+  JSON.stringify([actions, run?.owner?.serverId ?? null, run?.owner?.port ?? null, run?.status ?? null]);
 
 // What the list-wide stream passes on. The rest (steps, the chat's changes,
 // asks) is for the page that has the session open.
@@ -76,7 +83,11 @@ function startStream(res: ServerResponse, heartbeatMs: number, onClose: () => vo
 }
 
 // Handles the two event streams; returns false for anything else.
-export async function eventRoutes({ res, parts, method }: Route, heartbeatMs = HEARTBEAT_MS): Promise<boolean> {
+export async function eventRoutes(
+  { res, parts, method }: Route,
+  heartbeatMs = HEARTBEAT_MS,
+  pollMs = CHECK_IN_MS,
+): Promise<boolean> {
   const all = parts.length === 1 && parts[0] === "events";
   const one = parts.length === 3 && parts[0] === "sessions" && parts[2] === "events";
   if (!all && !one) return false;
@@ -97,11 +108,55 @@ export async function eventRoutes({ res, parts, method }: Route, heartbeatMs = H
   // Events that arrive between the snapshot being taken and it being sent wait here.
   let send: Send | undefined;
   const waiting: hub.HubEvent[] = [];
-  const watching = await hub.watch(id, (e) => (send ? send(e.type, { id: e.id, ...(e.type === "status" ? withHolder(e.data) : e.data) }) : waiting.push(e)));
+  // A status event also carries `actions`, worked out from the session as saved
+  // at that moment. Events go out one after another, in the order they came,
+  // even though reading the session takes a moment.
+  let line: Promise<void> = Promise.resolve();
+  let told = ""; // what the page was last told about the actions (see the check below)
+  const forward = (e: hub.HubEvent) => {
+    line = line.then(async () => {
+      if (e.type !== "status") return void send!(e.type, { id: e.id, ...e.data });
+      const saved = await readSession(id).catch(() => null);
+      // Unreadable session: an empty list, never a guess.
+      const actions = saved ? sessionActions(saved, e.data.run as any) : [];
+      told = actionsKey(e.data.run as any, actions);
+      send!(e.type, { id: e.id, ...withHolder(e.data), actions });
+    });
+  };
+  const watching = await hub.watch(id, (e) => (send ? forward(e) : waiting.push(e)));
   if (!watching) throw new HttpError(404, "No such session");
   const { session, revision, run, stop } = watching;
-  send = startStream(res, heartbeatMs, stop);
-  send("snapshot", { id, session, revision, ...withHolder({ run }) });
-  for (const e of waiting.splice(0)) send(e.type, { id: e.id, ...(e.type === "status" ? withHolder(e.data) : e.data) });
+  let poll: ReturnType<typeof setInterval> | undefined;
+  send = startStream(res, heartbeatMs, () => {
+    if (poll) clearInterval(poll);
+    stop();
+  });
+  const firstActions = sessionActions(session, run as any);
+  send("snapshot", { id, session, revision, ...withHolder({ run }), actions: firstActions });
+  for (const e of waiting.splice(0)) forward(e);
+
+  // A run another server owns never reaches this server's hub, so nothing here
+  // announces it ending, its owner dying (its check-ins just stop) or its steps
+  // moving on. So while no run of this server is live in the session, the
+  // session file is read every `pollMs` and, if what the page may offer (or who
+  // holds the run) is not what it was last told, a `status` event with the new
+  // list goes out. Status events from this server's own runs count as "told" too.
+  told = actionsKey(run as any, firstActions);
+  const sendTold = send;
+  poll = setInterval(() => {
+    line = line.then(async () => {
+      if (hub.liveRun(id)) return; // this server's run: its own events tell the page
+      const saved = await readSession(id).catch(() => null);
+      if (!saved) return;
+      const record = saved.run && typeof saved.run === "object" ? (saved.run as any) : null;
+      const shown = record && ownerAlive(record) ? record : null;
+      const actions = sessionActions(saved, record);
+      const key = actionsKey(shown, actions);
+      if (key === told) return;
+      told = key;
+      sendTold("status", { id, ...withHolder({ run: shown }), actions });
+    });
+  }, pollMs);
+  poll.unref?.();
   return true;
 }

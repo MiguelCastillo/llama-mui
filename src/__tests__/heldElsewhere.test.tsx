@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import HeldElsewhereLine, { takeOver } from "../HeldElsewhereLine";
 import { getView, resetRunClient, subscribe } from "../runClient";
 import { PlanView } from "../PlanView";
-import { allowedActions, planState } from "../allowedActions";
+import { drawnActions, pastPlanActions } from "../actions";
 
 // The step rows use a browser-only hook; these tests are about the card's buttons.
 vi.mock("../PlanStepRow", async (importOriginal) => ({
@@ -31,9 +31,14 @@ describe("the held-elsewhere line", () => {
 
 describe("the Take over button", () => {
   it("shows only for another server's run", () => {
-    expect(renderToStaticMarkup(<HeldElsewhereLine port={5175} sessionId="a" />)).toContain("Take over");
-    expect(renderToStaticMarkup(<HeldElsewhereLine port={null} sessionId="a" />)).toBe("");
-    expect(renderToStaticMarkup(<HeldElsewhereLine port={undefined} sessionId="a" />)).toBe("");
+    expect(renderToStaticMarkup(<HeldElsewhereLine port={5175} sessionId="a" canTakeOver />)).toContain("Take over");
+    expect(renderToStaticMarkup(<HeldElsewhereLine port={null} sessionId="a" canTakeOver />)).toBe("");
+    expect(renderToStaticMarkup(<HeldElsewhereLine port={undefined} sessionId="a" canTakeOver />)).toBe("");
+  });
+
+  it("is not drawn unless the server lists it, even with a port", () => {
+    expect(renderToStaticMarkup(<HeldElsewhereLine port={5175} sessionId="a" />)).not.toContain("Take over");
+    expect(renderToStaticMarkup(<HeldElsewhereLine port={5175} sessionId="a" canTakeOver={false} />)).not.toContain("Take over");
   });
 
   it("asks first and sends the takeover command only when confirmed", async () => {
@@ -111,8 +116,8 @@ describe("the line inside the plan card", () => {
       running: true,
       onCancel: () => {},
       onPause: () => {},
-      allowed: allowedActions({ loaded: true, holder: "elsewhere", plan: planState([steps[0]], true), canClone: true, hasModel: true }),
-      footer: <HeldElsewhereLine port={5173} sessionId="a" inPlan />,
+      allowed: new Set(["takeOver"]), // what the server lists for another server's run
+      footer: <HeldElsewhereLine port={5173} sessionId="a" inPlan canTakeOver />,
     });
     expect(html).not.toContain("Discard");
     expect(html).not.toContain("Pause");
@@ -121,6 +126,67 @@ describe("the line inside the plan card", () => {
 
   it("outside a card the line still floats at the top", () => {
     expect(renderToStaticMarkup(<HeldElsewhereLine port={5173} sessionId="a" />)).toContain("position:sticky");
+  });
+});
+
+// What Chat draws is drawnActions(...) handed to the card, the send box and the
+// Take over line. Chat is too large to render here, so these tests run that
+// same path: the list the server sent -> the set -> the markup.
+describe("the page draws only what the server's list says", () => {
+  const steps = [{ id: "s1", text: "Step 1", status: "pending" as const }];
+  const handlers = { onRun: () => {}, onPause: () => {}, onCancel: () => {}, onClone: () => {} };
+  const names = (html: string) => ["Run", "Continue", "Pause", "Discard", "Clone", "Take over"].filter((n) => html.includes(`>${n}<`) || (n === "Take over" && html.includes("Take over")));
+  // The plan card with its Take over line, as Chat builds them.
+  const screen = (loaded: boolean, list: string[], hasModel = true, runActive = false) => {
+    const allowed = drawnActions(loaded, list, hasModel, runActive);
+    return {
+      allowed,
+      html: renderToStaticMarkup(
+        <PlanView
+          steps={steps}
+          details={() => null}
+          formatTime={() => ""}
+          onChange={() => {}}
+          {...handlers}
+          allowed={allowed}
+          footer={<HeldElsewhereLine port={5175} sessionId="a" inPlan canTakeOver={allowed.has("takeOver")} />}
+        />,
+      ),
+    };
+  };
+
+  it("before the server answers: no card button, no send, no Take over", () => {
+    const { html, allowed } = screen(false, ["run", "discard", "send", "takeOver"]);
+    expect(allowed.size).toBe(0);
+    expect(names(html)).toEqual([]);
+    const loadedButEmpty = screen(true, []);
+    expect(loadedButEmpty.allowed.size).toBe(0);
+    expect(names(loadedButEmpty.html)).toEqual([]);
+  });
+
+  it("an answer of only takeOver draws only Take over", () => {
+    const { html, allowed } = screen(true, ["takeOver"]);
+    expect([...allowed]).toEqual(["takeOver"]);
+    expect(names(html)).toEqual(["Take over"]);
+  });
+
+  it("send follows the list; no model only removes it, and never adds it", () => {
+    expect(drawnActions(true, ["send"], true, false).has("send")).toBe(true);
+    expect(drawnActions(true, ["send"], false, false).has("send")).toBe(false);
+    expect(drawnActions(true, ["send"], false, true).has("send")).toBe(true);
+    expect(drawnActions(true, [], true, true).has("send")).toBe(false);
+  });
+
+  it("a past plan keeps only Clone, and only if listed", () => {
+    expect([...pastPlanActions(drawnActions(true, ["run", "clone", "discard"], true, false))]).toEqual(["clone"]);
+    expect(pastPlanActions(drawnActions(true, ["run"], true, false)).size).toBe(0);
+    expect(pastPlanActions(drawnActions(false, ["clone"], true, false)).size).toBe(0);
+  });
+
+  it("a later list replaces the earlier one and removes a button", () => {
+    expect(names(screen(true, ["run", "discard"]).html)).toEqual(["Run", "Discard"]);
+    expect(names(screen(true, ["run"]).html)).toEqual(["Run"]);
+    expect(names(screen(true, ["takeOver"]).html)).toEqual(["Take over"]);
   });
 });
 
@@ -162,6 +228,26 @@ describe("the run view's held-elsewhere field", () => {
     events().emit("status", { id: "a", run: null });
     await vi.waitFor(() => expect(seen.at(-1)).toBeNull());
     expect(getView("a")?.heldElsewhere ?? null).toBeNull();
+  });
+
+  it("carries the server's list from the snapshot, and a later event replaces it", () => {
+    subscribe("a", () => {});
+    events().emit("snapshot", { runs: [] });
+    events().emit("status", { id: "a", run, holder: { port: 5175, mine: false }, actions: ["takeOver"] });
+    expect(getView("a")?.actions).toEqual(["takeOver"]);
+    events().emit("status", { id: "a", run, actions: ["pause"] });
+    expect(getView("a")?.actions).toEqual(["pause"]);
+  });
+
+  it("an answer for one chat does not reach another", () => {
+    subscribe("a", () => {});
+    subscribe("b", () => {});
+    events().emit("status", { id: "a", run, holder: { port: 5175, mine: false }, actions: ["takeOver"] });
+    expect(getView("a")?.actions).toEqual(["takeOver"]);
+    expect(getView("b")?.actions ?? []).toEqual([]);
+    events().emit("status", { id: "b", run, actions: ["pause"] });
+    expect(getView("a")?.actions).toEqual(["takeOver"]);
+    expect(getView("b")?.actions).toEqual(["pause"]);
   });
 
   it("is empty when this server holds the floor", () => {

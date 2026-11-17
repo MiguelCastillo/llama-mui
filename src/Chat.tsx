@@ -194,7 +194,7 @@ import {
 } from "./agent/replyNotes";
 import type { NoteKindId } from "./replyNoteKinds";
 import HeldElsewhereLine from "./HeldElsewhereLine";
-import { allowedActions, planState } from "./allowedActions";
+import { drawnActions, pastPlanActions, type Action } from "./actions";
 import {
   PlanView,
   checkRoom,
@@ -757,6 +757,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // open session is Chat's again.
   const mirrorView = (v: RunnerView) => {
     setHeldPort(v.status !== "stopped" ? v.heldElsewhere?.port ?? null : null);
+    if (v.actions) setServerActions(v.actions);
     if (v.session) applySession(v.session, true, v.status !== "stopped");
     // The run's error shows in its session, and clears only a run error, so
     // a message of Chat's own (a refusal, a server that can't be reached) isn't
@@ -791,12 +792,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const loadSession = (id: string) => {
     setLoaded(false);
     setHeldPort(null);
+    setServerActions([]);
     loadedOk.current = false;
     dismiss(id);
     getSession(id)
       .then((s) => {
         applySession(s, !!s.run);
         setHeldPort(s.holder && !s.holder.mine ? s.holder.port : null);
+        if (openId.current === id) setServerActions(s.actions ?? []);
         // A draft saved on the server (a chat with words in it, not yet sent)
         // goes in the box, replacing this browser's own copy. It is counted as
         // saved, so opening the chat doesn't save it again.
@@ -809,7 +812,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         const view = getView(id);
         if (view && view.status !== "stopped" && openId.current === id) mirrorView(view);
       })
-      .catch(() => {})
+      .catch((e) => {
+        // The server says "no such chat" (a new one) together with what it may
+        // offer; any other failure leaves the list empty.
+        if (e instanceof ApiError && e.status === 404 && Array.isArray(e.data.actions) && openId.current === id) setServerActions(e.data.actions);
+      })
       .finally(() => setLoaded(true));
   };
 
@@ -2079,21 +2086,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return own.length ? own : null;
   };
   const canClone = (!plan || plan.every((st) => st.status === "done")) && !runActive;
-  const allowed = allowedActions({
-    loaded,
-    holder: heldPort !== null ? "elsewhere" : "none",
-    plan: plan ? planState(plan, runActive) : null,
-    canClone,
-    hasModel: !!model,
-  });
-  // A plan from an earlier round is finished: the one thing it offers is Clone.
-  const pastAllowed = allowedActions({
-    loaded,
-    holder: heldPort !== null ? "elsewhere" : "none",
-    plan: { finished: true, unfinished: false, started: true, running: false },
-    canClone,
-    hasModel: false,
-  });
+  // Only what the server lists is drawn (see actions.ts). The one thing the page
+  // removes on its own is Send when no model is chosen; it adds nothing.
+  const allowed: ReadonlySet<Action> = drawnActions(loaded, serverActions, !!model, runActive);
+  // A plan from an earlier round is finished: the one thing it offers is Clone,
+  // and only if the server lists it.
+  const pastAllowed: ReadonlySet<Action> = pastPlanActions(allowed);
   const planCards = [
     ...threads.map((t) => ({
       anchor: t.anchor,
@@ -2145,7 +2143,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   since={planRunning ? taskSince : null}
                   allowed={allowed}
                   onPause={planRunning ? () => showFailure(stopRunner(sessionId)) : undefined}
-                  footer={<HeldElsewhereLine port={heldPort} sessionId={sessionId} inPlan />}
+                  footer={<HeldElsewhereLine port={heldPort} sessionId={sessionId} inPlan canTakeOver={allowed.has("takeOver")} />}
                   counter={(since) => <Elapsed since={since} rate={streamRate} variant="caption" color="text.secondary" />}
                   onRun={allowed.has("run") || allowed.has("continue") ? runFromCard : undefined}
                   onChange={allowed.has("edit") ? (steps) => updateSession({ plan: steps }) : undefined}
@@ -2240,6 +2238,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         />
       }
       aside={
+        <WorkPanel
+          entries={workEntries}
           merge={{
             attempt: workMerge.attempt,
             error: workMerge.error,
@@ -2248,8 +2248,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             discard: () => void workMerge.discard(),
             dismiss: workMerge.dismiss,
           }}
-        <WorkPanel
-          entries={workEntries}
           open={drawerMode ? workDrawerOpen : workOpen}
           narrow={drawerMode}
           onClose={() => (drawerMode ? setWorkDrawerOpen(false) : setWorkOpen(false))}
@@ -2531,7 +2529,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         <Container maxWidth={false} ref={contentRef} sx={{ maxWidth: CHAT_MAX_WIDTH }}>
           <Stack spacing={2}>
             {/* With a plan, the note is at the bottom of the plan card instead. */}
-            {!plan && <HeldElsewhereLine port={heldPort} sessionId={sessionId} />}
+            {!plan && <HeldElsewhereLine port={heldPort} sessionId={sessionId} canTakeOver={allowed.has("takeOver")} />}
             {connector === null ? (
               <Stack spacing={2} sx={{ alignItems: "center", mt: 8 }}>
                 {(connectors ?? []).length === 0 ? (
@@ -3932,10 +3930,10 @@ const MessageBubble = memo(function MessageBubble({
         // table and a hover toolbar (Copy for now; more tools will join it).
         <Panel variant={isAside ? "replyAside" : "reply"} error={hasError} tools={replyTools}>
           {content}
-      {/* Which project file the model was given, from this message's update. */}
-      {isUser && !isAside && <ProjectInstructionsLine update={parts[0].update} />}
         </Panel>
       )}
+      {/* Which project file the model was given, from this message's update. */}
+      {isUser && !isAside && <ProjectInstructionsLine update={parts[0].update} />}
       {/* A message sent to a running plan: which step saw it. */}
       {isUser && (parts[0].seenByStep || parts[0].notSeen) && (
         <Typography variant="caption" color="text.secondary">

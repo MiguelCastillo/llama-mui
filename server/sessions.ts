@@ -13,6 +13,7 @@ import { sessionsDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
 import { holderOf, ownerAlive } from "./runRecord.ts";
+import { sessionActions } from "./allowedActions.ts";
 import { settleSession } from "./restart.ts";
 import { descendantIds } from "../src/sessionTree.ts";
 import { personaToSave } from "../src/persona.ts";
@@ -110,11 +111,16 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
     // One whose owner is alive, here or on another server, is shown as the live run.
     if (await readSession(id)) await settleSession(id);
     const session = await readSession(id);
-    if (!session) throw new HttpError(404, "No such session");
+    if (!session) {
+      // A chat not saved yet (a new one) has no run and no owner: the server
+      // still says what it may offer, so the page never has to guess.
+      sendJson(res, 404, { error: "No such session", actions: sessionActions({}, null) });
+      return true;
+    }
     const { run: recorded, ...saved } = session;
     const run = hub.liveRun(id) ?? (recorded && ownerAlive(recorded) ? recorded : null);
     const holder = run ? holderOf(run) : null;
-    sendJson(res, 200, { ...saved, revision: revisionOf(session), ...(run ? { run } : {}), ...(holder ? { holder } : {}) });
+    sendJson(res, 200, { ...saved, revision: revisionOf(session), ...(run ? { run } : {}), ...(holder ? { holder } : {}), actions: sessionActions(session, run) });
     return true;
   }
   if (method === "PUT") {

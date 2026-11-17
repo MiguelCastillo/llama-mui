@@ -85,6 +85,8 @@ interface Live {
   id: string;
   run: WireRun;
   holder: WireHolder | null;
+  // The server's list of allowed actions from the last event that had one.
+  actions?: string[];
   // The run's session while a listener has it open; null otherwise.
   session: Session | null;
   // A command the server refused or couldn't be sent, until the next event.
@@ -164,6 +166,7 @@ function viewOf(l: Live): RunnerView {
     notes: (l.run.notes ?? []).map(({ id, text, step }) => ({ id, text, step })),
     // Only when another server holds the floor; nothing otherwise.
     heldElsewhere: l.holder && !l.holder.mine ? { port: l.holder.port } : null,
+    actions: l.actions,
   };
 }
 
@@ -198,17 +201,18 @@ function listen(source: EventSource, type: string, fn: (data: any) => void) {
 }
 
 // A run exists (new, or changed).
-function ensureLive(id: string, run: WireRun, holder: WireHolder | null = null) {
+function ensureLive(id: string, run: WireRun, holder: WireHolder | null = null, actions?: string[]) {
   const known = lives.get(id);
   if (known) {
     known.run = run;
     known.holder = holder;
+    if (actions) known.actions = actions;
     known.commandError = null;
     touch(known);
     return;
   }
   stopped.delete(id);
-  const l = { id, run, holder, session: null, commandError: null, source: null, ask: null } as unknown as Live;
+  const l = { id, run, holder, actions, session: null, commandError: null, source: null, ask: null } as unknown as Live;
   lives.set(id, l);
   bump(id);
   l.view = viewOf(l);
@@ -248,6 +252,8 @@ function endRun(id: string, error?: string | null): Promise<void> {
       aside: false,
       startedAt: l.run.startedAt,
       notes: [],
+      // The session as the server has it now carries the list for the idle chat.
+      actions: session?.actions ?? [],
     };
     const heard = [...(listeners.get(id) ?? [])];
     for (const fn of heard) fn(view);
@@ -276,8 +282,8 @@ function dropped(id: string) {
   changed();
 }
 
-const onStatus = (id: string, data: { run: WireRun | null; holder?: WireHolder; error?: string }) =>
-  data.run ? ensureLive(id, data.run, data.holder ?? null) : void endRun(id, data.error);
+const onStatus = (id: string, data: { run: WireRun | null; holder?: WireHolder; error?: string; actions?: string[] }) =>
+  data.run ? ensureLive(id, data.run, data.holder ?? null, data.actions) : void endRun(id, data.error);
 
 // The stream for the whole app.
 function connect() {
@@ -305,13 +311,14 @@ function syncWatch(id: string) {
     const source = new EventSource(`/api/sessions/${id}/events`);
     l.source = source;
     const current = () => lives.get(id) === l;
-    listen(source, "snapshot", (data: { session: Session; run: WireRun | null; holder?: WireHolder }) => {
+    listen(source, "snapshot", (data: { session: Session; run: WireRun | null; holder?: WireHolder; actions?: string[] }) => {
       if (!current()) return;
       l.session = data.session;
       if (!data.run) void endRun(id);
       else {
         l.run = data.run;
         l.holder = data.holder ?? null;
+        if (data.actions) l.actions = data.actions;
         l.commandError = null;
         touch(l);
       }

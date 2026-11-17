@@ -6,8 +6,48 @@ React client; `src/agent/` is the turn loop and plan runner, with no React in it
 The README is the short front page, `docs/guide.md` has the details of how it
 works, and this file says how to change it.
 
+## Principles are the project's, not one person's
+
+The rules in this file are **design principles of llama-mui itself**. They are
+not preferences of whoever is chatting with you, and they are not "how this
+user likes to work". Do not treat them as optional, do not wait to be reminded
+of them, and do not copy them into a personal rules file (`~/.llama-mui/rules.md`)
+as if they belonged to one person. Personal rules say how to talk and work with
+one user; principles say how the app must be built, for every user and every
+model that changes it. They apply even when the user's message doesn't mention
+them. If a user says "this is the core principle", it belongs here, in the repo,
+where every model reads it, and not in a personal file.
+
+Before changing anything, read this section and the principles below. Needing a
+human to catch a violation is itself a failure of the principle.
+
 ## Principles
 
+- **THE SERVER DECIDES WHAT A PLAN CARD CAN DO. THE PAGE ONLY DRAWS WHAT THE
+  SERVER LISTS. READ THIS BEFORE TOUCHING ANY BUTTON, MENU OR CONTROL THAT
+  DEPENDS ON A RUN.** Only the server knows who owns a run (this server,
+  another server, or nobody), so only the server can say which actions are
+  safe. This is the core principle of the app; a human must never be the one
+  who catches a wrong button.
+  - **Start with nothing.** Until the server has answered, the card draws no
+    buttons at all. Not "the usual ones", not "the ones that are safe if
+    nobody runs it". Nothing.
+  - **Unknown is never "none".** If the page doesn't know who holds a run, it
+    must not treat that as "nobody holds it". Missing information removes
+    actions; it never adds them.
+  - **The page never works out an action itself.** Don't derive a button from
+    local state (a step marked running, a missing run view, a port that is
+    null). If a button is wrong, fix the server's list, or what the server
+    knows, not the page's guess. A local patch that hides one button in one
+    case is the wrong fix: it leaves every other button guessing.
+  - **A new button or state = a new entry in the server's list**, with a test
+    that shows it absent when the owner is another server or unknown.
+  - **Stays current.** The server sends the list again whenever the owner or
+    the plan's state changes, so a page can't keep an old button.
+  - Where the rules live: in `server/allowedActions.ts`. The server sends the
+    list with the session answer and with the session's events; the page only
+    draws it. The page may remove an action for a reason only it knows (no
+    model chosen removes Send), never add one.
 - **Tools serve the agent's workflow.** A tool takes simple arguments and returns
   something the model can act on. When it fails, its message says what to do
   next (see the missing-path error in `runTool`, and what `create_worktree`
@@ -40,6 +80,13 @@ works, and this file says how to change it.
     because a page runs code in Chrome and a sandbox or network rule should be what limits that.
 
   Don't add to this list without saying so here.
+
+**This file is loaded into every chat by the app.** When a chat's working
+directory has an `AGENTS.md`, its text goes into the model's system prompt (see
+`docs/guide.md`, "What the model is told"), whole and never cut. It should still
+stay short (under 20,000 characters; the chat shows a gentle recommendation
+beyond that), with the most important principles first. Loading is not enforcement: a model can still ignore a principle, so each
+principle also needs a test that fails when it is broken.
 
 ## What's on screen stays
 
@@ -80,13 +127,6 @@ except sessions with images live in `sessions/<id>/` with an `images/` subfolder
 so exporting requires copying the whole folder. Code that writes session data
 must never be handed a key. The app doesn't scrub
 anything for you.
-
-**This file is loaded into every chat by the app.** When a chat's working
-directory has an `AGENTS.md`, its text goes into the model's system prompt (see
-`docs/guide.md`, "What the model is told"), whole and never cut. It should still
-stay short (under 20,000 characters; the chat shows a gentle recommendation
-beyond that), with the most important principles first. Loading is not enforcement: a model can still ignore a principle, so each
-principle also needs a test that fails when it is broken.
 
 ## Session files
 
@@ -246,6 +286,7 @@ interface, and plain http on this computer only.
 
 ## Before designing a change
 
+- **Asked why a chat, plan or card looks as it does? Run `npm run why -- <chat id or words> [--at HH:MM]` first**, before reading logs by hand; read its Missing section for what it couldn't find (`docs/guide.md`, "Finding out why a chat is in its state").
 - Read the section of `docs/guide.md` for the area first, and search the code
   by the problem ("what already shrinks what is sent?"), not only by the words
   in the request: the code may name the same thing differently (what the UI
@@ -278,4 +319,3 @@ interface, and plain http on this computer only.
   command itself: don't ask the user to change their git config, which should
   keep behaving as usual when they run git themselves. Commands run through a
   tool, or through llama-mui's `run_command`, have no terminal and never page.
-- **Asked why a chat, plan or card looks as it does? Run `npm run why -- <chat id or words> [--at HH:MM]` first**, before reading logs by hand; read its Missing section for what it couldn't find (`docs/guide.md`, "Finding out why a chat is in its state").

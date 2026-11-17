@@ -22,7 +22,7 @@ import { stepLine } from "./agent/plan";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { PanelAction } from "./Panel";
 import { PlanStepRow, type StepEdit } from "./PlanStepRow";
-import { type Action, planState } from "./allowedActions";
+import type { Action } from "./actions";
 
 // The height of a row with one small button (30.75px), kept free while the plan
 // can still run, with or without buttons in it.
@@ -92,7 +92,7 @@ export function PlanView({
   // Shown at the very bottom of the card, under the buttons: the note that
   // another server is running the plan, with its Take over button.
   footer?: ReactNode;
-  // The actions the card may offer (see allowedActions.ts). Only a listed one
+  // The actions the card may offer (the server's list, see src/actions.ts). Only a listed one
   // is drawn, and only if its handler is here too. Without a list, none are.
   allowed?: ReadonlySet<Action>;
 }) {
@@ -112,7 +112,7 @@ export function PlanView({
   // A disputed step waits for the user, so Run would only stop on it again.
   // A waiting step (a question for the user) reruns without an answer on
   // Continue; "Answer and continue" on the step passes one.
-  // (The rule for which buttons are allowed is allowedActions.ts; the label of
+  // (The rule for which buttons are allowed is the server's list; the label of
   // the first says Continue for a plan that was stopped or interrupted by a
   // restart, which is back to pending with a note saying so.)
   const can = (a: Action) => !!allowed?.has(a);
@@ -123,7 +123,7 @@ export function PlanView({
   const showDiscard = can("discard") && !!onCancel;
   // A plan that can still run keeps the row's room, so buttons coming and going
   // don't make the card jump.
-  const keepRow = !planState(steps, !!running).finished;
+  const keepRow = !steps.every((s) => s.status === "done");
 
   const save = () => {
     if (!editing) return;

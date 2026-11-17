@@ -33,10 +33,13 @@ export default function HeldElsewhereLine({
   port,
   sessionId,
   inPlan = false,
+  canTakeOver = false,
 }: {
   port: number | null | undefined;
   sessionId?: string;
   inPlan?: boolean;
+  // True only when the server lists takeOver; without it no button is drawn.
+  canTakeOver?: boolean;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -47,7 +50,7 @@ export default function HeldElsewhereLine({
       data-held-elsewhere
       sx={inPlan ? undefined : { position: "sticky", top: 0, zIndex: 1 }}
       action={
-        sessionId ? (
+        sessionId && canTakeOver ? (
           <Button
             color="inherit"
             size="small"

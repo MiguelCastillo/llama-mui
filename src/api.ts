@@ -911,6 +911,9 @@ export interface Session {
   run?: { status: string; startedAt: number };
   // Who holds the floor, while a run is live (read only, like `run`).
   holder?: { port: number; mine: boolean };
+  // What the server lets the page offer for this chat (read only). Missing from
+  // an older server: then nothing is offered.
+  actions?: string[];
   // Messages sent while a reply was running, waiting to be sent in order (at
   // most MAX_QUEUE). The server owns them, like the names: a save never changes
   // them, and a nested session starts with none. Older saved chats don't have it.
@@ -1105,9 +1108,6 @@ export interface WorkEntry {
   source: string | null;
 }
 export const getWorkInProgress = (dir: string) => call<WorkEntry[]>("GET", `/api/work-in-progress?dir=${encodeURIComponent(dir)}`);
-// A command to a session's run (see server/commands.ts): run, pause, resume,
-// stop, approve, answer. Answers { ok, revision }; a command that can't be done
-// is an ApiError, a 409 with a plain message and `data.reason`. `run` also says
 // Merging one work stream into main (see server/workInProgressRoutes.ts). An
 // attempt replays the branch, runs the checks, then waits for approval.
 export interface MergeCheckResult {
@@ -1131,6 +1131,9 @@ export const startMerge = (dir: string, branch: string) => call<MergeAttemptStat
 export const getMerge = (id: string) => call<MergeAttemptState>("GET", `/api/work-in-progress/merge/${id}`);
 export const approveMerge = (id: string) => call<MergeAttemptState>("POST", `/api/work-in-progress/merge/${id}/approve`, {});
 export const discardMerge = (id: string) => call<MergeAttemptState>("POST", `/api/work-in-progress/merge/${id}/discard`, {});
+// A command to a session's run (see server/commands.ts): run, pause, resume,
+// stop, approve, answer. Answers { ok, revision }; a command that can't be done
+// is an ApiError, a 409 with a plain message and `data.reason`. `run` also says
 // which session the plan runs in (`sessionId`): the session itself, or the new
 // thread it moved to. `revision` is that session's.
 export const sendCommand = (id: string, name: string, body: Record<string, unknown> = {}) =>

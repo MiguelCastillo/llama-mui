@@ -1534,6 +1534,20 @@ places, so nothing draws done or needs-you its own way:
 Chips (such as Online / Offline or a model being loaded) and MUI alerts are
 deliberately not part of this: they keep their own looks.
 
+### Who decides which buttons a plan card shows
+
+This is a core principle of the app, not a preference (see the top of
+`AGENTS.md`). **The server decides which actions a plan card offers; the page
+only draws what the server lists.** The card starts with no buttons and shows
+none until the server has answered. When the page doesn't know who owns the
+run, that is never read as "nobody owns it": not knowing removes buttons, it
+never adds them. When another server owns the run, the card offers only Take
+over, never Discard, Pause or Run. The page must not work an action out from
+its own state (a step marked running, a missing run). The rules live in the
+server's `server/allowedActions.ts`; the server sends the list with the session
+answer and again whenever the owner or the plan's state changes. The page may
+remove Send when no model is chosen, and nothing else.
+
 ### Pausing and discarding a plan
 
 **Pause** on the card ends a running plan at once and keeps it: the step in

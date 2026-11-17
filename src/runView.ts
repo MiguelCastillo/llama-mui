@@ -40,6 +40,9 @@ export interface RunnerView {
   // Set only while another server holds the floor of this session (it is
   // running there): its port. Null when no one does, or this server does.
   heldElsewhere?: { port: number } | null;
+  // The server's list of what the chat may offer, from the last event that
+  // carried one. Missing: this event had none, so the page keeps the list it has.
+  actions?: string[];
 }
 
 // A run is in progress from when it starts until it ends: running and waiting
