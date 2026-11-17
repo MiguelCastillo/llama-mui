@@ -142,6 +142,7 @@ import { liveLine } from "./liveLine";
 import Elapsed, { type StreamRate } from "./Elapsed";
 import { stepSummary } from "./stepSummary";
 import { toolCallTitle } from "./toolCallTitle";
+import { refusedPlan } from "./planRefusal";
 import { groupRounds } from "./stepGroups";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import CutOffNote from "./CutOffNote";
@@ -3517,6 +3518,9 @@ const MessageBubble = memo(function MessageBubble({
   // the middle of a tool call) would be an empty box.
   const onlyStepsHidden =
     !showSteps && !isUser && !streaming && !notes.length && !parts.some((m) => m.content) && parts.some((m) => m.reasoning || shownCalls(m.toolCalls).length > 0);
+  // A plan the tool refused, when the model didn't fix it: said under the
+  // reply, so the chat doesn't just look stopped (see planRefusal.ts).
+  const planRefusal = !isUser && !streaming ? refusedPlan(parts, (id) => toolResults.get(id)?.content) : null;
   const hasError = !!failed;
   const errorLine = failed && (
     <Stack spacing={0.5} sx={{ alignItems: isUser ? "flex-end" : "flex-start", mt: 0.5, flexShrink: 0 }}>
@@ -3712,6 +3716,11 @@ const MessageBubble = memo(function MessageBubble({
       {onlyStepsHidden && (
         <Typography variant="body2" color="text.secondary">
           No text in this reply, only steps. Turn on Show steps in Settings → Chat to see them.
+        </Typography>
+      )}
+      {planRefusal && (
+        <Typography variant="body2" color="error.main">
+          The plan wasn't saved: {planRefusal}.
         </Typography>
       )}
       {notes.map((box, i) => (

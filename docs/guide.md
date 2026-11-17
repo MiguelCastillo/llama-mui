@@ -910,11 +910,21 @@ vitest (`npm test`).
 - **The model decides**, when it writes the plan. Its only guidance is the
   tool's instructions: each step is "one change you can make in one turn,
   written so someone could check it from the diff alone".
-- **Limits**: at most 12 steps, each at most 600 characters, and none empty.
-  A plan over a limit is refused with an error such as "at most 12 steps;
-  merge some", and the model has to try again.
+- **Limits**: at most 12 steps, and none empty. A plan over that, or with a
+  step missing its text or summary, is refused with an error such as "at most
+  12 steps; merge some", and the model has to try again.
+- **Guidelines, not limits**: a step's text should be at most 600 characters, a
+  step's summary at most 80 and the plan's summary at most 200. The model writes
+  every character, so going over does not lose the plan: it is saved, the
+  model's result mentions which field was long, and the server log gets one
+  `plan.over_guideline` line (the step number, the field, how many characters
+  and the guideline, never the words, and `refused: true` when the call was
+  refused too). Only a runaway is refused: a step text over 3000 characters, a
+  step summary over 400 or a plan summary over 1000. To see how often it
+  happens, search the log for `plan.over_guideline`. A refused plan that the
+  model doesn't fix shows under the reply as "The plan wasn't saved: …".
 - **Summaries**: every step also has a short `summary`, a to-do line of about
-  8 words (at most 80 characters) such as "Make a stuck step retry twice", in
+  8 words (aim for 80 characters at most) such as "Make a stuck step retry twice", in
   everyday words, and the plan can have a one-sentence summary of its own that
   says what will be different for you. The card shows the
   summary as the step's main line, with the full instruction at the top of the
@@ -2246,6 +2256,13 @@ the `tail -f` command that follows it, when it starts. Each line has `t` (time),
   when there were none. Nothing of the reply's text, and none of a thinking
   block's words or signature, is kept. To add up a day:
   `grep '"tokens"' ~/.llama-mui/logs/server-<day>.log`.
+- `plan.over_guideline`: a plan call (update_plan) with a step text, step summary
+  or plan summary longer than its guideline (600, 80 and 200 characters). `steps`
+  is how many steps the call had, `over` lists each field that went over (`step`,
+  `field` as `text`, `summary` or `planSummary`, `chars`, and the guideline as
+  `limit`) and `refused` is true when it was far enough over to be refused. Never
+  the words. The plan itself is saved unless `refused`. To see how often it
+  happens: `grep plan.over_guideline ~/.llama-mui/logs/server-*.log`.
 - `llama.watch`, `llama.down`, `llama.up`, `llama.model`: every 15 seconds the
   server asks each llama server for its models and writes a line only when
   something changed: it stopped answering, answered again (`downForMs` is how

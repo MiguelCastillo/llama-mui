@@ -4,12 +4,40 @@
 // checks the steps' shape; chat keeps the plan and shows it. The rules for
 // when plans are made and who marks steps done are in docs/guide.md, "How plans work".
 
+import { log } from "./log.ts";
 import { ToolError, type ToolSpec, fn } from "./toolkit.ts";
 
 const MAX_STEPS = 12;
+
+// How long things should be: the guideline the tool description gives the
+// model. The model writes every character, and the user can't shorten a step,
+// so going over is not a reason to lose the plan: it is saved, the model is
+// told in the result, and the server log gets one line (see logOver) so we can
+// see how often it happens and by how much. Small models that write essays are
+// the reason the guideline exists: a long step is harder to check in one turn.
 export const MAX_STEP_CHARS = 600;
 export const MAX_SUMMARY_CHARS = 80;
-const MAX_PLAN_SUMMARY_CHARS = 200;
+export const MAX_PLAN_SUMMARY_CHARS = 200;
+// Past these the call is refused instead: that is not a long step but a runaway
+// (or text in the wrong field), and the model can fix it with one more call.
+export const REFUSE_STEP_CHARS = 3000;
+export const REFUSE_SUMMARY_CHARS = 400;
+export const REFUSE_PLAN_SUMMARY_CHARS = 1000;
+
+// A field that went over its guideline: where, how long, and the guideline.
+// Plain numbers only; the words themselves never go in the log.
+interface Over {
+  step?: number;
+  field: "text" | "summary" | "planSummary";
+  chars: number;
+  limit: number;
+}
+
+// One line per call that had anything over, `refused` when it was past a hard
+// limit as well. No step text, summary or context: only where and how long.
+function logOver(over: Over[], steps: number, refused: boolean): void {
+  if (over.length) log("plan.over_guideline", { steps, refused, over });
+}
 
 // When to plan is a matter of working style, so it is the persona's to say
 // (personas/Builder.md says it); the mechanics below stay fixed.
@@ -50,13 +78,13 @@ const updatePlan: ToolSpec = {
               summary: {
                 type: "string",
                 description:
-                  `The to-do line the user reads: a short imperative phrase, at most about 8 words (${MAX_SUMMARY_CHARS} characters max), ` +
+                  `The to-do line the user reads: a short imperative phrase, at most about 8 words (aim for ${MAX_SUMMARY_CHARS} characters max), ` +
                   'saying what gets done, no file paths unless the step is about one. E.g. "Make a stuck step retry twice", ' +
                   '"Stop asking before making a worktree", "Repair chats with unfinished calls".',
               },
               text: {
                 type: "string",
-                description: `The instruction for this step: what it changes, written so someone could check it from the diff alone. At most ${MAX_STEP_CHARS} characters.`,
+                description: `The instruction for this step: what it changes, written so someone could check it from the diff alone. Aim for at most ${MAX_STEP_CHARS} characters; a longer step is saved but harder to check, so split it.`,
               },
             },
             required: ["summary", "text"],
@@ -80,16 +108,17 @@ const updatePlan: ToolSpec = {
     const steps = Array.isArray(args.steps) ? args.steps : null;
     if (!steps?.length) throw new ToolError("steps must be a non-empty list");
     if (steps.length > MAX_STEPS) throw new ToolError(`at most ${MAX_STEPS} steps; merge some`);
+    const over: Over[] = [];
+    let refusal: string | undefined;
     for (const [i, s] of steps.entries()) {
       const n = i + 1;
       const text = typeof s === "string" ? s : s?.text;
       if (typeof text !== "string" || !text.trim()) {
         throw new ToolError(`step ${n} has no text; give each step {summary, text}, where text is the instruction`);
       }
-      if (text.length > MAX_STEP_CHARS) {
-        throw new ToolError(
-          `step ${n} text is ${text.length} characters, over the ${MAX_STEP_CHARS} limit; shorten it or split the step`,
-        );
+      if (text.length > MAX_STEP_CHARS) over.push({ step: n, field: "text", chars: text.length, limit: MAX_STEP_CHARS });
+      if (text.length > REFUSE_STEP_CHARS) {
+        refusal ??= `step ${n} text is ${text.length} characters, far over the ${MAX_STEP_CHARS} guideline; split it into several steps`;
       }
       const summary = typeof s === "string" ? undefined : s?.summary;
       if (typeof summary !== "string" || !summary.trim()) {
@@ -97,22 +126,29 @@ const updatePlan: ToolSpec = {
           `step ${n} has no summary; add a short imperative to-do line, e.g. "Make a stuck step retry twice"`,
         );
       }
-      if (summary.length > MAX_SUMMARY_CHARS) {
-        throw new ToolError(
-          `step ${n} summary is ${summary.length} characters, over the ${MAX_SUMMARY_CHARS} limit; make it a short to-do line of about 8 words and move detail into text`,
-        );
+      if (summary.length > MAX_SUMMARY_CHARS) over.push({ step: n, field: "summary", chars: summary.length, limit: MAX_SUMMARY_CHARS });
+      if (summary.length > REFUSE_SUMMARY_CHARS) {
+        refusal ??= `step ${n} summary is ${summary.length} characters; make it a short to-do line of about 8 words and move detail into text`;
       }
     }
     const planSummary = args.summary;
     if (planSummary !== undefined && planSummary !== null) {
       if (typeof planSummary !== "string") throw new ToolError("summary must be a short sentence (string)");
-      if (planSummary.length > MAX_PLAN_SUMMARY_CHARS) {
-        throw new ToolError(
-          `plan summary is ${planSummary.length} characters, over the ${MAX_PLAN_SUMMARY_CHARS} limit; use one short sentence`,
-        );
+      if (planSummary.length > MAX_PLAN_SUMMARY_CHARS) over.push({ field: "planSummary", chars: planSummary.length, limit: MAX_PLAN_SUMMARY_CHARS });
+      if (planSummary.length > REFUSE_PLAN_SUMMARY_CHARS) {
+        refusal ??= `plan summary is ${planSummary.length} characters; use one short sentence`;
       }
     }
-    return `Plan saved: ${steps.length} step${steps.length === 1 ? "" : "s"}. Now tell the user in plain words what the plan changes for them, then stop; they run it.`;
+    logOver(over, steps.length, !!refusal);
+    if (refusal) throw new ToolError(refusal);
+    const saved = `Plan saved: ${steps.length} step${steps.length === 1 ? "" : "s"}.`;
+    // Said to the model, not the user: what to do better next time.
+    const note = over.length
+      ? ` Longer than the guideline (shorter is easier to check): ${over
+          .map((o) => `${o.step ? `step ${o.step} ` : "plan "}${o.field === "planSummary" ? "summary" : o.field} ${o.chars} characters (guideline ${o.limit})`)
+          .join("; ")}.`
+      : "";
+    return `${saved}${note} Now tell the user in plain words what the plan changes for them, then stop; they run it.`;
   },
 };
 
