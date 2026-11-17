@@ -1093,6 +1093,29 @@ export const getWorkInProgress = (dir: string) => call<WorkEntry[]>("GET", `/api
 // A command to a session's run (see server/commands.ts): run, pause, resume,
 // stop, approve, answer. Answers { ok, revision }; a command that can't be done
 // is an ApiError, a 409 with a plain message and `data.reason`. `run` also says
+// Merging one work stream into main (see server/workInProgressRoutes.ts). An
+// attempt replays the branch, runs the checks, then waits for approval.
+export interface MergeCheckResult {
+  name: string;
+  ok: boolean;
+  output: string;
+  seconds: number;
+}
+export type MergeState = "replaying" | "checking" | "ready" | "failed" | "conflict" | "merged" | "discarded" | "error";
+export interface MergeAttemptState {
+  id: string;
+  branch: string;
+  state: MergeState;
+  check?: string;
+  checks: MergeCheckResult[];
+  files?: string[];
+  message?: string;
+  replayed?: number;
+}
+export const startMerge = (dir: string, branch: string) => call<MergeAttemptState>("POST", "/api/work-in-progress/merge", { dir, branch });
+export const getMerge = (id: string) => call<MergeAttemptState>("GET", `/api/work-in-progress/merge/${id}`);
+export const approveMerge = (id: string) => call<MergeAttemptState>("POST", `/api/work-in-progress/merge/${id}/approve`, {});
+export const discardMerge = (id: string) => call<MergeAttemptState>("POST", `/api/work-in-progress/merge/${id}/discard`, {});
 // which session the plan runs in (`sessionId`): the session itself, or the new
 // thread it moved to. `revision` is that session's.
 export const sendCommand = (id: string, name: string, body: Record<string, unknown> = {}) =>

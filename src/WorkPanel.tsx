@@ -1,5 +1,5 @@
-import { Box, Drawer, Link, Typography } from "@mui/material";
-import type { WorkEntry } from "./api";
+import { Box, Button, Drawer, Link, Typography } from "@mui/material";
+import type { MergeAttemptState, WorkEntry } from "./api";
 import { PANEL_VARIANTS } from "./Panel";
 import { sessionHash } from "./sessionRoute";
 import { ago } from "./SessionsPanel";
@@ -31,11 +31,85 @@ const GROUPS: { kind: WorkEntry["kind"]; title: string }[] = [
   { kind: "loose", title: "Loose files" },
 ];
 
-function Entry({ entry: e }: { entry: WorkEntry }) {
+// What the panel needs to merge: the current attempt and what can be done to it.
+export interface MergeUi {
+  attempt: MergeAttemptState | null;
+  error: string | null;
+  start(branch: string): void;
+  approve(): void;
+  discard(): void;
+  dismiss(): void;
+}
+
+// An attempt that still holds a worktree or is running: no other merge may start.
+const HOLDS = ["replaying", "checking", "ready", "failed"];
+
+// Can this entry be merged now? Not loose files, not merged work, not work with
+// uncommitted files, and not while another attempt is open.
+export function canMerge(e: WorkEntry, merge?: MergeUi): boolean {
+  if (!merge || e.kind === "loose" || e.merged || !e.unmerged || e.uncommitted > 0 || !e.branch) return false;
+  return !(merge.attempt && HOLDS.includes(merge.attempt.state));
+}
+
+function MergeProgress({ a, merge }: { a: MergeAttemptState; merge: MergeUi }) {
+  const note = { fontSize: "0.75rem", mt: 0.5, overflowWrap: "anywhere" as const };
+  if (a.state === "replaying") return <Typography sx={note}>Replaying {plural(a.replayed ?? 0, "commit")}…</Typography>;
+  if (a.state === "checking") return <Typography sx={note}>Running {a.check ?? "checks"}…</Typography>;
+  if (a.state === "merged") return <Typography sx={note}>Merged</Typography>;
+  if (a.state === "conflict") {
+    return (
+      <Box sx={note}>
+        <div>These files clash with the main branch, so nothing was merged:</div>
+        <div>{(a.files ?? []).join(", ")}</div>
+        <Button size="small" onClick={merge.dismiss}>Close</Button>
+      </Box>
+    );
+  }
+  if (a.state === "error") {
+    return (
+      <Box sx={note}>
+        <div>{a.message ?? "The merge could not be done."}</div>
+        <Button size="small" onClick={merge.dismiss}>Close</Button>
+      </Box>
+    );
+  }
+  // ready or failed: show each check.
+  const passed = a.checks.length > 0 && a.checks.every((c) => c.ok) && a.state === "ready";
+  return (
+    <Box sx={note}>
+      {a.checks.map((c) => (
+        <Box key={c.name} data-merge-check={c.name}>
+          <div>
+            {c.name}: {c.ok ? "passed" : "failed"}
+          </div>
+          {!c.ok && c.output && (
+            <Box component="pre" sx={{ m: 0, fontSize: "0.7rem", whiteSpace: "pre-wrap", maxHeight: 160, overflowY: "auto" }}>
+              {c.output}
+            </Box>
+          )}
+        </Box>
+      ))}
+      {a.message && a.state === "failed" && <div>{a.message}</div>}
+      <Box sx={{ display: "flex", gap: 1, mt: 0.5 }}>
+        {passed && (
+          <Button size="small" variant="contained" onClick={merge.approve}>
+            Approve
+          </Button>
+        )}
+        <Button size="small" onClick={merge.discard}>
+          Discard
+        </Button>
+      </Box>
+    </Box>
+  );
+}
+
+function Entry({ entry: e, merge }: { entry: WorkEntry; merge?: MergeUi }) {
   const shown = e.files.slice(0, FILES_SHOWN);
   const more = e.filesTotal - shown.length;
+  const mine = merge?.attempt && merge.attempt.branch === e.branch && merge.attempt.state !== "discarded" ? merge.attempt : null;
   return (
-    // The look of a quiet panel (Panel.tsx), without its hover toolbar: this one is read-only.
+    // The look of a quiet panel (Panel.tsx), without its hover toolbar.
     <Box sx={PANEL_VARIANTS.actionDone}>
       <Box sx={{ width: "100%", minWidth: 0 }} data-work-entry={e.kind}>
         <Typography variant="body2" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
@@ -65,6 +139,14 @@ function Entry({ entry: e }: { entry: WorkEntry }) {
             Open chat
           </Link>
         )}
+        {merge && mine && <MergeProgress a={mine} merge={merge} />}
+        {merge && !mine && canMerge(e, merge) && (
+          <Box sx={{ mt: 0.5 }}>
+            <Button size="small" variant="outlined" onClick={() => merge.start(e.branch as string)}>
+              Merge
+            </Button>
+          </Box>
+        )}
       </Box>
     </Box>
   );
@@ -78,7 +160,9 @@ export default function WorkPanel({
   open,
   narrow,
   onClose,
+  merge,
 }: {
+  merge?: MergeUi;
   entries: WorkEntry[];
   open: boolean;
   narrow: boolean;
@@ -96,6 +180,14 @@ export default function WorkPanel({
       <Typography variant="subtitle2" sx={{ pl: 2, pr: 1, pt: 1.5, pb: 0.5 }}>
         Work in progress
       </Typography>
+      {merge?.error && (
+        <Typography variant="caption" color="error" component="div" sx={{ px: 2, pb: 0.5, overflowWrap: "anywhere" }}>
+          {merge.error}{" "}
+          <Link component="button" variant="caption" onClick={merge.dismiss}>
+            Close
+          </Link>
+        </Typography>
+      )}
       {entries.length === 0 ? (
         <Typography variant="body2" color="text.secondary" sx={{ px: 2 }}>
           Nothing is in progress.
@@ -111,7 +203,7 @@ export default function WorkPanel({
                   {g.title} ({items.length})
                 </Typography>
                 {items.map((e) => (
-                  <Entry key={`${e.kind}:${e.folder}:${e.branch ?? e.name}`} entry={e} />
+                  <Entry key={`${e.kind}:${e.folder}:${e.branch ?? e.name}`} entry={e} merge={merge} />
                 ))}
               </Box>
             );

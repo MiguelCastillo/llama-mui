@@ -13,7 +13,7 @@
 //
 // Reads are not wrapped: they change nothing.
 
-import { appendFile, mkdir as nodeMkdir, mkdtemp, open, rename as nodeRename, rm, rmdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir as nodeMkdir, mkdtemp, open, rename as nodeRename, rm, rmdir, symlink as nodeSymlink, writeFile } from "node:fs/promises";
 import { mkdirSync as nodeMkdirSync, writeFileSync } from "node:fs";
 import { dirname as dirnameOf } from "node:path";
 import { audit, noteSession } from "../audit.ts";
@@ -21,7 +21,7 @@ import { currentCause, runWithoutCause } from "../auditContext.ts";
 import { noteChangedFile } from "../changedFiles.ts";
 import type { Why } from "./exec.ts";
 
-export type FsOp = "write" | "append" | "rename" | "remove" | "mkdir";
+export type FsOp = "write" | "append" | "rename" | "remove" | "mkdir" | "symlink";
 
 export type WriteOptions = { mode?: number; flag?: string };
 export type MkdirOptions = { recursive?: boolean; mode?: number };
@@ -102,6 +102,11 @@ export function remove(path: string, options: RemoveOptions | undefined, { why }
 // Deletes a folder only if it is empty (fails otherwise). Logged as a 'remove'.
 export function removeEmptyDir(path: string, { why }: Why): Promise<void> {
   return run(why, "remove", path, {}, () => rmdir(path));
+}
+
+// Makes a link at `link` pointing to `target`. The line's path is the link; `to` is the target.
+export function symlink(target: string, link: string, type: "dir" | "file" | undefined, { why }: Why): Promise<void> {
+  return run(why, "symlink", link, { to: target }, () => nodeSymlink(target, link, type));
 }
 
 // Makes a folder.

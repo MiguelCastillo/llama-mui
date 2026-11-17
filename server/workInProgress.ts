@@ -29,7 +29,8 @@ export interface WorkEntry {
   lastCommitSubject: string | null;
   // Unix seconds of the last commit; null when unknown.
   lastCommitTime: number | null;
-  // True when the branch tip is already on the base (compared by tip for now).
+  // True when every change on the branch is already on the base (compared by
+  // patch id, so a branch replayed with new commit ids counts as merged).
   merged: boolean;
   // What the set of changes is for, in one line: the owning session's plan
   // summary, else the last commit's first line, else null.
@@ -94,8 +95,15 @@ async function describeRef(dir: string, ref: string, base: string | null) {
   let unmerged: number | null = null;
   let files: string[] = [];
   if (base) {
-    const n = Number(await git(dir, "rev-list", "--count", `${base}..${ref}`).catch(() => ""));
-    unmerged = Number.isInteger(n) ? n : null;
+    // git cherry compares by patch id: '+' is a change the base lacks, '-' is one
+    // it already has (even under a new commit id, e.g. after a replay).
+    const cherry = await git(dir, "cherry", base, ref).catch(() => null);
+    if (cherry !== null) {
+      unmerged = lines(cherry).filter((l) => l.startsWith("+")).length;
+    } else {
+      const n = Number(await git(dir, "rev-list", "--count", `${base}..${ref}`).catch(() => ""));
+      unmerged = Number.isInteger(n) ? n : null;
+    }
     // Changes the branch made since it left the base (three dots).
     files = lines(await git(dir, "diff", "--name-only", `${base}...${ref}`).catch(() => ""));
   }
@@ -180,6 +188,8 @@ export async function workInProgress(repo: string, opts: WipOptions = {}): Promi
         if (held.has(b)) continue;
         try {
           const d = await describeRef(main, b, base);
+          // Every change already on the base (replayed under new ids): nothing to track.
+          if (d.unmerged === 0) continue;
           entries.push({ kind: "branch", name: b, branch: b, folder: main, uncommitted: 0, ...d, merged: false, purpose: d.lastCommitSubject, source: null });
         } catch {
           // left out

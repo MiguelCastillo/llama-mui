@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { WorkEntry } from "../api";
-import WorkPanel, { workState } from "../WorkPanel";
+import type { MergeAttemptState, WorkEntry } from "../api";
+import WorkPanel, { workState, type MergeUi } from "../WorkPanel";
 
 const entry = (over: Partial<WorkEntry>): WorkEntry => ({
   kind: "worktree",
@@ -66,6 +66,76 @@ describe("WorkPanel", () => {
 
   it("has no buttons that change anything", () => {
     expect(render([entry({})])).not.toContain("<button");
+  });
+
+  describe("merging", () => {
+    const noop = () => {};
+    const ui = (attempt: MergeAttemptState | null, error: string | null = null): MergeUi => ({
+      attempt,
+      error,
+      start: noop,
+      approve: noop,
+      discard: noop,
+      dismiss: noop,
+    });
+    const att = (over: Partial<MergeAttemptState>): MergeAttemptState => ({ id: "1", branch: "llama/w", state: "ready", checks: [], ...over });
+    const renderM = (entries: WorkEntry[], merge: MergeUi) =>
+      renderToStaticMarkup(<WorkPanel entries={entries} open narrow={false} onClose={noop} merge={merge} />);
+
+    it("offers Merge on thread and older branches with unmerged commits and no uncommitted files", () => {
+      const html = renderM([entry({}), entry({ kind: "branch", name: "old", branch: "old" })], ui(null));
+      expect(html.match(/>Merge</g)?.length).toBe(2);
+    });
+
+    it("offers no Merge on loose, merged, empty or uncommitted entries", () => {
+      const loose = entry({ kind: "loose", branch: null, unmerged: null, uncommitted: 2 });
+      expect(renderM([loose], ui(null))).not.toContain("<button");
+      expect(renderM([entry({ merged: true })], ui(null))).not.toContain("<button");
+      expect(renderM([entry({ unmerged: 0 })], ui(null))).not.toContain("<button");
+      expect(renderM([entry({ uncommitted: 1 })], ui(null))).not.toContain("<button");
+    });
+
+    it("shows progress while replaying and while checking", () => {
+      expect(renderM([entry({})], ui(att({ state: "replaying", replayed: 2 })))).toContain("Replaying 2 commits");
+      const html = renderM([entry({})], ui(att({ state: "checking", check: "tests" })));
+      expect(html).toContain("Running tests");
+      expect(html).not.toContain(">Merge<");
+    });
+
+    it("lists the clashing files on a conflict", () => {
+      const html = renderM([entry({})], ui(att({ state: "conflict", files: ["a.ts", "z.ts"] })));
+      expect(html).toContain("a.ts, z.ts");
+      expect(html).toContain("nothing was merged");
+    });
+
+    it("shows passed checks with Approve and Discard", () => {
+      const html = renderM([entry({})], ui(att({ checks: [{ name: "tests", ok: true, output: "", seconds: 1 }] })));
+      expect(html).toContain("tests: passed");
+      expect(html).toContain(">Approve<");
+      expect(html).toContain(">Discard<");
+    });
+
+    it("shows the output of a failed check and no Approve", () => {
+      const html = renderM([entry({})], ui(att({ state: "failed", checks: [{ name: "build", ok: false, output: "boom at line 3", seconds: 1 }] })));
+      expect(html).toContain("build: failed");
+      expect(html).toContain("boom at line 3");
+      expect(html).not.toContain(">Approve<");
+      expect(html).toContain(">Discard<");
+    });
+
+    it("says Merged after merging", () => {
+      expect(renderM([entry({})], ui(att({ state: "merged" })))).toContain("Merged");
+    });
+
+    it("hides Merge on other entries while an attempt is open", () => {
+      const other = entry({ name: "o", branch: "llama/o" });
+      const html = renderM([entry({}), other], ui(att({ state: "checking", check: "tests" })));
+      expect(html).not.toContain(">Merge<");
+    });
+
+    it("shows a start error", () => {
+      expect(renderM([entry({})], ui(null, "Already in progress"))).toContain("Already in progress");
+    });
   });
 
   it("draws nothing when docked and closed, and a drawer when narrow", () => {

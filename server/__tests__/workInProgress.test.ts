@@ -69,6 +69,32 @@ describe("workInProgress", () => {
     expect(old).toMatchObject({ unmerged: 1, files: ["o.txt"], lastCommitSubject: "old work", merged: false });
   });
 
+  it("counts a branch replayed onto main with new commit ids as merged and drops it from the branch list", async () => {
+    const { repo } = makeRepo();
+    git(repo, "checkout", "-b", "replayed");
+    writeFileSync(path.join(repo, "r.txt"), "r\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "r work");
+    git(repo, "checkout", "main");
+    git(repo, "cherry-pick", "replayed");
+    expect((await workInProgress(repo)).filter((e) => e.kind === "branch")).toEqual([]);
+  });
+
+  it("counts only the changes main lacks when a branch has one new and one replayed commit", async () => {
+    const { root, repo } = makeRepo();
+    const wt = path.join(root, "mix");
+    git(repo, "worktree", "add", "-b", "mix", wt);
+    writeFileSync(path.join(wt, "one.txt"), "1\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-m", "one");
+    writeFileSync(path.join(wt, "two.txt"), "2\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-m", "two");
+    git(repo, "cherry-pick", "mix~1");
+    const [e] = await workInProgress(repo);
+    expect(e).toMatchObject({ kind: "worktree", name: "mix", unmerged: 1, merged: false });
+  });
+
   it("leaves out a worktree already merged into the base with nothing uncommitted", async () => {
     const { root, repo } = makeRepo();
     git(repo, "worktree", "add", "-b", "same", path.join(root, "same"));

@@ -79,6 +79,11 @@ export interface Store {
   // folder's path; chat runs it after each plan step. See docs/guide.md,
   // "Running a plan".
   checkCommands: Record<string, string>;
+  // The checks a merge must pass before the main branch moves (see
+  // server/integration.ts), run in order, each a name and a shell command.
+  // Empty or missing means the default: the project's own test and build
+  // scripts from package.json. Add more entries to run more checks.
+  mergeChecks?: { name: string; command: string }[];
   // The persona a new chat starts with, by name (see server/personas.ts). Not a
   // secret. A name that no longer exists falls back to Builder when it's used.
   defaultPersona: string;

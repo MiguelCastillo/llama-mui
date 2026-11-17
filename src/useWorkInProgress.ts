@@ -44,12 +44,15 @@ export function watchWorkInProgress(dir: string, onEntries: (entries: WorkEntry[
 
 // The work in progress for the working folder; [] until it loads, with no
 // folder, or when the folder isn't a git repo.
-export function useWorkInProgress(dir: string | null | undefined): WorkEntry[] {
+// Changing `reloadToken` loads the list again at once (a merge just ended).
+export function useWorkInProgress(dir: string | null | undefined, reloadToken = 0): WorkEntry[] {
   const [entries, setEntries] = useState<WorkEntry[]>([]);
   useEffect(() => {
     setEntries([]);
+  }, [dir]);
+  useEffect(() => {
     if (!dir) return;
     return watchWorkInProgress(dir, setEntries);
-  }, [dir]);
+  }, [dir, reloadToken]);
   return entries;
 }

@@ -161,6 +161,7 @@ import SessionsPanel from "./SessionsPanel";
 import WorkPanel from "./WorkPanel";
 import WorkMarker from "./WorkMarker";
 import { useWorkInProgress } from "./useWorkInProgress";
+import { useMergeAttempt } from "./useMergeAttempt";
 import Panel, { PanelAction, PanelButton } from "./Panel";
 import QueuedMessages from "./QueuedMessages";
 import { pausedReason } from "./queue";
@@ -687,6 +688,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [replyTarget, setReplyTarget] = useState<{ id: string; text: string; n: number } | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // What the server lets this chat offer (see actions.ts). Empty until it has
+  // answered, and again whenever a chat is opened or read anew.
+  const [serverActions, setServerActions] = useState<readonly string[]>([]);
   // Whether the last loadSession read its session (false: it opened as a new chat).
   const loadedOk = useRef(false);
   const [sessionsOpen, setSessionsOpenState] = useState(() => loadFlag(SESSIONS_OPEN_KEY, true));
@@ -699,7 +703,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // The work pane: a saved flag on wide screens (closed at first), a drawer on phones.
   const [workOpen, setWorkOpenState] = useState(() => loadFlag(WORK_OPEN_KEY, false));
   const [workDrawerOpen, setWorkDrawerOpenState] = useState(false);
-  const workEntries = useWorkInProgress(workingDir);
+  const [workReload, setWorkReload] = useState(0);
+  const workEntries = useWorkInProgress(workingDir, workReload);
+  const workMerge = useMergeAttempt(workingDir, () => setWorkReload((n) => n + 1));
   // On phones only one drawer is open at a time: opening one closes the other.
   const setDrawerOpen = (open: boolean) => {
     setDrawerOpenState(open);
@@ -2232,6 +2238,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         />
       }
       aside={
+          merge={{
+            attempt: workMerge.attempt,
+            error: workMerge.error,
+            start: (b) => void workMerge.start(b),
+            approve: () => void workMerge.approve(),
+            discard: () => void workMerge.discard(),
+            dismiss: workMerge.dismiss,
+          }}
         <WorkPanel
           entries={workEntries}
           open={drawerMode ? workDrawerOpen : workOpen}
