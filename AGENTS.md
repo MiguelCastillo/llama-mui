@@ -271,3 +271,4 @@ interface, and plain http on this computer only.
   command itself: don't ask the user to change their git config, which should
   keep behaving as usual when they run git themselves. Commands run through a
   tool, or through llama-mui's `run_command`, have no terminal and never page.
+- **Asked why a chat, plan or card looks as it does? Run `npm run why -- <chat id or words> [--at HH:MM]` first**, before reading logs by hand; read its Missing section for what it couldn't find (`docs/guide.md`, "Finding out why a chat is in its state").
