@@ -1071,6 +1071,25 @@ export interface WorktreeStatus {
   merged?: boolean;
 }
 export const getWorktreeStatuses = (id: string) => call<WorktreeStatus[]>("GET", `/api/sessions/${id}/worktrees`);
+// Work started but not yet in the main branch of the project's repo (see
+// server/workInProgress.ts). Read-only; the list is the same for every chat in
+// the folder. [] for a folder that isn't a git repo.
+export interface WorkEntry {
+  kind: "worktree" | "branch" | "loose";
+  name: string;
+  branch: string | null;
+  folder: string;
+  uncommitted: number;
+  unmerged: number | null;
+  files: string[];
+  filesTotal: number;
+  lastCommitSubject: string | null;
+  lastCommitTime: number | null;
+  merged: boolean;
+  purpose: string | null;
+  source: string | null;
+}
+export const getWorkInProgress = (dir: string) => call<WorkEntry[]>("GET", `/api/work-in-progress?dir=${encodeURIComponent(dir)}`);
 // A command to a session's run (see server/commands.ts): run, pause, resume,
 // stop, approve, answer. Answers { ok, revision }; a command that can't be done
 // is an ApiError, a 409 with a plain message and `data.reason`. `run` also says

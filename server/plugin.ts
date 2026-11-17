@@ -23,6 +23,7 @@ import { experimentRoutes } from "./experiments.ts";
 import { usageRoutes } from "./usageRoutes.ts";
 import { selfOrigin } from "./selfOrigin.ts";
 import { sessionRoutes } from "./sessions.ts";
+import { workInProgressRoutes } from "./workInProgressRoutes.ts";
 import { toolRoutes } from "./tools.ts";
 import { modelAdminRoutes } from "./modelAdmin.ts";
 import { log } from "./log.ts";
@@ -46,6 +47,7 @@ async function route(r: Route) {
   if (await modelSettingRoutes(r)) return;
   if (await commandRoutes(r)) return;
   if (await sessionRoutes(r)) return;
+  if (await workInProgressRoutes(r)) return;
   if (await ruleRoutes(r)) return;
   if (await personaRoutes(r)) return;
   if (await skillRoutes(r)) return;

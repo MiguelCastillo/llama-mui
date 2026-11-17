@@ -26,6 +26,8 @@ const STRIP_PULL_WIDE = `calc(-1 * (${CHAT_OVERLAP} + 2rem))`;
 type Props = {
   // The sessions list beside the chat column.
   sidebar?: ReactNode;
+  // The work pane, on the right of the chat column.
+  aside?: ReactNode;
   // Things that sit over the chat column (toolbar, dialogs).
   top?: ReactNode;
   // The messages, inside the scrolling box.
@@ -43,7 +45,7 @@ type Props = {
   maxWidth: string | number;
 };
 
-export function ChatLayout({ sidebar, top, messages, composer, floating, anchored, scrollRef, onScroll, narrow, maxWidth }: Props) {
+export function ChatLayout({ sidebar, aside, top, messages, composer, floating, anchored, scrollRef, onScroll, narrow, maxWidth }: Props) {
   // Sized from the visible height, which follows the phone keyboard, never
   // from the full screen.
   const height = useVisibleHeight();
@@ -80,6 +82,7 @@ export function ChatLayout({ sidebar, top, messages, composer, floating, anchore
           </Container>
         </Paper>
       </Box>
+      {aside}
     </Box>
   );
 }
