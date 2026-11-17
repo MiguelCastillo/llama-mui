@@ -53,6 +53,8 @@ import { planRequestFor } from "../src/planThread.ts";
 import { attachedPaths, makeReply, modelLoaded } from "../src/runnerReply.ts";
 import type { Answer, Ask, RunnerEnv, RunnerHandle } from "../src/runnerTypes.ts";
 import { autoApproves } from "../src/autoApprove.ts";
+import { type EndKind } from "../src/runEnd.ts";
+import { noteAbort } from "./upstreamLog.ts";
 import { audit, noteSession } from "./audit.ts";
 import { runWithCause } from "./auditContext.ts";
 import { compactInstruction } from "./compactInstruction.ts";
@@ -130,6 +132,8 @@ interface Entry {
   // What the request in flight is, while there is one.
   requestKind: "reply" | "check" | null;
   stopRequested: boolean;
+  // Why it was stopped (the kind passed as the abort reason); null until then.
+  endKind: EndKind | null;
   // Aborted by a forced stop (Stop everything): it cuts short what a plain
   // Stop lets finish, such as a tool call that is running.
   kill: AbortController;
@@ -197,6 +201,8 @@ function sync(e: Entry): Promise<void> {
       aside: e.aside !== null,
       error: e.error,
       notes: e.notes,
+      // Why the run is being cut short, once it is: the record carries it too.
+      endedBy: e.endKind ?? undefined,
     };
     const key = JSON.stringify(next);
     if (key === e.pushed) return;
@@ -557,7 +563,7 @@ export function openAside(id: string): AsideSlot {
 export function abortAside(id: string): boolean {
   const e = store.get(id);
   if (!e || e.ended || !e.aside) return false;
-  e.aside.controller.abort();
+  abortWhy(e, e.aside.controller, "stopped", "aside");
   return true;
 }
 
@@ -655,6 +661,7 @@ async function launch(
     controller: null,
     requestKind: null,
     stopRequested: false,
+    endKind: null,
     kill: new AbortController(),
     ended: false,
     discarded: false,
@@ -703,7 +710,7 @@ async function launch(
       e.requestKind = c ? (kind ?? "reply") : null;
       // Stop came while this request was being set up (the model check, say):
       // it ends as soon as it starts.
-      if (c && e.stopRequested) c.abort();
+      if (c && e.stopRequested) abortWhy(e, c, e.endKind ?? "stopped", "request set up after stop");
       sync(e);
     },
     killSignal: e.kill.signal,
@@ -839,6 +846,10 @@ async function end(e: Entry) {
     const keep = stopped.answer ? { answer: stopped.answer, asked: stopped.asked } : {};
     patchStep(e, stopped.id, { status: "pending", note: "Paused", ...keep });
   }
+  // How the run was cut short goes into the saved chat, so a reload or another
+  // device shows the same line. A run taken over writes nothing (the new holder
+  // owns the file), so that kind never gets here.
+  if (e.endKind && !e.discarded) change(e, (s) => (s.endedBy === e.endKind ? s : { ...s, endedBy: e.endKind }));
   dropNotes(e);
   // A side question still being answered is cut off here, keeping what it had
   // written: it goes into the session through this run, which is over next.
@@ -917,6 +928,15 @@ async function startQueued(id: string, item: QueuedMessage, start: RunnerDeps["n
   }
 }
 
+// Aborts one of a run's requests with the kind as the reason, and logs it: the
+// chat, the kind and what was open (the request kind, the step, the side
+// question). The log holds no reply text.
+function abortWhy(e: Entry, c: AbortController, kind: EndKind, open: string) {
+  audit("run.abort", { session: e.id, kind, open, request: e.requestKind, step: e.runningStep, force: e.kill.signal.aborted });
+  noteAbort(e.id, kind);
+  c.abort(kind);
+}
+
 // ── commands ─────────────────────────────────────────────────────────────────
 
 // Stop (the card's Pause, and a reply's Stop): the model's request is aborted
@@ -928,17 +948,18 @@ async function startQueued(id: string, item: QueuedMessage, start: RunnerDeps["n
 // once runPlan returns; the step in flight goes back to pending, with the note
 // "Paused", and the plan stays for `run` to pick up. Answers when the run is
 // over, or after STOP_WAIT_MS if it still isn't (it goes on stopping).
-export async function stopRun(id: string, opts: { force?: boolean } = {}) {
+export async function stopRun(id: string, opts: { force?: boolean; kind?: EndKind } = {}) {
   const e = liveEntry(id);
   if (!e.stopRequested) {
     e.stopRequested = true;
+    e.endKind = opts.kind ?? "stopped";
     e.stepAtStop = e.runningStep;
-    e.controller?.abort();
-    e.aside?.controller.abort();
+    if (e.controller) abortWhy(e, e.controller, e.endKind, "request");
+    if (e.aside) abortWhy(e, e.aside.controller, e.endKind, "aside");
     dropAsk(e);
     sync(e);
   }
-  if (opts.force) e.kill.abort();
+  if (opts.force) e.kill.abort(e.endKind ?? "stopped");
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([e.done, new Promise<void>((resolve) => (timer = setTimeout(resolve, STOP_WAIT_MS)))]);
   clearTimeout(timer);
@@ -978,12 +999,16 @@ export async function answerAsk(id: string, askId: string, answer: Answer) {
   await e?.chain;
 }
 
+// The chats whose runs are still going in this process, for the log lines a
+// shutdown or restart writes (ids only, no reply text).
+export const liveRunIds = (): string[] => [...store.values()].filter((e) => !e.ended).map((e) => e.id).sort();
+
 // Stops every run in this process and waits until each is over. For a server
 // that is closing in a process that goes on (the dev server restarting after a
 // config change): its runs end properly, with their last save, instead of being
 // left running with no server to hold them.
 export async function stopAllRuns() {
-  await Promise.all([...store.keys()].map((id) => stopRun(id, { force: true }).catch(() => {})));
+  await Promise.all([...store.keys()].map((id) => stopRun(id, { force: true, kind: "restart" }).catch(() => {})));
 }
 
 // The hub found that another server holds this session now (see checkIn in
@@ -997,9 +1022,10 @@ hub.setLostFloorHandler((id) => {
   e.ended = true;
   e.discarded = true;
   clearSaveTimers(e);
-  e.kill.abort();
-  e.controller?.abort();
-  e.aside?.controller.abort();
+  e.endKind = "taken-over";
+  e.kill.abort("taken-over");
+  if (e.controller) abortWhy(e, e.controller, "taken-over", "request");
+  if (e.aside) abortWhy(e, e.aside.controller, "taken-over", "aside");
   dropAsk(e);
 });
 
@@ -1012,9 +1038,10 @@ export async function resetRunners() {
     e.stopRequested = true;
     e.ended = true;
     e.discarded = true;
+    e.endKind = "restart";
     clearSaveTimers(e);
-    e.controller?.abort();
-    e.aside?.controller.abort();
+    if (e.controller) abortWhy(e, e.controller, "restart", "request");
+    if (e.aside) abortWhy(e, e.aside.controller, "restart", "aside");
     dropAsk(e);
     await hub.endRun(e.id).catch(() => {});
   }

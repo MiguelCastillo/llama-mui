@@ -2234,13 +2234,26 @@ the `tail -f` command that follows it, when it starts. Each line has `t` (time),
   comings and goings. A restart that cut replies shows up as a `server.close` or
   `server.shutdown` listing the requests to model servers still open (`upstream`).
   Vite restarting its dev server writes `server.close` and a new `server.start`
-  with the same `pid`.
+  with the same `pid`. `server.shutdown`, `server.force-close` and `server.close`
+  also list `runs` (the chats whose replies or plans were still going) and a
+  `reason`: `restart` for a production server on its way out, `reload` for the dev
+  server's modules reloading in the same process (a Ctrl-C of the dev server reads
+  `reload` too; `process.exit` says how the process really ended).
+- `run.abort`: a run's request was cut short on purpose, in the audit log
+  (`~/.llama-mui/audit`). It has the `session`, the `kind` (`stopped`, `restart` or
+  `taken-over`), what was `open` (`request` or `aside`), the `request` kind and the
+  `step`. The kind is also saved on the chat (and the run record) so the chat says
+  "You stopped this reply" and so on; the kinds are in `src/runEnd.ts`.
 - `upstream.start` (only for requests that aren't GETs) and `upstream.end`: every
   request llama-mui forwards to a model server. `upstream.end` says how it ended in
   `outcome`: `done`; `client-closed` (whoever asked hung up: Stop, a closed tab, a
   stopped run, a shutdown); `upstream-error` (the model server's connection broke
   mid-reply: `error` and `cause` say how, and `idleMs` is how long it had been
-  silent); `connect-failed` (never reached it). It also has `ms`, `headersMs`,
+  silent); `connect-failed` (never reached it). A `client-closed` line also has
+  `endedBy`: the kind the run gave for cutting the request (`stopped`, `restart`,
+  `taken-over`), or `unknown` when nothing explained the hang-up (a closed tab, a
+  dropped connection). It is found through the chat named in the request, and only
+  counts if it was given after the request started. It also has `ms`, `headersMs`,
   `firstByteMs`, `bytes`, and `via` (`browser`, or `server` for calls llama-mui
   makes itself, which is what plan runs and chat replies are). A GET that went
   fine and fast isn't logged. A Messages API reply (`/v1/messages`) also has

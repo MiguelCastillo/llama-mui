@@ -4,7 +4,9 @@
 //
 //   done              the reply arrived whole
 //   client-closed     whoever asked hung up first: the Stop button, a closed tab,
-//                     a run that was stopped, or this server shutting down
+//                     a run that was stopped, or this server shutting down.
+//                     `endedBy` says which when the run that cut it said so
+//                     (stopped, restart, taken-over), else "unknown"
 //   upstream-error    the model server's connection broke mid-reply (the error and
 //                     its cause are in the line, and `idleMs` is how long it had been
 //                     silent: a long gap before a break means it stalled first)
@@ -41,6 +43,7 @@ import { Transform } from "node:stream";
 import { connection } from "../src/connections/index.ts";
 import { messagesTap, tapForPath } from "../src/connections/tap.ts";
 import type { Kind } from "../src/api.ts";
+import { type EndKind } from "../src/runEnd.ts";
 import { errorFields, log } from "./log.ts";
 
 interface Open {
@@ -56,6 +59,18 @@ let serial = 0;
 
 // Requests to model servers that are going now, for the line a shutdown writes.
 export const openRequests = () => [...open.values()].map((r) => ({ id: r.id, connector: r.connector, method: r.method, path: r.path, ageMs: Date.now() - r.startedAt }));
+
+// Why a chat's requests were cut, as the run that cut them said (runners.ts calls
+// noteAbort). The proxy only sees its connection close, so it finds the reason
+// here by the chat the request named in x-llama-session. A reason counts only for
+// requests that started before it was noted, so an old stop never explains a
+// later hang-up.
+const aborted = new Map<string, { kind: EndKind; at: number }>();
+export const noteAbort = (session: string, kind: EndKind) => {
+  aborted.set(session, { kind, at: Date.now() });
+  if (aborted.size > 200) aborted.delete(aborted.keys().next().value as string);
+};
+const SESSION_SHAPE = /^[A-Za-z0-9:-]{1,80}$/;
 
 // A GET that went fine is not worth a line; one that was slow or failed is.
 const SLOW_MS = 5_000;
@@ -91,6 +106,8 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
   const startedAt = Date.now();
   const ua = String(req.headers["user-agent"] ?? "");
   const via = ua.startsWith("Mozilla") ? "browser" : "server";
+  const named = req.headers["x-llama-session"];
+  const session = typeof named === "string" && SESSION_SHAPE.test(named) ? named : undefined;
   open.set(id, { id, connector, method, path, startedAt });
   if (method !== "GET" && method !== "HEAD") log("upstream.start", { id, connector, method, path, via });
 
@@ -125,6 +142,13 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
     },
   });
 
+  // The reason the run gave for cutting this request, or "unknown": a hang-up
+  // nobody explained (a closed tab, a dropped connection) is not guessed at.
+  const endedBy = (): EndKind | "unknown" => {
+    const why = session ? aborted.get(session) : undefined;
+    return why && why.at >= startedAt ? why.kind : "unknown";
+  };
+
   const finish = (outcome: string, extra: Record<string, unknown> = {}) => {
     if (done) return;
     done = true;
@@ -147,6 +171,7 @@ export function track(req: IncomingMessage, res: ServerResponse, connector: stri
       ...(firstByteMs !== undefined ? { firstByteMs } : {}),
       bytes,
       ...(outcome === "upstream-error" || outcome === "client-closed" ? { idleMs: Date.now() - lastChunkAt } : {}),
+      ...(outcome === "client-closed" ? { endedBy: endedBy() } : {}),
       ...(counted?.model ? { model: counted.model } : {}),
       ...(counted
         ? { tokens: { input: counted.input ?? 0, cacheRead: counted.cacheRead ?? 0, cacheWrite: counted.cacheWrite ?? 0, output: counted.output ?? 0 } }

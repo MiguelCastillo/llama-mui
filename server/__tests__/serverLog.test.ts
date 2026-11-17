@@ -17,7 +17,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { load, save } = await import("../store.ts");
 const { connectorRoutes } = await import("../connectors.ts");
-const { usageReader } = await import("../upstreamLog.ts");
+const { usageReader, noteAbort } = await import("../upstreamLog.ts");
 const { tapForPath } = await import("../../src/connections/tap.ts");
 
 // A Messages API stream as Anthropic sends it: usage in message_start (the
@@ -251,6 +251,49 @@ describe("requests to a model server", () => {
     const start = (await lines()).filter((l) => l.event === "upstream.start" && l.path === "/v1/slow").pop();
     const end = await ended(start.id);
     expect(end.outcome).toBe("client-closed");
+    // Nobody said why: it stays unknown rather than guessed.
+    expect(end.endedBy).toBe("unknown");
+  });
+
+  // A hang-up like the one above, from a request that names its chat, after the
+  // run that owns the chat said why it cut the request.
+  const hangUp = async (session: string, kind?: "stopped" | "restart") => {
+    const stop = new AbortController();
+    const res = await fetch(`${frontUrl}/c/up/v1/slow`, {
+      method: "POST",
+      body: "{}",
+      headers: { "Content-Type": "application/json", "x-llama-session": session },
+      signal: stop.signal,
+    });
+    const reader = res.body!.getReader();
+    await reader.read();
+    if (kind) noteAbort(session, kind);
+    stop.abort();
+    await reader.read().catch(() => {});
+    const all = (await lines()).filter((l) => l.event === "upstream.start" && l.path === "/v1/slow");
+    return ended(all[all.length - 1].id);
+  };
+
+  it("say endedBy stopped when the run said it was stopped", async () => {
+    expect(await hangUp("chat-stop", "stopped")).toMatchObject({ outcome: "client-closed", endedBy: "stopped" });
+  });
+
+  it("say endedBy restart when the run said the server was restarting", async () => {
+    expect(await hangUp("chat-restart", "restart")).toMatchObject({ outcome: "client-closed", endedBy: "restart" });
+  });
+
+  it("say unknown for a chat's hang-up that no run explained, and never write the header", async () => {
+    noteAbort("chat-plain", "stopped"); // an older stop, before this request began
+    await new Promise((r) => setTimeout(r, 5));
+    const end = await hangUp("chat-plain");
+    expect(end).toMatchObject({ outcome: "client-closed", endedBy: "unknown" });
+    expect(JSON.stringify(end)).not.toContain("chat-plain");
+  });
+
+  it("leave endedBy off a reply that finished", async () => {
+    await (await post("/v1/ok")).text();
+    const start = (await lines()).filter((l) => l.event === "upstream.start" && l.path === "/v1/ok").pop();
+    expect((await ended(start.id)).endedBy).toBeUndefined();
   });
 
   it("say connect-failed, with why, when the model server can't be reached", async () => {

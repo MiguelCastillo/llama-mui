@@ -142,7 +142,6 @@ import { liveLine } from "./liveLine";
 import Elapsed, { type StreamRate } from "./Elapsed";
 import { stepSummary } from "./stepSummary";
 import { toolCallTitle } from "./toolCallTitle";
-import { refusedPlan } from "./planRefusal";
 import { groupRounds } from "./stepGroups";
 import { approvalWhy, canMakePlan, readOnlyLabel } from "./approvalWhy";
 import CutOffNote from "./CutOffNote";
@@ -169,6 +168,9 @@ import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import MarkdownRenderer from "./MarkdownRenderer";
 import RecentFolders from "./RecentFolders";
 import { commandSummary, INTERRUPTED, failureLine } from "./agent/helpers";
+import type { EndKind } from "./runEnd";
+import ReplyEndRow from "./ReplyEndRow";
+import { refusedPlan } from "./planRefusal";
 import {
   doItMessage,
   doItDisabled,
@@ -412,6 +414,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     personaText,
     usage,
     failed,
+    endedBy,
     modelName,
     plan,
     planProposal,
@@ -435,12 +438,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     defaults: ModelSettings;
     models: Record<string, ModelSettings>;
   } | null>(null);
-  // Attachments are extra files and folders this chat's disk tools may read,
-  // besides the working directory; New chat clears them. The working directory
-  // is where relative paths and commands start; it is chosen in Session
   // The Experimental switches (Settings → Models). Read again each time the
   // chat shows, and added to each message's settings when it is sent.
   const [experiments, setExperiments] = useState<Experiments | null>(null);
+  // Attachments are extra files and folders this chat's disk tools may read,
+  // besides the working directory; New chat clears them. The working directory
+  // is where relative paths and commands start; it is chosen in Session
   // settings, not one of the attachments, and New chat clears it.
   const attachedPaths = (as: Attachment[]) => as.map((a) => a.path);
   // The working directory the system prompt names. Fixed by the session's
@@ -1205,13 +1208,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     getModelSettings()
       .then(setModelSettings)
       .catch((e) => showGlobalError(e.message));
-  }, [visible]);
-
-  // The personas on offer for the picker (see PersonaPicker). Read again when
     // A failure leaves them off: the message goes out as it did before experiments.
     getExperiments()
       .then(setExperiments)
       .catch(() => setExperiments(null));
+  }, [visible]);
+
+  // The personas on offer for the picker (see PersonaPicker). Read again when
   // the chat is shown, so a file added in Settings' folder appears.
   const [personaList, setPersonaList] = useState<PersonaList | null>(null);
   useEffect(() => {
@@ -1641,6 +1644,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         updateSession({
           messages: [...before, { role: "user", content: text, images: refs.length ? refs : undefined, replyTo: replyTo ? { text: replyTo.slice(0, MAX_REPLY_QUOTE) } : undefined }],
           failed: null,
+          endedBy: null,
         });
       }
       return true;
@@ -2002,6 +2006,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         reasoningIsSummary={connection(connector?.kind).reasoningIsSummary}
         showSteps={showSteps}
         failed={i === lastFailedTurnIndex ? failed : undefined}
+        endedBy={i === lastFailedTurnIndex ? endedBy : undefined}
         connectorName={connector ? connector.name || connector.kind : undefined}
         onResend={i === lastFailedTurnIndex && allowed.has("resend") ? bubbleActions.retry : undefined}
         resendDisabled={i === lastFailedTurnIndex ? runActive : undefined}
@@ -3330,6 +3335,7 @@ const MessageBubble = memo(function MessageBubble({
   reasoningIsSummary,
   showSteps,
   failed,
+  endedBy,
   connectorName,
   onResend,
   resendDisabled,
@@ -3366,6 +3372,8 @@ const MessageBubble = memo(function MessageBubble({
   showSteps: boolean;
   // Error message for the last user message in this turn.
   failed?: string | null;
+  // Why the reply was cut short, if it was; its own line and button replace the error's.
+  endedBy?: EndKind | null;
   // Who answered the failed request, named in its error line.
   connectorName?: string;
   // Callback for resending the last user message.
@@ -3521,27 +3529,19 @@ const MessageBubble = memo(function MessageBubble({
   // A plan the tool refused, when the model didn't fix it: said under the
   // reply, so the chat doesn't just look stopped (see planRefusal.ts).
   const planRefusal = !isUser && !streaming ? refusedPlan(parts, (id) => toolResults.get(id)?.content) : null;
-  const hasError = !!failed;
-  const errorLine = failed && (
-    <Stack spacing={0.5} sx={{ alignItems: isUser ? "flex-end" : "flex-start", mt: 0.5, flexShrink: 0 }}>
-      <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
-        <StatusIcon kind="failed" fontSize="small" />
-        {/* The raw error is for debugging, so it waits on hover. */}
-        <Tooltip title={failed === INTERRUPTED ? "" : failed}>
-          <Typography variant="caption" color="error.main">
-            {failureLine(failed, connectorName)}
-          </Typography>
-        </Tooltip>
-        <Button
-          size="small"
-          color="error"
-          onClick={onResend}
-          disabled={resendDisabled}
-        >
-          Resend
-        </Button>
-      </Stack>
-    </Stack>
+  const hasError = !!failed || !!endedBy;
+  // A stop you chose is not an error: quiet text, no red mark, no button.
+  const errorLine = (failed || endedBy) && (
+    <ReplyEndRow
+      failed={failed}
+      endedBy={endedBy}
+      connectorName={connectorName}
+      isUser={isUser}
+      onResend={onResend}
+      // Continue picks the reply up the same way Resend does: the last message goes out again.
+      onContinue={onResend}
+      disabled={resendDisabled}
+    />
   );
   // A side question or its answer (asked while a plan ran; the plan never saw
   // it): labelled, and quieter than the chat's own messages.

@@ -19,6 +19,7 @@
 // Every write goes through one queue per session, so a check of the revision and
 // the write that follows it can't be split by another request.
 
+import type { EndKind } from "../src/runEnd.ts";
 import { auditSessionDeleted } from "./audit.ts";
 import { setChangedFileSink } from "./changedFiles.ts";
 import { HttpError } from "./http.ts";
@@ -79,6 +80,9 @@ export interface RunState {
   aside?: boolean;
   // What went wrong, in the run's plain words (never a key: the run doesn't have one).
   error?: string;
+  // Why the run was cut short (see src/runEnd.ts), written when it is, so
+  // another server that settles or takes over the run can show the same line.
+  endedBy?: EndKind;
   // Paths of the files this run changed, oldest first, each once (see
   // changedFiles.ts). Read by the note a restart leaves on an interrupted step.
   changed?: string[];
@@ -414,12 +418,13 @@ export function beginRun(
 // whether a request is in flight and the error shown (`error: null` clears it).
 export function updateRun(
   id: string,
-  patch: { status?: RunStatus; ask?: RunAsk | null; streaming?: boolean; request?: "reply" | "check" | null; stopping?: boolean; aside?: boolean; error?: string | null; notes?: RunNote[] },
+  patch: { status?: RunStatus; ask?: RunAsk | null; streaming?: boolean; request?: "reply" | "check" | null; stopping?: boolean; aside?: boolean; error?: string | null; notes?: RunNote[]; endedBy?: EndKind },
 ): Promise<RunState> {
   return locked(id, async () => {
     const live = runs.get(id);
     if (!live) throw new Error(`No run is live for session ${id}`);
     if (patch.status) live.state.status = patch.status;
+    if (patch.endedBy) live.state.endedBy = patch.endedBy;
     if (patch.notes) {
       if (patch.notes.length) live.state.notes = JSON.parse(JSON.stringify(patch.notes));
       else delete live.state.notes;

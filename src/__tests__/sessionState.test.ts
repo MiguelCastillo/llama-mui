@@ -138,6 +138,13 @@ describe("sessionState", () => {
     expect(savedKeys.sort()).toEqual(Object.keys(state).sort());
   });
 
+  it("opens a saved ending kind, shows none while the run is going, and ignores an unknown one", () => {
+    expect(fromSession({ ...bare, endedBy: "restart" }).endedBy).toBe("restart");
+    expect(fromSession({ ...bare, endedBy: "restart" }, { live: true }).endedBy).toBeNull();
+    expect(fromSession({ ...bare, endedBy: "nonsense" as any }).endedBy).toBeNull();
+    expect(fromSession(bare).endedBy).toBeNull();
+  });
+
   describe("stateKey", () => {
     const saved = (state: SessionState, model = "m") => toSession(state, { id: "x", model });
     // A value different from the empty one, for every field. Typed as a record of
@@ -153,6 +160,7 @@ describe("sessionState", () => {
       toolResultCut: { from: 0, count: 10, lastRequestAt: 1 },
       usage: { total: 1 },
       failed: "boom",
+      endedBy: "restart",
       modelName: "Named",
       plan: planOf("pending"),
       planProposal: planOf("pending"),
@@ -208,7 +216,7 @@ describe("sessionState", () => {
     // Typed as a record of every key, so a field added to Session fails to compile here until it is placed.
     const all: Record<keyof Session, true> = {
       id: true, title: true, model: true, connectorId: true, messages: true, contextStart: true, attachments: true,
-      workingDir: true, usage: true, failed: true, plan: true, planProposal: true, planContext: true,
+      workingDir: true, usage: true, failed: true, endedBy: true, plan: true, planProposal: true, planContext: true,
       planSummary: true, planAnchor: true, planId: true, pastPlans: true, promptDir: true, persona: true, personaText: true, toolResultCut: true, modelName: true,
       userName: true, group: true, todos: true, parentId: true, threads: true, autoApprove: true,
       titleHint: true, planMovedIn: true, revision: true, run: true, holder: true, queue: true, queuePaused: true, draft: true,

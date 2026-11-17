@@ -1,6 +1,7 @@
 // Pure helper functions extracted from Chat.tsx.
 
 import { type ChatMessage, type ToolCall } from "../api.ts";
+import { END_LINES, type EndKind } from "../runEnd.ts";
 
 // Distributes token counts across messages, so the chat display shows roughly
 // how many tokens each message used based on its share of total content length.
@@ -53,7 +54,9 @@ const MESSAGE_CUT = 160;
 // llama server; a TypeError means the request never got an answer at all. A
 // 4xx like "Error: POST /v1/messages: 400 <message>" was an answer: say who
 // gave it and what it said, cut short (the full error is in the tooltip).
-export function failureLine(failed: string, who = "the llama server"): string {
+export function failureLine(failed: string, who = "the llama server", endedBy?: EndKind | null): string {
+  // A run that was cut short on purpose or by a restart says so, whatever else was saved.
+  if (endedBy) return END_LINES[endedBy];
   const name = who.trim() || "the llama server";
   const sentence = name.charAt(0).toUpperCase() + name.slice(1);
   if (failed === INTERRUPTED) return "The reply was cut off.";

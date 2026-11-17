@@ -128,6 +128,13 @@ describe("markInterrupted", () => {
     expect(out.failed).toBeNull();
   });
 
+  it("keeps the ending kind: the one asked for (a take-over), else the one the run record kept", () => {
+    const run = { status: "running", startedAt: 1, kind: "turn" } as any;
+    expect(markInterrupted({ messages: [] }, run, [], undefined, "taken-over").endedBy).toBe("taken-over");
+    expect(markInterrupted({ messages: [] }, { ...run, endedBy: "restart" }).endedBy).toBe("restart");
+    expect(markInterrupted({ messages: [] }, run)).not.toHaveProperty("endedBy");
+  });
+
   it("a run that was one chat reply is cut off too, and its plan is not touched", () => {
     const plan = [step("s1", "pending")];
     const out = markInterrupted({ plan, messages: [], failed: null }, { status: "running", startedAt: 1, kind: "turn" });

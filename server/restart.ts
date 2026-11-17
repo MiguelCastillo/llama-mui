@@ -29,6 +29,7 @@
 
 import { readdir } from "node:fs/promises";
 import { INTERRUPTED } from "../src/agent/helpers.ts";
+import type { EndKind } from "../src/runEnd.ts";
 import type { ChatMessage, PlanStep } from "../src/api.ts";
 import { callsWaitingForAnswer, closeOpenToolCalls } from "../src/closeOpenToolCalls.ts";
 import { sessionsDir } from "./disk.ts";
@@ -97,7 +98,7 @@ export function markCutOffReply(messages: ChatMessage[], run: hub.RunState): Cha
 // The session as a restart leaves it, for the run record that was found with
 // it. Pure: the session it is given doesn't change. `changed` is the list of
 // files the run record kept (its `changed` field), found by the caller.
-export function markInterrupted(session: any, run: hub.RunState, changed: string[] = [], why?: string): any {
+export function markInterrupted(session: any, run: hub.RunState, changed: string[] = [], why?: string, endedBy?: EndKind): any {
   let wasRunning = false;
   const note = interruptedNote(Array.isArray(session.messages) ? session.messages : [], changed, why);
   const plan: PlanStep[] | null = Array.isArray(session.plan)
@@ -118,7 +119,16 @@ export function markInterrupted(session: any, run: hub.RunState, changed: string
   const cutOff = run.kind === "turn" || run.streaming === true || wasRunning;
   // Messages waiting in the queue are kept, and paused: nothing is sent by itself after a restart.
   const waiting = Array.isArray(session.queue) && session.queue.length > 0;
-  return { ...session, plan, messages, failed: cutOff ? INTERRUPTED : (session.failed ?? null), ...(waiting ? { queuePaused: true } : {}) };
+  // The kind: the one asked for (a take-over), else the one the run record kept.
+  const kind = endedBy ?? run.endedBy;
+  return {
+    ...session,
+    plan,
+    messages,
+    failed: cutOff ? INTERRUPTED : (session.failed ?? null),
+    ...(kind && cutOff ? { endedBy: kind } : {}),
+    ...(waiting ? { queuePaused: true } : {}),
+  };
 }
 
 // Settles one session if its run record has a dead owner (see settleStale in
@@ -146,7 +156,7 @@ export async function takeOverSession(id: string): Promise<{ port: number; reaso
   let reason = "";
   const done = await hub.takeOver(id, (session, run) => {
     reason = `Interrupted: you took over from the server on port ${run.owner?.port ?? "unknown"}`;
-    return markInterrupted(session, run, Array.isArray(run.changed) ? run.changed : [], reason);
+    return markInterrupted(session, run, Array.isArray(run.changed) ? run.changed : [], reason, "taken-over");
   });
   if (done.kind !== "turn") await reportInterrupted(id, done.session);
   return { port: done.port, reason };

@@ -116,7 +116,9 @@ export function makeReply(h: RunnerHandle): RunPlanCallbacks["reply"] {
     const syncFailed = () =>
       h.edit((s) => {
         const f = streaming ? INTERRUPTED : failed;
-        return s.failed === f ? s : { ...s, failed: f };
+        // A new request is going out: the last ending no longer applies.
+        const stale = streaming && !!s.endedBy;
+        return s.failed === f && !stale ? s : { ...s, failed: f, ...(stale ? { endedBy: null } : {}) };
       });
 
     const consumed = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, clearedResults: 0, clearedTokens: 0, rereads: 0 };

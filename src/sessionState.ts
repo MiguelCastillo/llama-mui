@@ -12,6 +12,7 @@ import type {
 import type { Session } from "./api.ts";
 import { shownFailure } from "./agent/helpers.ts";
 import { cleanPersona } from "./persona.ts";
+import type { EndKind } from "./runEnd.ts";
 import type { CutState } from "./toolResults.ts";
 import { withSessionDefaults } from "./sessionDefaults.ts";
 import { newId } from "./uuid.ts";
@@ -45,6 +46,8 @@ export interface SessionState {
   usage: Usage | null;
   // Failure of the last reply only.
   failed: string | null;
+  // Why the last run was cut short, if it was (stopped, restart, ...).
+  endedBy: EndKind | null;
   // The name the model gave the session (the user's own is never held here).
   modelName: string | null;
   // The task's steps, a change the model suggested to them, and the plan's
@@ -88,6 +91,7 @@ export function emptySessionState(): SessionState {
     toolResultCut: undefined,
     usage: null,
     failed: null,
+    endedBy: null,
     modelName: null,
     plan: null,
     planProposal: null,
@@ -166,6 +170,8 @@ export function fromSession(
     toolResultCut: s.toolResultCut,
     usage: s.usage,
     failed: shownFailure(s.failed, running),
+    // A run that is still going has not ended.
+    endedBy: running ? null : (s.endedBy ?? null),
     modelName: s.modelName ?? null,
     // A step that was running when the page went away didn't finish.
     plan:

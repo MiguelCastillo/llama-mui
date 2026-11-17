@@ -21,7 +21,7 @@ import { loadOtherDevices } from "./lan.ts";
 import { logServing } from "./lifecycle.ts";
 import { log } from "./log.ts";
 import { handler, whenServing } from "./plugin.ts";
-import { stopAllRuns } from "./runners.ts";
+import { liveRunIds, stopAllRuns } from "./runners.ts";
 import { prepareLoginEnv } from "./terminal.ts";
 import { openRequests } from "./upstreamLog.ts";
 
@@ -223,7 +223,7 @@ function main() {
       process.exit(1);
     }
     closing = true;
-    log("server.shutdown", { signal, open, upstream: openRequests(), graceMs: GRACE_MS });
+    log("server.shutdown", { signal, open, upstream: openRequests(), runs: liveRunIds(), reason: "restart", graceMs: GRACE_MS });
     console.log(`llama-mui shutting down (${signal}): ${open} request${open === 1 ? "" : "s"} still open, ${GRACE_MS / 1000}s to finish`);
     const finish = async () => {
       await stopAllRuns().catch(() => {});
@@ -232,7 +232,7 @@ function main() {
     server.close(() => void finish());
     connections.closeIdle();
     setTimeout(() => {
-      log("server.force-close", { open, upstream: openRequests() });
+      log("server.force-close", { open, upstream: openRequests(), runs: liveRunIds(), reason: "restart" });
       connections.closeAll();
       setTimeout(() => void finish(), 1_000).unref();
     }, GRACE_MS).unref();

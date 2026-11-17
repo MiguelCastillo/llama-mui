@@ -243,4 +243,24 @@ describe("failureLine", () => {
   it("uses the default name when the connector name is blank", () => {
     expect(failureLine("Error: POST /v1/messages: 400 nope", "  ")).toBe("The llama server rejected the request: nope");
   });
+
+  it("gives each ending kind its own line, whatever failure was saved with it", () => {
+    expect(failureLine("", "Anthropic", "stopped")).toBe("You stopped this reply.");
+    expect(failureLine(INTERRUPTED, "Anthropic", "restart")).toBe("The server restarted during this reply.");
+    expect(failureLine("TypeError: fetch failed", "Anthropic", "taken-over")).toBe("Another server took this over.");
+  });
+
+  it("keeps the provider-error and empty-reply lines when no kind is saved", () => {
+    expect(failureLine("Error: Stream error (x): Overloaded", "Anthropic", null)).toBe("Anthropic returned an error: Overloaded");
+    expect(failureLine("Error: The model sent nothing (stop reason: end_turn).", "Anthropic", undefined)).toBe(
+      "The model sent nothing (stop reason: end_turn).",
+    );
+  });
+
+  it("offers Continue for a restart or a take-over, and nothing for a stop", async () => {
+    const { endButton } = await import("../../runEnd");
+    expect(endButton("restart")).toBe("Continue");
+    expect(endButton("taken-over")).toBe("Continue");
+    expect(endButton("stopped")).toBeNull();
+  });
 });

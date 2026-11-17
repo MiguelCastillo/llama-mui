@@ -9,6 +9,7 @@ import type { Server } from "node:http";
 import { createLogger, type Logger, type Plugin } from "vite";
 import { startAuditPruning } from "./audit.ts";
 import { log, logHint, logProcessEnd, pruneLogs } from "./log.ts";
+import { liveRunIds } from "./runners.ts";
 import { openRequests } from "./upstreamLog.ts";
 import { startWatching } from "./watch.ts";
 
@@ -29,9 +30,18 @@ export function logServing(httpServer: Server | null, mode: Mode): void {
     else httpServer.once("listening", announce);
     // Closing the server (Vite does it to restart, a shutdown does it to stop)
     // cuts every reply that is still streaming: say which ones.
-    httpServer.once("close", () => log("server.close", { open: openRequests() }));
+    httpServer.once("close", () => logClose(mode));
   }
   startWatching();
+}
+
+// The server was closed: which requests to model servers were open, which chats'
+// runs were still going (they are cut next), and why. A closed production server
+// is on its way out ("restart"); a closed dev or preview server is Vite
+// reloading its modules in the same process ("reload"). A Ctrl-C of the dev
+// server also reads "reload": the process-end line says how the process ended.
+export function logClose(mode: Mode): void {
+  log("server.close", { open: openRequests(), runs: liveRunIds(), reason: mode === "prod" ? "restart" : "reload" });
 }
 
 const LOG_LINES = 5;

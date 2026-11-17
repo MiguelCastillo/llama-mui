@@ -2,6 +2,7 @@ import type { Session } from "./api.ts";
 import { readTodos } from "./agent/todos.ts";
 import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 import { readQueue } from "./queue.ts";
+import { isEndKind } from "./runEnd.ts";
 
 // A session as chat opens it, with a default for every field it reads: shared
 // or imported session.json files may lack some, and chat showed a blank page.
@@ -18,6 +19,7 @@ export function withSessionDefaults(s: Session): Session {
     workingDir: typeof s.workingDir === "string" ? s.workingDir : null,
     usage: s.usage ?? null,
     failed: s.failed ?? null,
+    endedBy: isEndKind(s.endedBy) ? s.endedBy : null,
     plan: Array.isArray(s.plan) ? s.plan : null,
     planSummary: typeof s.planSummary === "string" ? s.planSummary : null,
     pastPlans: Array.isArray(s.pastPlans) ? s.pastPlans : [],

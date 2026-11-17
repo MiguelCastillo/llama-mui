@@ -17,6 +17,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
+import type { EndKind } from "./runEnd.ts";
 export { closeOpenToolCalls } from "./closeOpenToolCalls.ts";
 // Wording that failureLine (src/agent/helpers.ts) recognises.
 export { EMPTY_REPLY, STREAM_ERROR } from "./connections/wires/messages.ts";
@@ -521,13 +522,13 @@ export interface Preferences {
 export const getPreferences = () => call<Preferences>("GET", "/api/preferences");
 export const updatePreferences = (changes: Partial<Preferences>) => call<Preferences>("PATCH", "/api/preferences", changes);
 
-// Personas: how the agent is told to work. `problems` are plain messages about
 // Switches for features still being tried (Settings → Models, "Experimental"),
 // each off until turned on (the type is in src/connections/types.ts). A key
 // this version doesn't know is ignored.
 export const getExperiments = () => call<Experiments>("GET", "/api/experiments");
 export const updateExperiments = (changes: Partial<Experiments>) => call<Experiments>("PATCH", "/api/experiments", changes);
 
+// Personas: how the agent is told to work. `problems` are plain messages about
 // persona files that couldn't be used, or a default that no longer exists.
 export interface PersonaInfo {
   name: string;
@@ -820,6 +821,9 @@ export interface Session {
   usage: Usage | null;
   // Failure of the last reply; see Chat.tsx. Older saved chats don't have it.
   failed: string | null;
+  // Why the last run was cut short (see src/runEnd.ts), saved apart from
+  // `failed` so a reload or another device shows the same line. Older chats don't have it.
+  endedBy?: EndKind | null;
   // The task's steps from update_plan; see Plan.tsx. Older saved chats don't have it.
   plan: PlanStep[] | null;
   // A change to the plan the model suggested outside planning and runs,
