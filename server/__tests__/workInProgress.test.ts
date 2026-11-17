@@ -59,6 +59,9 @@ describe("workInProgress", () => {
     git(repo, "checkout", "main");
     git(repo, "branch", "done");
     git(repo, "worktree", "add", "-b", "held", path.join(root, "held"));
+    writeFileSync(path.join(root, "held", "h.txt"), "h\n");
+    git(path.join(root, "held"), "add", "-A");
+    git(path.join(root, "held"), "commit", "-m", "held work");
     const all = await workInProgress(repo);
     expect(all.filter((e) => e.kind === "branch").map((e) => e.name)).toEqual(["old"]);
     expect(all.filter((e) => e.kind === "worktree").map((e) => e.name)).toEqual(["held"]);
@@ -66,11 +69,19 @@ describe("workInProgress", () => {
     expect(old).toMatchObject({ unmerged: 1, files: ["o.txt"], lastCommitSubject: "old work", merged: false });
   });
 
-  it("marks a worktree whose tip is on the base as merged", async () => {
+  it("leaves out a worktree already merged into the base with nothing uncommitted", async () => {
     const { root, repo } = makeRepo();
     git(repo, "worktree", "add", "-b", "same", path.join(root, "same"));
+    expect(await workInProgress(repo)).toEqual([]);
+  });
+
+  it("keeps a merged worktree that still has uncommitted files", async () => {
+    const { root, repo } = makeRepo();
+    const wt = path.join(root, "same");
+    git(repo, "worktree", "add", "-b", "same", wt);
+    writeFileSync(path.join(wt, "left.txt"), "x\n");
     const [e] = await workInProgress(repo);
-    expect(e).toMatchObject({ unmerged: 0, merged: true });
+    expect(e).toMatchObject({ kind: "worktree", unmerged: 0, merged: true, uncommitted: 1 });
   });
 
   it("reports uncommitted files in the main folder as one loose entry", async () => {
@@ -143,9 +154,13 @@ describe("workInProgress", () => {
 
     it("falls back to the last commit line for a worktree no session claims", async () => {
       const { root, repo } = makeRepo();
-      git(repo, "worktree", "add", "-b", "w", path.join(root, "w"));
+      const wt = path.join(root, "w");
+      git(repo, "worktree", "add", "-b", "w", wt);
+      writeFileSync(path.join(wt, "w.txt"), "w\n");
+      git(wt, "add", "-A");
+      git(wt, "commit", "-m", "w work");
       const [e] = await workInProgress(repo, { loadSessions: async () => [] });
-      expect(e).toMatchObject({ purpose: "first", source: null });
+      expect(e).toMatchObject({ purpose: "w work", source: null });
     });
   });
 

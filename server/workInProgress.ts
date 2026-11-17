@@ -154,12 +154,15 @@ export async function workInProgress(repo: string, opts: WipOptions = {}): Promi
           ? sessions.find((s) => s.id === source)
           : sessions.find((s) => createdWorktrees(s.messages).some((w) => w.path === t.folder || w.path === folderReal));
         source = owner?.id ?? source;
+        const uncommitted = await uncommittedIn(t.folder);
+        // Already in the main branch and nothing left uncommitted: nothing to track.
+        if (d.unmerged === 0 && uncommitted === 0) continue;
         entries.push({
           kind: "worktree",
           name: path.basename(t.folder),
           branch: t.branch,
           folder: t.folder,
-          uncommitted: await uncommittedIn(t.folder),
+          uncommitted,
           ...d,
           merged: d.unmerged === 0,
           purpose: owner?.planSummary?.trim() || d.lastCommitSubject,
