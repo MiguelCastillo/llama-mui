@@ -15,6 +15,7 @@ import { realpath, stat } from "node:fs/promises";
 import * as fsio from "./io/fs.ts";
 import os from "node:os";
 import path from "node:path";
+import { createdText } from "./createdWorktrees.ts";
 import { isInside, toAbsolute } from "./disk.ts";
 import { execFile } from "./io/exec.ts";
 import { sessionFolder } from "./sessions.ts";
@@ -99,6 +100,43 @@ async function checkRepoLocation(repo: string, given: string) {
   if (isInside(repo, path.join(home, ".llama-mui"))) throw new ToolError(`${given} is part of this app's own data`);
 }
 
+// Makes the worktree: the part of create_worktree that is the same whoever
+// asks (the model through the tool, or the server for a plan thread, see
+// threadWorktree.ts). All the checks are here, so both get the same ones.
+export async function makeWorktree(
+  ctx: Pick<ToolContext, "chatId" | "workingDir" | "attachments">,
+  args: { repo: unknown; name?: unknown; base?: unknown },
+): Promise<{ repo: string; path: string; branch: string; base: string }> {
+  const { given, abs } = await toAbsolute(ctx, args.repo);
+  const real = await realpath(abs).catch(() => {
+    throw new ToolError(`${given} does not exist`);
+  });
+  await checkRepoLocation(real, given);
+  const inside = (await stat(real)).isDirectory() ? real : path.dirname(real);
+  // The repo's root, wherever in it the model pointed.
+  const root = await git(inside, "rev-parse", "--show-toplevel").catch(() => {
+    throw new ToolError(`${given} is not in a git repository`);
+  });
+  const top = await realpath(root);
+  await checkRepoLocation(top, given);
+
+  const name = checkName(String(args.name ?? path.basename(top)));
+  const branch = `llama/${name}`;
+  const target = worktreeTarget(ctx as ToolContext, name);
+  if (await exists(target)) throw new ToolError(`${target} already exists; pick another name`);
+  if (await gitOk(top, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`)) {
+    throw new ToolError(`The branch ${branch} already exists in ${top}; pick another name`);
+  }
+  const base = args.base === undefined ? "HEAD" : String(args.base);
+  if (base.startsWith("-") || !(await gitOk(top, "rev-parse", "--verify", "--quiet", `${base}^{commit}`))) {
+    throw new ToolError(`${base} isn't a commit in ${top}`);
+  }
+
+  await fsio.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }, { why: "worktree.create" });
+  await git(top, "worktree", "add", "-b", branch, target, base);
+  return { repo: top, path: target, branch, base };
+}
+
 const createWorktree: ToolSpec = {
   name: "create_worktree",
   group: "worktree",
@@ -123,39 +161,9 @@ const createWorktree: ToolSpec = {
     },
   ),
   async run(ctx, args) {
-    const { given, abs } = await toAbsolute(ctx, args.repo);
-    const real = await realpath(abs).catch(() => {
-      throw new ToolError(`${given} does not exist`);
-    });
-    await checkRepoLocation(real, given);
-    const inside = (await stat(real)).isDirectory() ? real : path.dirname(real);
-    // The repo's root, wherever in it the model pointed.
-    const root = await git(inside, "rev-parse", "--show-toplevel").catch(() => {
-      throw new ToolError(`${given} is not in a git repository`);
-    });
-    const top = await realpath(root);
-    await checkRepoLocation(top, given);
-
-    const name = checkName(String(args.name ?? path.basename(top)));
-    const branch = `llama/${name}`;
-    const target = worktreeTarget(ctx, name);
-    if (await exists(target)) throw new ToolError(`${target} already exists; pick another name`);
-    if (await gitOk(top, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`)) {
-      throw new ToolError(`The branch ${branch} already exists in ${top}; pick another name`);
-    }
-    const base = args.base === undefined ? "HEAD" : String(args.base);
-    if (base.startsWith("-") || !(await gitOk(top, "rev-parse", "--verify", "--quiet", `${base}^{commit}`))) {
-      throw new ToolError(`${base} isn't a commit in ${top}`);
-    }
-
-    await fsio.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }, { why: "worktree.create" });
-    await git(top, "worktree", "add", "-b", branch, target, base);
-    note(ctx, { repo: top, path: target, branch, base });
-    return (
-      `Created a worktree of ${top} at ${target} on a new branch ${branch}, from ${base}. ` +
-      "It holds only the files git tracks, so install dependencies before running tests. " +
-      `Use ${target} as cwd for run_command; you can change files there without asking.`
-    );
+    const made = await makeWorktree(ctx, args);
+    note(ctx, { repo: made.repo, path: made.path, branch: made.branch, base: made.base });
+    return createdText(made);
   },
   // Made without asking, so the line records the repo, branch and place.
   audit: (args) => ({ repo: textFact(args.repo), name: textFact(args.name, 100), base: textFact(args.base, 100) }),

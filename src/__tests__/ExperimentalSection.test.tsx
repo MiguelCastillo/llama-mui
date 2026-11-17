@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { EXPERIMENTS, ExperimentRows } from "../ExperimentalSection";
 
-const render = (progressNotes: boolean) => renderToStaticMarkup(<ExperimentRows experiments={{ progressNotes }} onChange={() => {}} />);
+const render = (progressNotes: boolean, planWorktrees = false) =>
+  renderToStaticMarkup(<ExperimentRows experiments={{ progressNotes, planWorktrees }} onChange={() => {}} />);
 
 describe("the Experimental section's rows", () => {
   it("shows the progress-notes switch with what it does and which models", () => {
@@ -20,8 +21,17 @@ describe("the Experimental section's rows", () => {
     expect(on).toMatch(/<input[^>]*checked=""[^>]*>|<input[^>]*checked[^>]*>/);
   });
 
+  it("shows the plan-worktrees switch, off by default and on when set", () => {
+    const label = "Run each plan in its own copy of the project";
+    const off = render(false, false);
+    expect(off).toContain(label);
+    expect(off).toContain("its own branch");
+    expect(off).not.toMatch(/<input[^>]*aria-label="Run each plan[^>]*checked/);
+    expect(render(false, true)).toMatch(/<input[^>]*aria-label="Run each plan[^>]*checked/);
+  });
+
   it("has one row for each experiment in the list", () => {
-    expect(EXPERIMENTS.map((x) => x.key)).toEqual(["progressNotes"]);
+    expect(EXPERIMENTS.map((x) => x.key)).toEqual(["progressNotes", "planWorktrees"]);
     expect(render(false).match(/<input/g)?.length).toBe(EXPERIMENTS.length);
   });
 });

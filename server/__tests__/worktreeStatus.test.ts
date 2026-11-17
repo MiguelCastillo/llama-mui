@@ -58,8 +58,16 @@ describe("worktreeStatuses", () => {
   it("a clean worktree on main's tip has nothing left", async () => {
     const { id, messages } = await setup();
     expect(await worktreeStatuses(id, messages)).toEqual([
-      { name: "ui", branch: "llama/ui", uncommitted: 0, unmerged: 0, base: "main" },
+      { name: "ui", branch: "llama/ui", uncommitted: 0, unmerged: 0, base: "main", lastCommit: expect.stringMatching(/^[0-9a-f]+ init$/), merged: true },
     ]);
+  });
+
+  it("reports the last commit and that the branch is not merged yet", async () => {
+    const { id, wt, messages } = await setup();
+    await writeFile(path.join(wt, "b.txt"), "b");
+    git(wt, "add", "b.txt");
+    git(wt, "commit", "-q", "-m", "add b");
+    expect((await worktreeStatuses(id, messages))[0]).toMatchObject({ lastCommit: expect.stringMatching(/ add b$/), merged: false });
   });
 
   it("counts uncommitted files, untracked ones too", async () => {

@@ -1067,6 +1067,8 @@ export interface WorktreeStatus {
   uncommitted: number;
   unmerged: number | null;
   base: string | null;
+  lastCommit?: string | null;
+  merged?: boolean;
 }
 export const getWorktreeStatuses = (id: string) => call<WorktreeStatus[]>("GET", `/api/sessions/${id}/worktrees`);
 // A command to a session's run (see server/commands.ts): run, pause, resume,

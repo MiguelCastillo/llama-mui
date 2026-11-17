@@ -19,6 +19,28 @@ interface Msg {
   toolCalls?: { id: string; name: string }[];
 }
 
+// What create_worktree answers when it worked. The one place the text is
+// written, so what is read back below always matches it.
+export function createdText(w: { repo: string; path: string; branch: string; base: string }): string {
+  return (
+    `Created a worktree of ${w.repo} at ${w.path} on a new branch ${w.branch}, from ${w.base}. ` +
+    "It holds only the files git tracks, so install dependencies before running tests. " +
+    `Use ${w.path} as cwd for run_command; you can change files there without asking.`
+  );
+}
+
+// The two messages that record a worktree the server made for a session (a
+// plan thread's own, see threadWorktree.ts) as if the model had called
+// create_worktree: the call, and its answer. createdWorktrees finds it like
+// any other, so the worktree lines and the status read it with no special case.
+export function worktreeRecord(w: { repo: string; path: string; branch: string; base: string }, callId: string) {
+  const args = JSON.stringify({ repo: w.repo, name: w.path.split("/").pop(), base: w.base });
+  return [
+    { role: "assistant" as const, content: "", toolCalls: [{ id: callId, name: "create_worktree", arguments: args, started: true }] },
+    { role: "tool" as const, content: createdText(w), toolCallId: callId },
+  ];
+}
+
 const CREATED = /^Created a worktree of (.+?) at (.+?) on a new branch (\S+?), from /;
 
 export function createdWorktrees(messages: unknown): CreatedWorktree[] {

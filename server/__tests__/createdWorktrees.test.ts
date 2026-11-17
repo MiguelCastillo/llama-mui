@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createdWorktrees } from "../createdWorktrees.ts";
+import { createdWorktrees, worktreeRecord } from "../createdWorktrees.ts";
 
 const call = (id: string, name = "create_worktree") => ({ role: "assistant", content: "", toolCalls: [{ id, name, arguments: "{}" }] });
 const result = (id: string, content: string) => ({ role: "tool", toolCallId: id, content });
@@ -23,6 +23,10 @@ describe("createdWorktrees", () => {
     expect(createdWorktrees([{ role: "user", content: "hi" }])).toEqual([]);
     expect(createdWorktrees([call("a", "run_command"), result("a", ok("ui"))])).toEqual([]);
     expect(createdWorktrees(undefined)).toEqual([]);
+  });
+  it("finds a worktree the server recorded, like one the tool made", () => {
+    const w = { repo: "/Users/m/My App", path: "/h/.llama-mui/sessions/s1/worktrees/plan-abc", branch: "llama/plan-abc", base: "HEAD" };
+    expect(createdWorktrees(worktreeRecord(w, "srv-1"))).toEqual([{ name: "plan-abc", path: w.path, branch: w.branch, repo: w.repo }]);
   });
   it("ignores a call with no result yet", () => {
     expect(createdWorktrees([call("a")])).toEqual([]);

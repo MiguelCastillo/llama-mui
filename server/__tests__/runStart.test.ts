@@ -102,6 +102,7 @@ beforeEach(async () => {
   modelsStatus = 200;
   await save({
     ...(await load()),
+    experiments: { progressNotes: false, planWorktrees: false },
     connectors: [{ id: "c1", name: "Studio", url: "http://127.0.0.1:1", apiKey: KEY, kind: "llama", api: "openai" }],
   });
   setApiOrigin("http://self.test");
@@ -460,5 +461,90 @@ describe("a plan that hasn't started", () => {
     );
     expect(stale).toMatchObject({ status: 409, extra: { reason: "stale revision", revision: 2 } });
     expect(fileOf("p").plan).toBeNull();
+  });
+
+  describe("with the planWorktrees switch", () => {
+    const switchTo = async (on: boolean) => {
+      const settings = await load();
+      await save({ ...settings, experiments: { ...settings.experiments, planWorktrees: on } });
+    };
+    const made = { repo: "/work/app", path: "/h/.llama-mui/sessions/child-1/worktrees/plan-child-1", branch: "llama/plan-child-1", base: "HEAD" };
+    const startWith = (make: any) =>
+      startFromOptions("p", options, { run: fakes.run("child-1"), reply: fakes.reply, newId: () => "child-1", makeWorktree: make });
+
+    it("on: makes one worktree for the thread, named from its id, and records it", async () => {
+      await switchTo(true);
+      fresh("p");
+      const make = vi.fn(async () => made);
+      await startWith(make);
+      expect(make).toHaveBeenCalledTimes(1);
+      expect(make).toHaveBeenCalledWith(
+        { chatId: "child-1", workingDir: "/work/app", attachments: [] },
+        { repo: "/work/app", name: "plan-child-1" },
+      );
+      const { createdWorktrees } = await import("../createdWorktrees.ts");
+      expect(createdWorktrees(fileOf("child-1").messages)).toEqual([
+        { name: "plan-child-1", path: made.path, branch: made.branch, repo: made.repo },
+      ]);
+      expect(fileOf("child-1").messages[0]).toEqual(request);
+      expect(fileOf("p").messages).toHaveLength(2);
+    });
+
+    it("on: the thread runs in the worktree, and its path, branch and rules are in the plan's context", async () => {
+      await switchTo(true);
+      fresh("p", { planContext: "Use TypeScript." });
+      await startWith(async () => made);
+      const child = fileOf("child-1");
+      expect(child.workingDir).toBe(made.path);
+      expect(child.planContext).toContain("Use TypeScript.");
+      expect(child.planContext).toContain(made.path);
+      expect(child.planContext).toContain(made.branch);
+      expect(child.planContext).toMatch(/never in the main project folder \(\/work\/app\)/);
+      expect(child.planContext).toMatch(/install the project's dependencies there/);
+      expect(child.planContext).toMatch(/commit your changes on that branch.*Files: /);
+      const contexts = calls.filter((c) => c.url === "/api/tools/context");
+      expect(JSON.parse(contexts[contexts.length - 1]!.body).workingDir).toBe(made.path);
+    });
+
+    it("off, or failed: working directory and context stay as the plan had them", async () => {
+      await switchTo(false);
+      fresh("p", { planContext: "Use TypeScript." });
+      await startWith(async () => made);
+      expect(fileOf("child-1").workingDir).toBe("/work/app");
+      expect(fileOf("child-1").planContext).toBe("Use TypeScript.");
+    });
+
+    it("off: asks git for nothing and leaves the thread's messages as they were", async () => {
+      await switchTo(false);
+      fresh("p");
+      const make = vi.fn(async () => made);
+      await startWith(make);
+      expect(make).not.toHaveBeenCalled();
+      expect(fileOf("child-1").messages).toEqual([request]);
+    });
+
+    it("on, with no working directory: nothing made, nothing said", async () => {
+      await switchTo(true);
+      fresh("p", { workingDir: null });
+      const make = vi.fn(async () => made);
+      await startWith(make);
+      expect(make).not.toHaveBeenCalled();
+      expect(fileOf("child-1").messages).toEqual([request]);
+    });
+
+    it("on but it fails: the thread still runs in the project folder, and says so", async () => {
+      await switchTo(true);
+      fresh("p");
+      await startWith(async () => {
+        throw new Error("/work/app is not in a git repository");
+      });
+      expect(hub.liveRun("child-1")).toMatchObject({ status: "running" });
+      const messages = fileOf("child-1").messages;
+      expect(messages).toHaveLength(2);
+      expect(messages[1].content).toMatch(/No separate copy.*not in a git repository.*project folder/);
+      const { createdWorktrees } = await import("../createdWorktrees.ts");
+      expect(createdWorktrees(messages)).toEqual([]);
+      expect(fileOf("child-1").workingDir).toBe("/work/app");
+    });
   });
 });

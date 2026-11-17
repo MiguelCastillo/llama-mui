@@ -21,6 +21,10 @@ export interface WorktreeStatus {
   unmerged: number | null;
   // The branch checked out in the repo's main working tree; null when unknown.
   base: string | null;
+  // The branch's latest commit as "<short hash> <title>"; null when unknown.
+  lastCommit: string | null;
+  // True when every commit of the branch is already on `base` (nothing to merge).
+  merged: boolean;
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -60,7 +64,8 @@ async function statusOf(dir: string, name: string): Promise<WorktreeStatus | nul
         unmerged = Number.isInteger(n) ? n : null;
       }
     }
-    return { name, branch, uncommitted: changes.length, unmerged, base };
+    const lastCommit = (await git(dir, "log", "-1", "--format=%h %s").catch(() => "")) || null;
+    return { name, branch, uncommitted: changes.length, unmerged, base, lastCommit, merged: unmerged === 0 };
   } catch {
     return null;
   }

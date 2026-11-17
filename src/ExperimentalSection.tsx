@@ -13,6 +13,12 @@ export const EXPERIMENTS: { key: keyof Experiments; label: string; summary: stri
     summary:
       "Before a tool call Claude can write a short note about what it is about to do. With this on, those notes are asked for apart from its reasoning summaries, on the models that write them: Fable 5 to 5.2, Mythos 5.1 and 5.2, Opus 5.5 and Sonnet 5.5. It applies to messages sent after you turn it on; other models are not affected. Still being built: chats don't show the notes yet.",
   },
+  {
+    key: "planWorktrees",
+    label: "Run each plan in its own copy of the project",
+    summary:
+      "Each plan thread works in its own copy of the project (a git worktree) on its own branch, so it can't change your project folder while it runs. It applies to plans started after you turn it on, and only when the chat's folder is a git project. Still being built.",
+  },
 ];
 
 // The rows, for a given state; the section below loads and saves it.

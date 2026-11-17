@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment, ChatMessage, PlanStep, PlanThread, Session } from "../api";
-import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage, threadResult, noteAskKind, worktreeLine, worktreeLines, reportParts } from "../planThread";
+import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage, threadResult, noteAskKind, worktreeTrouble, worktreeLine, worktreeLines, reportParts } from "../planThread";
 
 const step = (id: string, status: PlanStep["status"] = "pending", extra: Partial<PlanStep> = {}): PlanStep => ({
   id,
@@ -518,6 +518,25 @@ describe("worktreeLine", () => {
   });
   it("says all committed and on main when nothing is left", () => {
     expect(worktreeLine(w)).toBe("In worktree ui-updates (llama/ui-updates): all committed and on main");
+  });
+  it("names the last commit", () => {
+    expect(worktreeLine({ ...w, unmerged: 1, lastCommit: "abc1234 Add toggle" } as any)).toBe(
+      "In worktree ui-updates (llama/ui-updates): 1 commit not on main, last commit: abc1234 Add toggle",
+    );
+    expect(worktreeLine({ ...w, lastCommit: "abc1234 Add toggle", merged: true } as any)).toBe(
+      "In worktree ui-updates (llama/ui-updates): all committed and on main, last commit: abc1234 Add toggle",
+    );
+  });
+  it("says files are uncommitted for a dirty worktree, and calls it trouble", () => {
+    const dirty = { ...w, uncommitted: 3 };
+    expect(worktreeLine(dirty)).toBe("In worktree ui-updates (llama/ui-updates): 3 files uncommitted");
+    expect(worktreeTrouble([dirty])).toBe("Trouble: 3 files in worktree ui-updates (llama/ui-updates) not committed, so the work is not saved on its branch.");
+  });
+  it("is no trouble for a clean or merged worktree, or none", () => {
+    expect(worktreeTrouble([w])).toBeNull();
+    expect(worktreeTrouble([{ ...w, merged: true } as any])).toBeNull();
+    expect(worktreeTrouble([])).toBeNull();
+    expect(worktreeTrouble(undefined)).toBeNull();
   });
   it("uses singular and names the base branch", () => {
     expect(worktreeLine({ ...w, uncommitted: 1, base: "develop" })).toBe("In worktree ui-updates (llama/ui-updates): 1 file uncommitted");

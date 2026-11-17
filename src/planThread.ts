@@ -370,7 +370,17 @@ export function worktreeLine(w: WorktreeStatus): string {
   if (w.uncommitted > 0) parts.push(`${plural(w.uncommitted, "file", "files")} uncommitted`);
   if (w.unmerged && w.unmerged > 0) parts.push(`${plural(w.unmerged, "commit", "commits")} not on ${base}`);
   if (parts.length === 0) parts.push(w.unmerged === null ? "all committed" : `all committed and on ${base}`);
+  if (w.lastCommit) parts.push(`last commit: ${w.lastCommit}`);
   return `In worktree ${w.name} (${w.branch ?? "detached HEAD"}): ${parts.join(", ")}`;
+}
+
+// When files are left uncommitted in a worktree, the work isn't saved on its
+// branch: a sentence saying so, else null.
+export function worktreeTrouble(rows: WorktreeStatus[] | undefined): string | null {
+  const dirty = (rows ?? []).filter((w) => w.uncommitted > 0);
+  if (dirty.length === 0) return null;
+  const where = dirty.map((w) => `${plural(w.uncommitted, "file", "files")} in worktree ${w.name} (${w.branch ?? "detached HEAD"})`).join(", ");
+  return `Trouble: ${where} not committed, so the work is not saved on its branch.`;
 }
 
 // No worktrees: no lines, so nothing shows.

@@ -34,6 +34,9 @@ export interface Experiments {
   // Claude: ask for the notes it writes before a tool call, apart from its
   // reasoning (thinking display "updates").
   progressNotes: boolean;
+  // Server only: each plan thread works in its own git worktree, on its own
+  // branch, instead of the project folder. No connection reads it.
+  planWorktrees: boolean;
 }
 
 // What a model can do, as its connection says (a fact about the model, not a

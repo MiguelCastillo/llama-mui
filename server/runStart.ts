@@ -29,6 +29,7 @@ import { HttpError } from "./http.ts";
 import * as hub from "./runHub.ts";
 import { type RunnerDeps, isRunning, startRunner, startTurn } from "./runners.ts";
 import { deleteSession, readSession, revisionOf } from "./sessionFile.ts";
+import { type MakeWorktree, threadWorktree, withWorktreeRules } from "./threadWorktree.ts";
 
 // Runs one request to the server's own /api. A failure is a plain sentence
 // for the page, not a stack: the server being unreachable is the likely cause.
@@ -81,6 +82,8 @@ export async function buildEnv(session: any, options: RunOptions): Promise<Runne
 export interface StartDeps extends RunnerDeps {
   // Ids for new threads; tests choose their own.
   newId?: () => string;
+  // Makes a thread's worktree; git unless a test passes a fake.
+  makeWorktree?: MakeWorktree;
 }
 
 // A plan that has not started moves into a thread of its own, and runs there
@@ -101,9 +104,19 @@ async function startInThread(
 ): Promise<string> {
   const childId = moved.child.id;
   const env = await buildEnv(moved.child, options);
+  // With the planWorktrees switch on, the thread gets its own copy of the project
+  // first; its record (or the note that it couldn't be made) goes in the thread.
+  const own = await threadWorktree(moved.child, deps.makeWorktree);
+  // With a copy, every step runs in it: its folder is the thread's working
+  // directory, and its path, branch and rules go in the plan's context.
+  const child: Session = own.worktree
+    ? { ...moved.child, workingDir: own.worktree.path, planContext: withWorktreeRules(moved.child.planContext, own.worktree) }
+    : moved.child;
+  const runEnv = own.worktree ? await buildEnv(child, options) : env;
   const now = Date.now();
   await hub.replace(childId, () => ({
-    ...moved.child,
+    ...child,
+    messages: [...(moved.child.messages ?? []), ...own.messages],
     title: moved.child.title.slice(0, 100),
     modelName: null,
     userName: null,
@@ -124,7 +137,7 @@ async function startInThread(
     }
     throw e;
   }
-  await startRunner(childId, env, deps);
+  await startRunner(childId, runEnv, deps);
   return childId;
 }
 

@@ -52,7 +52,7 @@ export interface Preferences {
 // know is left out when settings load, and an old file without a key gets its
 // default.
 // The type is in src/connections/types.ts, where each connection reads it.
-export const EXPERIMENT_DEFAULTS: Experiments = { progressNotes: false };
+export const EXPERIMENT_DEFAULTS: Experiments = { progressNotes: false, planWorktrees: false };
 
 // Options for one model, keyed by its id (e.g. "unsloth/Qwen3.5-9B-GGUF:Q4_K_M"),
 // so they follow the model to any server that has it.

@@ -20,7 +20,7 @@
 
 import { type ChatMessage, type PlanStep, type PlanThread, streamChat } from "../src/api.ts";
 import { filesChanged, stepOutput } from "../src/agent/plan.ts";
-import { type ThreadResultParts, threadResultParts, threadStatus, worktreeLines } from "../src/planThread.ts";
+import { type ThreadResultParts, threadResultParts, threadStatus, worktreeLines, worktreeTrouble } from "../src/planThread.ts";
 import { liveRun } from "./runHub.ts";
 import { readSession } from "./sessionFile.ts";
 import { ToolError, type ToolSpec, fn } from "./toolkit.ts";
@@ -315,8 +315,12 @@ const readThread: ToolSpec = {
     }
     const files = filesChanged(messages.filter((m) => m.planStep));
     // A git read that fails leaves the worktree lines out; it never fails the answer.
-    const worktrees = await worktreeStatuses(note.sessionId, messages).then(worktreeLines, () => [] as string[]);
-    return overview(note.summary, threadResultParts({ plan: child.plan, messages }), files, worktrees);
+    const rows = await worktreeStatuses(note.sessionId, messages).catch(() => []);
+    const parts = threadResultParts({ plan: child.plan, messages });
+    // Uncommitted files in the worktree make a "done" thread a trouble.
+    const trouble = worktreeTrouble(rows);
+    if (trouble) parts.outcome = `${parts.outcome}\n${trouble}`;
+    return overview(note.summary, parts, files, worktreeLines(rows));
   },
 };
 

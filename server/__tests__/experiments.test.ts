@@ -18,6 +18,8 @@ vi.mock("node:os", async (importOriginal) => {
 const { load } = await import("../store.ts");
 const { experimentRoutes } = await import("../experiments.ts");
 
+const OFF = { progressNotes: false, planWorktrees: false };
+
 const invoke = async (method: string, body?: unknown) => {
   const req = Object.assign(Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]), {
     method,
@@ -37,21 +39,21 @@ const writeSettings = (settings: unknown) => {
 
 describe("the experiments setting", () => {
   it("is off when there are no settings yet", async () => {
-    expect((await load()).experiments).toEqual({ progressNotes: false });
-    expect((await invoke("GET")).body).toEqual({ progressNotes: false });
+    expect((await load()).experiments).toEqual(OFF);
+    expect((await invoke("GET")).body).toEqual(OFF);
   });
 
   it("is off for a settings file saved before it existed, and the rest of the file is kept", async () => {
     writeSettings({ preferences: { renderMarkdown: false }, dailyTokenLimit: 5 });
     const store = await load();
-    expect(store.experiments).toEqual({ progressNotes: false });
+    expect(store.experiments).toEqual(OFF);
     expect(store.preferences.renderMarkdown).toBe(false);
     expect(store.dailyTokenLimit).toBe(5);
   });
 
   it("is saved after a change, and a change leaves the other settings alone", async () => {
     writeSettings({ dailyTokenLimit: 5 });
-    expect((await invoke("PATCH", { progressNotes: true })).body).toEqual({ progressNotes: true });
+    expect((await invoke("PATCH", { progressNotes: true })).body).toEqual({ ...OFF, progressNotes: true });
     expect((await invoke("GET")).body.progressNotes).toBe(true);
     const store = await load();
     expect(store.experiments.progressNotes).toBe(true);
@@ -59,16 +61,26 @@ describe("the experiments setting", () => {
     expect((await invoke("PATCH", { progressNotes: false })).body.progressNotes).toBe(false);
   });
 
+  it("saves the plan-worktrees switch alone: off by default, on after a change, other switches untouched", async () => {
+    writeSettings({ experiments: { progressNotes: true } });
+    expect((await load()).experiments.planWorktrees).toBe(false);
+    expect((await invoke("PATCH", { planWorktrees: true })).body).toEqual({ progressNotes: true, planWorktrees: true });
+    const store = await load();
+    expect(store.experiments).toEqual({ progressNotes: true, planWorktrees: true });
+    expect((await invoke("PATCH", { planWorktrees: false })).body).toEqual({ progressNotes: true, planWorktrees: false });
+    await expect(invoke("PATCH", { planWorktrees: "yes" })).rejects.toThrow(/planWorktrees must be true or false/);
+  });
+
   it("ignores a key it doesn't know, in the file and in a change", async () => {
     writeSettings({ experiments: { progressNotes: true, somethingNewer: true } });
     const loaded = (await load()).experiments;
-    expect(loaded).toEqual({ progressNotes: true });
+    expect(loaded).toEqual({ ...OFF, progressNotes: true });
     const patched = await invoke("PATCH", { somethingNewer: true });
-    expect(patched.body).toEqual({ progressNotes: true });
+    expect(patched.body).toEqual({ ...OFF, progressNotes: true });
     expect(patched.body).not.toHaveProperty("somethingNewer");
     // A saved value that isn't true or false falls back to off.
     writeSettings({ experiments: { progressNotes: "yes" } });
-    expect((await load()).experiments).toEqual({ progressNotes: false });
+    expect((await load()).experiments).toEqual(OFF);
   });
 
   it("refuses a value that isn't true or false", async () => {
