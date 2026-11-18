@@ -5,7 +5,6 @@ import {
   countNested,
   deleteLockedIds,
   descendantIds,
-  filterTree,
   groupNames,
   groupTree,
   nestedHeldBy,
@@ -201,28 +200,6 @@ describe("nestedSessionFrom", () => {
     expect(s.plan).toBeNull();
     expect(s.todos).toEqual([]);
     expect(s.usage).toBeNull();
-  });
-});
-
-describe("filterTree", () => {
-  const rows = [row("alpha", null, 4), row("a-kid", "alpha", 3), row("beta", null, 2), row("b-hit", "beta", 1)];
-  const ids = (tree: ReturnType<typeof filterTree>) => tree.map((n) => [n.session.id, n.children.map((c) => c.session.id)]);
-  const has = (word: string) => (s: SessionSummary) => s.id.includes(word);
-
-  it("keeps everything when every session matches", () => {
-    expect(ids(filterTree(buildSessionTree(rows), () => true))).toEqual(ids(buildSessionTree(rows)));
-  });
-
-  it("a matching parent keeps all of its nested sessions", () => {
-    expect(ids(filterTree(buildSessionTree(rows), has("alpha")))).toEqual([["alpha", ["a-kid"]]]);
-  });
-
-  it("a matching nested session keeps its parent, with only the matches under it", () => {
-    expect(ids(filterTree(buildSessionTree(rows), has("hit")))).toEqual([["beta", ["b-hit"]]]);
-  });
-
-  it("drops what doesn't match", () => {
-    expect(filterTree(buildSessionTree(rows), has("zzz"))).toEqual([]);
   });
 });
 

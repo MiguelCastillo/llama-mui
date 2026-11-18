@@ -135,22 +135,6 @@ export function deleteLockedIds(tree: SessionNode[], inProgress: ReadonlySet<str
 // How many sessions the session `id` holds, for the delete question.
 export const nestedHeldBy = (summaries: SessionSummary[], id: string): number => descendantIds(summaries, id).length;
 
-// The tree narrowed to what a search matches. A top-level session that matches
-// keeps everything nested under it; one that doesn't stays only if something
-// nested under it matches, and then shows just those.
-export function filterTree(tree: SessionNode[], matches: (s: SessionSummary) => boolean): SessionNode[] {
-  const out: SessionNode[] = [];
-  for (const node of tree) {
-    if (matches(node.session)) {
-      out.push(node);
-      continue;
-    }
-    const children = node.children.filter((c) => matches(c.session));
-    if (children.length > 0) out.push({ session: node.session, children });
-  }
-  return out;
-}
-
 // A named set of top-level sessions, as the panel lists them. `name` is null
 // for the sessions in no group.
 export type SessionGroup = { name: string | null; nodes: SessionNode[] };

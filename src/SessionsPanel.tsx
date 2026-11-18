@@ -8,7 +8,6 @@ import {
   Divider,
   Drawer,
   IconButton,
-  InputAdornment,
   List,
   ListItem,
   ListItemButton,
@@ -22,19 +21,17 @@ import {
 } from "@mui/material";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import CheckIcon from "@mui/icons-material/Check";
-import ClearIcon from "@mui/icons-material/Clear";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DriveFileMoveOutlinedIcon from "@mui/icons-material/DriveFileMoveOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
-import SearchIcon from "@mui/icons-material/Search";
 import SubdirectoryArrowRightIcon from "@mui/icons-material/SubdirectoryArrowRight";
 import type { SessionSummary, WorkEntry } from "./api";
 import { StatusIcon } from "./StatusMark";
 import WorkPanel, { type MergeUi } from "./WorkPanel";
-import { buildSessionTree, deleteLockedIds, filterTree, groupNames, groupTree, type SessionNode } from "./sessionTree";
+import { buildSessionTree, deleteLockedIds, groupNames, groupTree, type SessionNode } from "./sessionTree";
 import { ARROW_SLOT } from "./SectionHeader";
 import SectionHeader from "./SectionHeader";
 import { useMemo, useState } from "react";
@@ -373,16 +370,7 @@ export default function SessionsPanel({
   // per-visit, like the groups' and the work section's.
   const [sessionsOpen, setSessionsOpen] = useState(true);
   const tree = useMemo(() => buildSessionTree(sessions), [sessions]);
-  // The search box narrows the tree by title; while it has text, groups open
-  // so every match shows.
-  const [query, setQuery] = useState("");
-  const needle = query.trim().toLowerCase();
-  const searching = needle !== "";
-  const shownTree = useMemo(
-    () => (searching ? filterTree(tree, (x) => displayTitle(x).toLowerCase().includes(needle)) : tree),
-    [tree, searching, needle],
-  );
-  const groups = useMemo(() => groupTree(shownTree), [shownTree]);
+  const groups = useMemo(() => groupTree(tree), [tree]);
   const names = useMemo(() => groupNames(sessions), [sessions]);
   // The "move to group" menu, and the box that names a new group.
   const [moveMenu, setMoveMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
@@ -471,43 +459,12 @@ export default function SessionsPanel({
             Your sessions show up here once you send a message.
           </Typography>
         ) : (
-          <>
-            <TextField
-            size="small"
-            placeholder="Search sessions"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-            sx={{ mx: 1, mb: 0.5 }}
-            slotProps={{
-              htmlInput: { "aria-label": "Search sessions" },
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon fontSize="small" />
-                  </InputAdornment>
-                ),
-                endAdornment: query ? (
-                  <InputAdornment position="end">
-                    <IconButton size="small" aria-label="Clear search" onClick={() => setQuery("")}>
-                      <ClearIcon fontSize="small" />
-                    </IconButton>
-                  </InputAdornment>
-                ) : undefined,
-              },
-            }}
-          />
           <List dense sx={{ overflowY: "auto", flexGrow: 1, px: 1, display: "flex", flexDirection: "column", gap: 0.25 }}>
-            {searching && groups.length === 0 && (
-              <Typography variant="body2" color="text.secondary" sx={{ px: 1 }}>
-                No sessions match.
-              </Typography>
-            )}
             {groups.map((g, i) => {
               const key = `group:${g.name}`;
               // The sessions in no group get a header only beside named groups.
               const titled = g.name !== null || groups.length > 1;
-              const open = !titled || searching || !collapsed.has(key);
+              const open = !titled || !collapsed.has(key);
               return (
                 <Box key={g.name ?? "(none)"} sx={{ display: "flex", flexDirection: "column", gap: 0.25, mt: i > 0 ? 3 : 0 }}>
                   {titled && (
@@ -523,9 +480,7 @@ export default function SessionsPanel({
               );
             })}
           </List>
-          </>
-        )
-        )}
+        ))}
       {/* Work started but not yet in the main branch, under its own header. */}
       <SectionHeader
         title="Work in progress"
