@@ -8,6 +8,9 @@
 //  - changes:  every file change (create, overwrite, edit) is approved.
 //  - commands: every command is approved, git or not. It runs as the user.
 //
+// A command that matches the dangerous-commands list (src/dangerousCommands.ts) is
+// never approved this way either: it always asks.
+//
 // Removing a worktree is never approved this way, and neither is a change to
 // the user's standing rules (~/.llama-mui/rules.md). What the tools check before
 // they ask (the paths a chat may reach, settings.json and the keys being off
@@ -24,7 +27,8 @@ export function autoApproves(flags: AutoApprove | undefined, approval: Approval)
   if (!flags) return false;
   // The user's standing rules are never approved for them: they govern every later reply.
   if (approval.type === "change") return flags.changes === true && !/[\\/]\.llama-mui[\\/]rules\.md$/.test(approval.path);
-  if (approval.type === "command") return flags.commands === true;
+  // A command in the dangerous-commands list always asks (the server sets `dangerous`).
+  if (approval.type === "command") return flags.commands === true && !approval.dangerous?.length;
   return false;
 }
 

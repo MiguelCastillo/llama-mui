@@ -157,6 +157,7 @@ import { lastEditable } from "./editLast";
 import { newId } from "./uuid";
 import FolderChip, { AttachmentIcon } from "./FolderChip";
 import ApprovalsMarker from "./ApprovalsMarker";
+import DangerousNote, { offersSessionWide } from "./DangerousNote";
 import { ATTACHMENTS_LOCKED_NOTE, folderForNewChat, folderIsFrozen } from "./sessionFolder";
 import SessionsPanel from "./SessionsPanel";
 import { useWorkInProgress } from "./useWorkInProgress";
@@ -4265,6 +4266,7 @@ function ApprovalPrompt({ approval, onDecide, onAlways, canMakePlan: offerPlan }
       <Typography variant="body2" color={why.missing ? "text.secondary" : "text.primary"} sx={{ mb: 0.5, overflowWrap: "anywhere" }}>
         {why.text}
       </Typography>
+      <DangerousNote approval={approval} />
       {approval.type === "command" ? (
         <>
           {(() => {
@@ -4361,7 +4363,8 @@ function ApprovalPrompt({ approval, onDecide, onAlways, canMakePlan: offerPlan }
           Approve all changes in this session
         </Button>
       )}
-      {onAlways && approval.type === "command" && (
+      {/* Not offered for a command the server says is in the dangerous-commands list. */}
+      {onAlways && approval.type === "command" && offersSessionWide(approval) && (
         <Tooltip title="Every command, git or not, runs as you with your network access and credentials">
           <Button size="small" color="warning" onClick={() => onAlways("commands")} sx={{ mt: 0.5, ml: "-5px" }}>
             Approve all commands in this session
