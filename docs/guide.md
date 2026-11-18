@@ -2277,6 +2277,22 @@ To restart from a phone, ask a chat model to do it: its commands run on this
 computer, so it calls `curl -X POST http://127.0.0.1:5170/restart`, then checks
 `/status`.
 
+### Main, worktrees and the ports
+
+`main` is the stable branch. The dev-stable servers (manager 5170, API 5172,
+page 5173) run from the project folder, which stays on `main`. Merging into
+`main` does not change what is running; the user restarts the manager when
+ready, and that builds the page from the files in the project folder. So that
+folder is not edited directly: it changes only when a branch is merged.
+
+Each piece of work is done in a worktree started from `main`, with its own
+branch. A copy of the app from a worktree is tested on spare ports, with its
+own manager, for example
+`MANAGER_PORT=5160 HTTPS_PORT=5167 HTTP_PORT=5166 npm run prod`, and stopped
+when done. Never stop or restart the dev-stable servers to test a change. A
+test copy reads and writes the same `~/.llama-mui` (chats, settings, keys), so
+it can touch real chats.
+
 ## The server's log
 
 llama-mui's server (the one `npm run prod` or `npm run dev` starts, not the page)

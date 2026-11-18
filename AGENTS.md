@@ -166,6 +166,9 @@ interface, and plain http on this computer only.
 
 5172 and 5173 are called dev-stable: no auto reload, restarted only by
 `POST /restart` on the manager. The manager never proxies traffic.
+Never stop or restart the dev-stable servers (5170-5173) to test a change: run
+a copy from a worktree on spare ports (for example `MANAGER_PORT=5160
+HTTPS_PORT=5167 HTTP_PORT=5166 npm run prod`) and stop it when done.
 
 - **https is HTTP/2, with HTTP/1.1 as the fallback.** Vite's https server speaks
   HTTP/2 on its own. `server/main.ts` uses `node:http2` `createSecureServer`
@@ -304,6 +307,11 @@ interface, and plain http on this computer only.
 
 ## Working here
 
+- **Change code in a worktree, not in the main folder.** `main` is stable and
+  its folder is what dev-stable builds from (a restart builds whatever files
+  are there), so don't edit or commit there. Call `create_worktree` with base
+  `main`, work and test in it (on spare ports), and merge into `main` only when
+  the checks pass and the user asks. The user restarts dev-stable when ready.
 - Check with `npx tsc --noEmit -p . && npx vitest run`.
 - Tests never touch the real `~/.llama-mui`: they point `os.homedir` at a temp
   folder before importing anything (see `server/__tests__/worktree.test.ts`).
