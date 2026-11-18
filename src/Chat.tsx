@@ -159,8 +159,6 @@ import FolderChip, { AttachmentIcon } from "./FolderChip";
 import ApprovalsMarker from "./ApprovalsMarker";
 import { ATTACHMENTS_LOCKED_NOTE, folderForNewChat, folderIsFrozen } from "./sessionFolder";
 import SessionsPanel from "./SessionsPanel";
-import WorkPanel from "./WorkPanel";
-import WorkMarker from "./WorkMarker";
 import { useWorkInProgress } from "./useWorkInProgress";
 import { useMergeAttempt } from "./useMergeAttempt";
 import Panel, { PanelAction, PanelButton } from "./Panel";
@@ -259,7 +257,6 @@ import { descendantIds, nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 const TOOLBAR_KEY = "llama-mui:toolbarOpen";
 // Whether the chats panel is open (wide screens; on phones and small windows it's a drawer).
 const SESSIONS_OPEN_KEY = "llama-mui:sessionsOpen";
-const WORK_OPEN_KEY = "llama-mui:workOpen";
 function loadSessionId(): string {
   try {
     const id = localStorage.getItem(SESSION_KEY);
@@ -701,26 +698,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     saveFlag(SESSIONS_OPEN_KEY, open);
   };
   // On phones the panel is a drawer that starts closed every time.
-  const [drawerOpen, setDrawerOpenState] = useState(false);
-  // The work pane: a saved flag on wide screens (closed at first), a drawer on phones.
-  const [workOpen, setWorkOpenState] = useState(() => loadFlag(WORK_OPEN_KEY, false));
-  const [workDrawerOpen, setWorkDrawerOpenState] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [workReload, setWorkReload] = useState(0);
   const workEntries = useWorkInProgress(workingDir, workReload);
   const workMerge = useMergeAttempt(workingDir, () => setWorkReload((n) => n + 1));
-  // On phones only one drawer is open at a time: opening one closes the other.
-  const setDrawerOpen = (open: boolean) => {
-    setDrawerOpenState(open);
-    if (open) setWorkDrawerOpenState(false);
-  };
-  const setWorkDrawerOpen = (open: boolean) => {
-    setWorkDrawerOpenState(open);
-    if (open) setDrawerOpenState(false);
-  };
-  const setWorkOpen = (open: boolean) => {
-    setWorkOpenState(open);
-    saveFlag(WORK_OPEN_KEY, open);
-  };
   // What was last saved or loaded, so opening a chat doesn't save it again
   // (which would move it to the top of the list).
   const savedKey = useRef("");
@@ -2235,11 +2216,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           onRename={renameSessionLocal}
           onGroup={groupSessionLocal}
           onClose={() => setDrawerOpen(false)}
-        />
-      }
-      aside={
-        <WorkPanel
-          entries={workEntries}
+          workEntries={workEntries}
           merge={{
             attempt: workMerge.attempt,
             error: workMerge.error,
@@ -2248,9 +2225,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             discard: () => void workMerge.discard(),
             dismiss: workMerge.dismiss,
           }}
-          open={drawerMode ? workDrawerOpen : workOpen}
-          narrow={drawerMode}
-          onClose={() => (drawerMode ? setWorkDrawerOpen(false) : setWorkOpen(false))}
         />
       }
       top={
@@ -2644,10 +2618,6 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         composer={
         <>
           <UsageWarning refreshKey={turnRunning} sx={{ mb: 1 }} />
-          <WorkMarker
-            count={workEntries.length}
-            onOpen={() => (drawerMode ? setWorkDrawerOpen(!workDrawerOpen) : setWorkOpen(!workOpen))}
-          />
           <Composer
             box={box}
             sessionId={sessionId}

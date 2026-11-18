@@ -21,8 +21,7 @@ const entry = (over: Partial<WorkEntry>): WorkEntry => ({
   ...over,
 });
 
-const render = (entries: WorkEntry[], props: { open?: boolean; narrow?: boolean } = {}) =>
-  renderToStaticMarkup(<WorkPanel entries={entries} open={props.open ?? true} narrow={props.narrow ?? false} onClose={() => {}} />);
+const render = (entries: WorkEntry[]) => renderToStaticMarkup(<WorkPanel entries={entries} />);
 
 describe("WorkPanel", () => {
   it("says nothing is in progress when empty", () => {
@@ -80,7 +79,7 @@ describe("WorkPanel", () => {
     });
     const att = (over: Partial<MergeAttemptState>): MergeAttemptState => ({ id: "1", branch: "llama/w", state: "ready", checks: [], ...over });
     const renderM = (entries: WorkEntry[], merge: MergeUi) =>
-      renderToStaticMarkup(<WorkPanel entries={entries} open narrow={false} onClose={noop} merge={merge} />);
+      renderToStaticMarkup(<WorkPanel entries={entries} merge={merge} />);
 
     it("offers Merge on thread and older branches with unmerged commits and no uncommitted files", () => {
       const html = renderM([entry({}), entry({ kind: "branch", name: "old", branch: "old" })], ui(null));
@@ -136,11 +135,6 @@ describe("WorkPanel", () => {
     it("shows a start error", () => {
       expect(renderM([entry({})], ui(null, "Already in progress"))).toContain("Already in progress");
     });
-  });
-
-  it("draws nothing when docked and closed, and a drawer when narrow", () => {
-    expect(render([entry({})], { open: false })).toBe("");
-    expect(render([entry({})], { narrow: true, open: false })).not.toContain("Work in progress");
   });
 
   it("names states in plain words", () => {

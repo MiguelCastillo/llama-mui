@@ -1,5 +1,4 @@
 import {
-  alpha,
   Box,
   Button,
   Dialog,
@@ -32,9 +31,12 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import SearchIcon from "@mui/icons-material/Search";
 import SubdirectoryArrowRightIcon from "@mui/icons-material/SubdirectoryArrowRight";
-import type { SessionSummary } from "./api";
+import type { SessionSummary, WorkEntry } from "./api";
 import { StatusIcon } from "./StatusMark";
+import WorkPanel, { type MergeUi } from "./WorkPanel";
 import { buildSessionTree, deleteLockedIds, filterTree, groupNames, groupTree, type SessionNode } from "./sessionTree";
+import { ARROW_SLOT } from "./SectionHeader";
+import SectionHeader from "./SectionHeader";
 import { useMemo, useState } from "react";
 
 const DEFAULT_WIDTH = 260;
@@ -42,8 +44,8 @@ const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
 // How far each level of nesting moves a row to the right (MUI spacing units).
 const INDENT = 1.5;
-// Room kept at the left of every row for the show/hide arrow.
-const ARROW_SLOT = "1.5rem";
+// How tall the work-in-progress section may grow before it scrolls on its own.
+const WORK_MAX_HEIGHT = "24rem";
 
 // Load the saved width, or default to 260.
 function loadWidth(): number {
@@ -330,11 +332,17 @@ export default function SessionsPanel({
   onRename,
   onGroup,
   onClose,
+  workEntries,
+  merge,
 }: {
   sessions: SessionSummary[];
   currentId: string;
   open: boolean;
   narrow: boolean;
+  // Work started but not yet in the main branch: shown under a collapsible
+  // section below the sessions list (see WorkPanel).
+  workEntries?: WorkEntry[];
+  merge?: MergeUi;
   // A reply is running: switching chats would cut it off, so only the
   // current one stays clickable.
   busy: boolean;
@@ -358,6 +366,12 @@ export default function SessionsPanel({
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   // Rows whose nested sessions are hidden. Kept here only, not saved.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  // The work-in-progress section, open by default. Kept here only, not saved.
+  const [workOpen, setWorkOpen] = useState(true);
+  // The sessions section (search + list), open by default. Kept here only, not
+  // saved: the panel already remembers its width, and the section's state is
+  // per-visit, like the groups' and the work section's.
+  const [sessionsOpen, setSessionsOpen] = useState(true);
   const tree = useMemo(() => buildSessionTree(sessions), [sessions]);
   // The search box narrows the tree by title; while it has text, groups open
   // so every match shows.
@@ -433,25 +447,32 @@ export default function SessionsPanel({
         ...(narrow && { width: "75vw" }),
       }}
     >
-      <Box sx={{ display: "flex", alignItems: "center", pl: 2, pr: 1, pt: 1, pb: 0.5 }}>
-        <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
-          Sessions
-        </Typography>
-        <Tooltip title="New session">
-          <span>
-            <IconButton onClick={onNew} disabled={busy} aria-label="New session">
-              <AddCommentIcon />
-            </IconButton>
-          </span>
-        </Tooltip>
-      </Box>
-      {sessions.length === 0 ? (
-        <Typography variant="body2" color="text.secondary" sx={{ px: 2 }}>
-          Your sessions show up here once you send a message.
-        </Typography>
-      ) : (
-        <>
-          <TextField
+      {/* The sessions section's header: a tinted band like the group and work
+          headers, so the whole list collapses as one block. */}
+      <SectionHeader
+        title="Sessions"
+        open={sessionsOpen}
+        onToggle={() => setSessionsOpen((o) => !o)}
+        count={sessions.length}
+        action={
+          <Tooltip title="New session">
+            <span>
+              <IconButton size="small" onClick={onNew} disabled={busy} aria-label="New session" sx={{ mr: 0.5 }}>
+                <AddCommentIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        }
+        sx={{ mt: 1 }}
+      />
+      {sessionsOpen &&
+        (sessions.length === 0 ? (
+          <Typography variant="body2" color="text.secondary" sx={{ px: 2 }}>
+            Your sessions show up here once you send a message.
+          </Typography>
+        ) : (
+          <>
+            <TextField
             size="small"
             placeholder="Search sessions"
             value={query}
@@ -490,30 +511,35 @@ export default function SessionsPanel({
               return (
                 <Box key={g.name ?? "(none)"} sx={{ display: "flex", flexDirection: "column", gap: 0.25, mt: i > 0 ? 3 : 0 }}>
                   {titled && (
-                    <ListItemButton
-                      onClick={() => toggleCollapsed(key)}
-                      aria-expanded={open}
-                      // Lined up with the rows' arrows, on a band of its own: a tint of the theme's
-                      // colour, so it reads apart from the grey of a hovered or open row.
-                      sx={{ borderRadius: 1, py: 0.5, pl: 0, pr: 1.5, bgcolor: (t) => alpha(t.palette.primary.main, 0.14), "&:hover": { bgcolor: (t) => alpha(t.palette.primary.main, 0.22) } }}
-                    >
-                      <Box sx={{ width: ARROW_SLOT, display: "flex", justifyContent: "center", flexShrink: 0 }}>
-                        {open ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
-                      </Box>
-                      <Typography variant="body1" noWrap sx={{ flexGrow: 1, pl: 0.5, fontWeight: 500 }}>
-                        {g.name ?? "Ungrouped"}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {g.nodes.length}
-                      </Typography>
-                    </ListItemButton>
+                    <SectionHeader
+                      title={g.name ?? "Ungrouped"}
+                      open={open}
+                      onToggle={() => toggleCollapsed(key)}
+                      count={g.nodes.length}
+                    />
                   )}
                   {open && g.nodes.map((node) => <SessionRow key={node.session.id} node={node} depth={0} ctx={ctx} />)}
                 </Box>
               );
             })}
           </List>
-        </>
+          </>
+        )
+        )}
+      {/* Work started but not yet in the main branch, under its own header. */}
+      <SectionHeader
+        title="Work in progress"
+        open={workOpen}
+        onToggle={() => setWorkOpen((o) => !o)}
+        count={(workEntries ?? []).length}
+        sx={{ mt: 1 }}
+      />
+      {workOpen && (
+        // Its own scroll, so a long list never pushes the panel's resize
+        // handle out of reach.
+        <Box sx={{ overflowY: "auto", maxHeight: WORK_MAX_HEIGHT, px: 1 }}>
+          <WorkPanel entries={workEntries ?? []} merge={merge} />
+        </Box>
       )}
     </Box>
   );

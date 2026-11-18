@@ -1,10 +1,9 @@
-import { Box, Button, Drawer, Link, Typography } from "@mui/material";
+import { Box, Button, Link, Typography } from "@mui/material";
 import type { MergeAttemptState, WorkEntry } from "./api";
 import { PANEL_VARIANTS } from "./Panel";
 import { sessionHash } from "./sessionRoute";
 import { ago } from "./SessionsPanel";
 
-const WIDTH = 300;
 // How many file names an entry lists before "and N more".
 const FILES_SHOWN = 5;
 
@@ -112,7 +111,7 @@ function Entry({ entry: e, merge }: { entry: WorkEntry; merge?: MergeUi }) {
     // The look of a quiet panel (Panel.tsx), without its hover toolbar.
     <Box sx={PANEL_VARIANTS.actionDone}>
       <Box sx={{ width: "100%", minWidth: 0 }} data-work-entry={e.kind}>
-        <Typography variant="body2" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
+        <Typography variant="body1" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
           {e.purpose ?? "No description"}
         </Typography>
         <Typography variant="caption" color="text.secondary" component="div" sx={{ overflowWrap: "anywhere" }}>
@@ -154,32 +153,16 @@ function Entry({ entry: e, merge }: { entry: WorkEntry; merge?: MergeUi }) {
 
 // Work started but not yet in the main branch of this project: what each set
 // of changes is for, what state it is in, and how big it is. Read-only.
-// Beside the chat on wide screens; on phones it slides in over it.
+// Rendered inside the sessions panel, under a collapsible section header.
 export default function WorkPanel({
   entries,
-  open,
-  narrow,
-  onClose,
   merge,
 }: {
   merge?: MergeUi;
   entries: WorkEntry[];
-  open: boolean;
-  narrow: boolean;
-  onClose: () => void;
 }) {
-  const list = (
-    <Box
-      sx={{
-        width: narrow ? "75vw" : WIDTH,
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      <Typography variant="subtitle2" sx={{ pl: 2, pr: 1, pt: 1.5, pb: 0.5 }}>
-        Work in progress
-      </Typography>
+  return (
+    <Box sx={{ width: "100%" }}>
       {merge?.error && (
         <Typography variant="caption" color="error" component="div" sx={{ px: 2, pb: 0.5, overflowWrap: "anywhere" }}>
           {merge.error}{" "}
@@ -211,16 +194,5 @@ export default function WorkPanel({
         </Box>
       )}
     </Box>
-  );
-  if (narrow) {
-    return (
-      <Drawer anchor="right" open={open} onClose={onClose}>
-        {list}
-      </Drawer>
-    );
-  }
-  if (!open) return null;
-  return (
-    <Box sx={{ flexShrink: 0, height: "100dvh", borderLeft: 1, borderColor: "divider", width: WIDTH }}>{list}</Box>
   );
 }
