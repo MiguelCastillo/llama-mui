@@ -9,8 +9,7 @@ const base = { loaded: true, canClone: true, hasModel: true };
 
 describe("planState", () => {
   it("reads a plan's steps", () => {
-    expect(planState([step("pending"), step("pending")], false)).toEqual({ finished: false, unfinished: true, started: false, running: false, stepRunning: false });
-    expect(planState([step("done"), step("running")], false)).toMatchObject({ stepRunning: true });
+    expect(planState([step("pending"), step("pending")], false)).toEqual({ finished: false, unfinished: true, started: false, running: false });
     expect(planState([step("done"), step("pending")], false)).toMatchObject({ unfinished: true, started: true });
     expect(planState([step("pending", "stopped")], false)).toMatchObject({ started: true });
     expect(planState([step("done"), step("done")], false)).toMatchObject({ finished: true, unfinished: false });
@@ -33,30 +32,35 @@ describe("allowedActions", () => {
     }
   });
 
+  it("never offers Approve while another server holds the run or the owner is unknown", () => {
+    for (const holder of ["elsewhere", "unknown"] as Holder[]) {
+      for (const p of [null, plan({}), plan({ running: true })]) {
+        expect(list(allowedActions({ ...base, holder, plan: p }))).not.toContain("approve");
+      }
+    }
+  });
+
   for (const holder of ["none", "here"] as Holder[]) {
     describe(`when ${holder === "none" ? "no one runs it" : "this server runs it"}`, () => {
       const go = (plan: PlanState | null, extra: object = {}) => list(allowedActions({ ...base, holder, plan, ...extra }));
 
       it("a chat with no plan: send and resend", () => {
-        expect(go(null)).toEqual(["resend", "send"]);
-        expect(go(null, { hasModel: false })).toEqual(["resend"]);
+        expect(go(null)).toEqual(["approve", "resend", "send"]);
+        expect(go(null, { hasModel: false })).toEqual(["approve", "resend"]);
       });
       it("a plan that hasn't started: Run, Edit, Discard", () => {
-        expect(go(plan({}))).toEqual(["discard", "edit", "resend", "run", "send"]);
+        expect(go(plan({}))).toEqual(["approve", "discard", "edit", "resend", "run", "send"]);
       });
       it("a plan that has started: Continue instead of Run", () => {
-        expect(go(plan({ started: true }))).toEqual(["continue", "discard", "edit", "resend", "send"]);
+        expect(go(plan({ started: true }))).toEqual(["approve", "continue", "discard", "edit", "resend", "send"]);
       });
       it("a running plan: Pause, and sending even with no model; no Discard, Run or Continue", () => {
-        expect(go(plan({ running: true, started: true }), { hasModel: false })).toEqual(["edit", "pause", "resend", "send"]);
-      });
-      it("a step shown as running: no Discard", () => {
-        expect(go(plan({ started: true, stepRunning: true }))).not.toContain("discard");
+        expect(go(plan({ running: true, started: true }), { hasModel: false })).toEqual(["approve", "edit", "pause", "resend", "send"]);
       });
       it("a finished plan: Clone only if it can be cloned; nothing to run, edit or discard", () => {
         const done = plan({ finished: true, unfinished: false, started: true });
-        expect(go(done)).toEqual(["clone", "resend", "send"]);
-        expect(go(done, { canClone: false })).toEqual(["resend", "send"]);
+        expect(go(done)).toEqual(["approve", "clone", "resend", "send"]);
+        expect(go(done, { canClone: false })).toEqual(["approve", "resend", "send"]);
       });
       it("never offers Take over", () => {
         expect(go(plan({}))).not.toContain("takeOver");
@@ -83,11 +87,11 @@ describe("sessionActions: the holder is decided from the run record", () => {
   });
 
   it("no run: the idle set for an unstarted plan", () => {
-    expect(actions(session("pending"), null)).toEqual(["discard", "edit", "resend", "run", "send"]);
+    expect(actions(session("pending"), null)).toEqual(["approve", "discard", "edit", "resend", "run", "send"]);
   });
 
   it("this server's run: Pause, no Run or Discard", () => {
-    expect(actions(session("done", "running"), record())).toEqual(["edit", "pause", "resend", "send"]);
+    expect(actions(session("done", "running"), record())).toEqual(["approve", "edit", "pause", "resend", "send"]);
   });
 
   it("another server owns the run, with a step marked running: only Take over", () => {
@@ -98,8 +102,8 @@ describe("sessionActions: the holder is decided from the run record", () => {
 
   it("the other server's owner has gone stale: back to the idle set", () => {
     const stale = record({ owner: owner({ serverId: "other", checkedAt: now - 60_000 }) });
-    expect(actions(session("done", "running"), stale)).toEqual(["edit", "resend", "send"]);
-    expect(actions(session("done", "pending"), stale)).toEqual(["continue", "discard", "edit", "resend", "send"]);
+    expect(actions(session("done", "running"), stale)).toEqual(["approve", "discard", "edit", "resend", "send"]);
+    expect(actions(session("done", "pending"), stale)).toEqual(["approve", "continue", "discard", "edit", "resend", "send"]);
   });
 
   it("an unreadable record gives nothing", () => {
@@ -110,7 +114,7 @@ describe("sessionActions: the holder is decided from the run record", () => {
   });
 
   it("a finished plan can be cloned only when no run is active", () => {
-    expect(actions(session("done", "done"), null)).toEqual(["clone", "resend", "send"]);
-    expect(actions(session("done", "done"), record({ kind: "turn" }))).toEqual(["resend", "send"]);
+    expect(actions(session("done", "done"), null)).toEqual(["approve", "clone", "resend", "send"]);
+    expect(actions(session("done", "done"), record({ kind: "turn" }))).toEqual(["approve", "resend", "send"]);
   });
 });

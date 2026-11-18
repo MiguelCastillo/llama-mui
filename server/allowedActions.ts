@@ -38,8 +38,6 @@ export interface PlanState {
   unfinished: boolean; // the next step is pending, failed or waiting: Run or Continue has something to do
   started: boolean; // a step has run, or was stopped with a note: the button says Continue
   running: boolean;
-  // A step is marked running in what is shown: the plan can't be discarded.
-  stepRunning?: boolean;
 }
 
 export function planState(steps: PlanStep[], running: boolean): PlanState {
@@ -49,7 +47,6 @@ export function planState(steps: PlanStep[], running: boolean): PlanState {
     unfinished: next?.status === "pending" || next?.status === "failed" || next?.status === "waiting",
     started: steps.some((s) => s.status !== "pending" || !!s.note),
     running,
-    stepRunning: steps.some((s) => s.status === "running"),
   };
 }
 
@@ -76,7 +73,7 @@ export function allowedActions({ loaded, holder, plan, canClone, hasModel = true
   if (plan.unfinished && !plan.running) allowed.add(plan.started ? "continue" : "run");
   if (plan.running) allowed.add("pause");
   if (!plan.finished) allowed.add("edit"); // the step rows decide what is editable while it runs
-  if (!plan.finished && !plan.running && !plan.stepRunning) allowed.add("discard");
+  if (!plan.finished && !plan.running) allowed.add("discard");
   if (plan.finished && canClone) allowed.add("clone");
   return allowed;
 }
