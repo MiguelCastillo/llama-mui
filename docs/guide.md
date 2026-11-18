@@ -2252,6 +2252,31 @@ of the list the model is sent: from `contextStart` on.
 - **Not configurable.** When it runs is fixed in the code, and the wording of the
   request is that file; `rules.md` is for rules you choose.
 
+## The restart manager
+
+`npm run prod` starts a small manager, not the app directly. The manager builds
+the page, starts the app as its own child process (ports 5173 and 5172), and
+stays running beside it. The app never reloads when files change; it restarts
+only when asked. (`npm run prod:direct` runs the app alone, as before.)
+
+The manager listens on port 5170, on this computer only (`MANAGER_PORT`
+changes it). It has two requests:
+
+- `POST /restart` answers at once, then about 2 seconds later builds the page
+  and restarts the app. If the build fails, the running app is left alone.
+  Runs in progress are interrupted the way any restart interrupts them.
+- `GET /status` says whether the app is running, stopped, restarting or
+  crashed, its process number, and when it last started, restarted and built.
+
+It never passes page or API traffic along, so the app's own check of which
+devices may connect stays in charge. It refuses a request that is not from this
+computer or that carries a proxy header. It does not restart the app by itself
+after a crash; the status shows "crashed" until someone asks for a restart.
+
+To restart from a phone, ask a chat model to do it: its commands run on this
+computer, so it calls `curl -X POST http://127.0.0.1:5170/restart`, then checks
+`/status`.
+
 ## The server's log
 
 llama-mui's server (the one `npm run prod` or `npm run dev` starts, not the page)

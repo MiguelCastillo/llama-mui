@@ -162,6 +162,10 @@ interface, and plain http on this computer only.
 |---|---|---|---|
 | `npm run dev` | Vite (`vite.config.ts`, `/api` comes from `server/plugin.ts`) | 5175 (`HTTPS_PORT`) | 5174 (`HTTP_PORT`) |
 | `npm run prod` | Node (`server/main.ts`, serves `dist`) | 5173 (`HTTPS_PORT`) | 5172 (`HTTP_PORT`) |
+| restart manager (`server/manager/`, started by `npm run prod`) | none | none | 5170 (`MANAGER_PORT`) |
+
+5172 and 5173 are called dev-stable: no auto reload, restarted only by
+`POST /restart` on the manager. The manager never proxies traffic.
 
 - **https is HTTP/2, with HTTP/1.1 as the fallback.** Vite's https server speaks
   HTTP/2 on its own. `server/main.ts` uses `node:http2` `createSecureServer`

@@ -4,7 +4,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "prod": "vite build && node server/main.ts",
+    "prod": "node server/manager/main.ts",
+    "prod:direct": "vite build && node server/main.ts",
     "why": "node server/why/cli.ts",
     "test": "vitest run"
   },
