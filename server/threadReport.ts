@@ -27,7 +27,7 @@
 
 import { type ReportInput, askForReport, fallbackReport } from "../src/agent/threadReport.ts";
 import type { PlanThread, Session, ThreadOutcome } from "../src/api.ts";
-import { threadStatus, worktreeTrouble } from "../src/planThread.ts";
+import { threadStatus, withWorktreeTrouble, worktreeTrouble } from "../src/planThread.ts";
 import type { RunnerEnv } from "../src/runnerTypes.ts";
 import { HttpError } from "./http.ts";
 import * as hub from "./runHub.ts";
@@ -109,9 +109,9 @@ export async function reportToParent(end: RunEnd, ask: AskReport = askModel): Pr
   try {
     let status = threadStatus(end.session);
     if (status === "missing") return;
-    // Files left uncommitted in the thread's worktree: not done, but trouble.
+    // Files left uncommitted in the thread's worktree: all steps done, but the work isn't saved on its branch.
     const trouble = worktreeTrouble(await worktreeStatuses(end.id, end.session.messages).catch(() => []));
-    if (trouble && status === "done") status = "failed";
+    status = withWorktreeTrouble(status, trouble) as typeof status;
     if (!(await writeNote(parentId, end.id, status, undefined))) return;
 
     const steps = end.session.plan ?? [];

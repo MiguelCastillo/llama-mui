@@ -302,7 +302,8 @@ only what it needs, in tiers that each cost more than the one before:
    (the overview below), not from the last thing said in the thread, which can
    be a check's "STEP NOT DONE" line.
 2. **`read_thread`, no request to a model:** an overview of the thread, in this
-   order: `Thread:` (its summary); `Outcome:` SUCCESS, FAILED or NOT FINISHED;
+   order: `Thread:` (its summary); `Outcome:` SUCCESS, DONE, NOT COMMITTED (every step done, but the worktree
+   has files not committed; the Trouble line says which), FAILED or NOT FINISHED;
    one line per step with its state, how long it took and its note; `Result:`
    (the plan's result when every step is done, otherwise the last words of the
    first step that isn't); `Next:` for a thread that failed, was disputed, is
@@ -1459,8 +1460,12 @@ the step, not in the chat.
   buttons along the bottom. While the thread's run is going the heading is
   **Running in a thread**, with a spinner, and the plan summary under it. When
   the run ends, the spinner goes away and the heading says how it ended, with
-  an icon: **Done in a thread** (every step done), **Failed in a thread** (a
-  step failed, or one didn't pass its check) or **Not finished in a thread**
+  an icon: **Done in a thread** (every step done), **Done in a thread, not
+  committed** (every step done, but the worktree has files not committed; a
+  warning look, not the error one, and the same buttons as Done),
+  **Failed in a thread** (a step failed, or one didn't pass its check; a failed
+  step with uncommitted files is still Failed; notes saved earlier keep
+  Failed, nothing is migrated) or **Not finished in a thread**
   (stopped, or waiting for you). Under the summary is a short report of what
   happened: a sentence or two when it worked, with a **Follow-up:** line only
   if something is still to do (restart the server, commit); when it didn't,

@@ -17,6 +17,10 @@ vi.mock("node:os", async (importOriginal) => {
 });
 vi.mock("../sessionFile.ts", async (original) => (await import("./memorySessions.ts")).withMemory(await original<object>()));
 
+const mockWorktrees = vi.hoisted(() => vi.fn());
+vi.mock("../worktreeStatus.ts", () => ({ worktreeStatuses: mockWorktrees }));
+const DIRTY = [{ name: "ui", branch: "llama/ui", uncommitted: 2, unmerged: 0, base: "main" }];
+
 const hub = await import("../runHub.ts");
 const runners = await import("../runners.ts");
 const { reportToParent, REPORT_TIMEOUT_MS } = await import("../threadReport.ts");
@@ -85,6 +89,8 @@ const settle = (id: string) => vi.waitFor(() => expect(hub.liveRun(id)).toBeNull
 let events: any[] = [];
 let unsubscribe = () => {};
 beforeEach(() => {
+  mockWorktrees.mockReset();
+  mockWorktrees.mockResolvedValue([]);
   resetFakes();
   asked.length = 0;
   events = [];
@@ -154,6 +160,28 @@ describe("a thread reports to its parent when its run ends", () => {
     expect(input.steps.map((s) => s.status)).toEqual(["done", "failed"]);
     expect(input.steps[1]!.note).toBe("npm test failed: 2 errors");
     expect(input.messages.at(-1)!.content).toBe("I changed a.ts and b.ts.");
+  });
+
+  it("all steps done with files left uncommitted is an uncommitted note, not a failed one", async () => {
+    mockWorktrees.mockResolvedValue(DIRTY);
+    parentSession();
+    threadSession();
+    const { finished } = await startThread(model("It made both changes."));
+    finish("kid", "s1");
+    await vi.waitFor(() => expect(fileOf("kid").plan[0].status).toBe("done"));
+    finish("kid", "s2");
+    await finished;
+    expect(thread()).toMatchObject({ status: "uncommitted", report: { text: expect.stringContaining("2 files in worktree ui") } });
+  });
+
+  it("a failed step stays failed even when files are uncommitted", async () => {
+    mockWorktrees.mockResolvedValue(DIRTY);
+    parentSession();
+    threadSession();
+    const { finished } = await startThread(model("Step 1 failed."));
+    finish("kid", "s1", { status: "failed", note: "tests fail" });
+    await finished;
+    expect(thread()).toMatchObject({ status: "failed" });
   });
 
   it("a failed step is a failed note", async () => {

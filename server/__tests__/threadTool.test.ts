@@ -103,6 +103,17 @@ describe("read_thread", () => {
     expect(text).toContain("Files changed: none");
   });
 
+  it("shows a finished thread with uncommitted files as done, not committed, with the trouble line", async () => {
+    await writeSession("r6", done());
+    await writeSession("rp6", { threads: [note("r6", "Worktree")] });
+    mockWorktrees.mockResolvedValueOnce([{ name: "ui", branch: "llama/ui", uncommitted: 2, unmerged: 0, base: "main" }]);
+    const text = await read("rp6");
+    expect(text).toContain("Outcome: DONE, NOT COMMITTED");
+    expect(text).not.toContain("SUCCESS");
+    expect(text).not.toContain("FAILED");
+    expect(text).toContain("Trouble: 2 files in worktree ui (llama/ui)");
+  });
+
   it("adds the worktree lines, and leaves them out when git can't be read", async () => {
     await writeSession("r5", done());
     await writeSession("rp5", { threads: [note("r5", "Worktree")] });

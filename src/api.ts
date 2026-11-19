@@ -979,8 +979,10 @@ export interface PlanThread {
   report?: { text: string; at: number };
 }
 
-// How a thread's run ended: every step done, a step failed, or neither.
-export type ThreadOutcome = "done" | "failed" | "unfinished";
+// How a thread's run ended: every step done, every step done but files in the
+// thread's worktree not committed, a step failed, or none of these. Notes saved
+// before "uncommitted" existed keep "failed" for that case.
+export type ThreadOutcome = "done" | "uncommitted" | "failed" | "unfinished";
 
 export interface Todo {
   id: string;
