@@ -93,6 +93,11 @@ export interface Store {
   // Whether devices other than this computer may connect (Settings → Phone;
   // see server/lan.ts). Off until the user turns it on.
   otherDevices: boolean;
+  // Commands that always ask for approval, whatever "approve all commands" says
+  // (see server/dangerousSetting.ts, which reads and checks this). Kept as
+  // saved, unknown fields included; only a boolean false in `enabled` turns the
+  // check off.
+  dangerousCommands: Record<string, unknown>;
 }
 
 // Exported so the file tools can refuse to read it: it holds API keys.
@@ -125,6 +130,7 @@ const empty = (): Store => ({
   defaultPersona: "Builder",
   dailyTokenLimit: 0,
   otherDevices: false,
+  dangerousCommands: { enabled: true, off: [], custom: [] },
 });
 
 // Ids of connectors whose saved key wouldn't open when a store was loaded, by

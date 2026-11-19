@@ -170,7 +170,7 @@ export function stepDetail(step: PlanStep, n: number, messages: ChatMessage[]): 
   return `${head}\n\n${cut}${room ? body.slice(-room) : ""}`;
 }
 
-const WORDS: Record<string, string> = { done: "done", failed: "failed", unfinished: "not finished" };
+const WORDS: Record<string, string> = { done: "done", uncommitted: "done, but not committed", failed: "failed", unfinished: "not finished" };
 
 // The threads this chat started, one per line, for the model to pick from.
 const listText = (threads: PlanThread[]) =>
@@ -316,9 +316,9 @@ const readThread: ToolSpec = {
     const files = filesChanged(messages.filter((m) => m.planStep));
     // A git read that fails leaves the worktree lines out; it never fails the answer.
     const rows = await worktreeStatuses(note.sessionId, messages).catch(() => []);
-    const parts = threadResultParts({ plan: child.plan, messages });
-    // Uncommitted files in the worktree make a "done" thread a trouble.
+    // Uncommitted files in the worktree: a finished thread is "done, not committed" (not a failure).
     const trouble = worktreeTrouble(rows);
+    const parts = threadResultParts({ plan: child.plan, messages }, trouble);
     if (trouble) parts.outcome = `${parts.outcome}\n${trouble}`;
     return overview(note.summary, parts, files, worktreeLines(rows));
   },

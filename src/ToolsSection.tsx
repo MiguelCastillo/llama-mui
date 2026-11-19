@@ -20,6 +20,7 @@ import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
 import ChecklistOutlinedIcon from "@mui/icons-material/ChecklistOutlined";
 import { type ToolGroup, getTools, setToolEnabled, setToolsEnabled } from "./api";
 import { usePreferences } from "./usePreferences";
+import DangerousCommandsSection from "./DangerousCommandsSection";
 
 // Per-group icons; groups not listed here get a generic one.
 const GROUP_UI: Record<string, { icon: ReactNode }> = {
@@ -195,6 +196,7 @@ export default function ToolsSection() {
           );
         })
       )}
+      <DangerousCommandsSection />
     </Stack>
   );
 }

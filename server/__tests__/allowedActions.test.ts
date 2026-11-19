@@ -113,6 +113,17 @@ describe("sessionActions: the holder is decided from the run record", () => {
     expect(actions(null, null)).toEqual([]);
   });
 
+  // A thread that is "done, not committed" has every step done, so the server
+  // lists the same actions as for a plain finished one (the thread's status
+  // never feeds the list); nothing is added, and another or unknown owner removes them.
+  it("a finished thread with uncommitted files gets the finished plan's actions, and nothing when the owner is elsewhere or unknown", () => {
+    const finished = session("done", "done");
+    expect(actions(finished, null)).toEqual(["approve", "clone", "resend", "send"]);
+    expect(actions(finished, record({ owner: owner({ serverId: "other" }) }))).toEqual(["takeOver"]);
+    expect(actions(finished, { startedAt: 1 })).toEqual([]);
+    expect(actions(finished, "garbage")).toEqual([]);
+  });
+
   it("a finished plan can be cloned only when no run is active", () => {
     expect(actions(session("done", "done"), null)).toEqual(["approve", "clone", "resend", "send"]);
     expect(actions(session("done", "done"), record({ kind: "turn" }))).toEqual(["approve", "resend", "send"]);

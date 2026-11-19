@@ -19,7 +19,10 @@ function boldLabels(text: string): string {
 // the plan card: one padded box, one column.
 // - A heading row: an icon for how the thread is doing (a spinner while its run
 //   is going, then a green check, red error or amber warning) and the status in
-//   bold: "Running / Done / Failed / Not finished in a thread".
+//   bold: "Running / Done / Failed / Not finished in a thread". "Done in a
+//   thread, not committed" (all steps done, files left uncommitted) takes the
+//   amber warning, never the red error, and shows the whole report so the
+//   uncommitted-files line is seen.
 // - The summary under it, as regular text.
 // - The thread's short report once the run has ended (see noteView), as text
 //   you can select and copy. A done thread shows only its follow-up line(s); the
@@ -71,6 +74,7 @@ export default function ThreadNote({
           <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             {view.running && <StatusIcon kind="running" aria-label="Running" sx={statusIconSx} />}
             {isDone && <StatusIcon kind="done" aria-label="Done" sx={statusIconSx} />}
+            {ended && status === "uncommitted" && <StatusIcon kind="stopped" aria-label="Done, not committed" sx={statusIconSx} />}
             {ended && status === "failed" && <StatusIcon kind="failed" aria-label="Failed" sx={statusIconSx} />}
             {ended && status === "unfinished" && <StatusIcon kind="stopped" aria-label="Not finished" sx={statusIconSx} />}
             <Typography variant="subtitle1" component="h3" sx={{ fontWeight: 700 }}>

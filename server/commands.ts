@@ -388,6 +388,11 @@ export async function commandRoutes({ req, res, parts, method }: Route, given: C
       // `always`: also approve this kind of thing for the rest of the session.
       // Set first, so the next question of that kind is already approved.
       if (body.allow && body.always !== undefined) {
+        // A command in the dangerous-commands list is approved one time only.
+        const open = hub.liveRun(id)?.ask;
+        if (open?.kind === "approval" && (open.details as { dangerous?: unknown[] }).dangerous?.length) {
+          throw new HttpError(400, "This command is in the list of dangerous commands, so it is approved one time only. Answer without the session-wide option.");
+        }
         const kind = autoKindOf(body.always);
         await hub.edit(id, (s) => void (s.autoApprove = withAuto(s.autoApprove, kind, true)));
         noteSession(id);

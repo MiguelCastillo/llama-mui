@@ -613,6 +613,12 @@ export interface ToolGroup {
 
 // For Settings → Tools: every group and each tool's on/off state.
 // `enabled` is the master switch: off, none of them is offered.
+// The dangerous-commands setting as the server keeps it (server/dangerousSetting.ts).
+// Send only the fields that changed; the server answers with the whole setting or a plain error.
+export type DangerousSetting = { enabled: boolean; off: string[]; custom: { id: string; label: string; pattern: string }[] };
+export const getDangerousCommands = () => call<DangerousSetting>("GET", "/api/dangerous-commands");
+export const updateDangerousCommands = (patch: Partial<DangerousSetting>) =>
+  call<DangerousSetting>("PUT", "/api/dangerous-commands", patch);
 export const getTools = () => call<{ enabled: boolean; groups: ToolGroup[] }>("GET", "/api/tools");
 export const setToolsEnabled = (enabled: boolean) => call("PUT", "/api/tools", { enabled });
 export const setToolEnabled = (name: string, enabled: boolean) => call("PUT", `/api/tools/${name}`, { enabled });
@@ -747,6 +753,9 @@ export const pairDevice = (token: string) => call<{ ok: true; name: string }>("P
 // Something a tool wants to do that the user approves first: a change to a
 // file, a shell command, or a git worktree being removed (making one needs no
 // approval).
+// An entry of the dangerous-commands list that a command matched (see dangerousCommands.ts).
+export type DangerousMatch = { id: string; label: string; description: string };
+
 export type Approval =
   | {
       type: "change";
@@ -758,7 +767,10 @@ export type Approval =
       reason?: string;
     }
   // readOnly: the model's own claim that the command only looks (absent when it said nothing).
-  | { type: "command"; command: string; cwd: string; reason?: string; readOnly?: boolean }
+  // dangerous: set only by the server, never by a tool or the model. The entries of the
+  // dangerous-commands list this command matches; present means "always asks", and the
+  // session-wide approval is not offered. The page only draws it.
+  | { type: "command"; command: string; cwd: string; reason?: string; readOnly?: boolean; dangerous?: DangerousMatch[] }
   | { type: "worktree"; action: "remove"; repo: string; branch: string; path: string; reason?: string }
   // inspect_page on a host other than this computer.
   | { type: "page"; url: string; host: string; reason?: string };
@@ -967,8 +979,10 @@ export interface PlanThread {
   report?: { text: string; at: number };
 }
 
-// How a thread's run ended: every step done, a step failed, or neither.
-export type ThreadOutcome = "done" | "failed" | "unfinished";
+// How a thread's run ended: every step done, every step done but files in the
+// thread's worktree not committed, a step failed, or none of these. Notes saved
+// before "uncommitted" existed keep "failed" for that case.
+export type ThreadOutcome = "done" | "uncommitted" | "failed" | "unfinished";
 
 export interface Todo {
   id: string;

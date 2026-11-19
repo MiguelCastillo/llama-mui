@@ -302,7 +302,8 @@ only what it needs, in tiers that each cost more than the one before:
    (the overview below), not from the last thing said in the thread, which can
    be a check's "STEP NOT DONE" line.
 2. **`read_thread`, no request to a model:** an overview of the thread, in this
-   order: `Thread:` (its summary); `Outcome:` SUCCESS, FAILED or NOT FINISHED;
+   order: `Thread:` (its summary); `Outcome:` SUCCESS, DONE, NOT COMMITTED (every step done, but the worktree
+   has files not committed; the Trouble line says which), FAILED or NOT FINISHED;
    one line per step with its state, how long it took and its note; `Result:`
    (the plan's result when every step is done, otherwise the last words of the
    first step that isn't); `Next:` for a thread that failed, was disputed, is
@@ -523,6 +524,31 @@ is not inherited by a thread. The approvals marker in the message box shows what
 on, and its switches turn each off (or on, before any prompt). Only the question is skipped: the paths a chat
 may reach and the files that are off limits (`settings.json`, the keys) are
 checked as before, and an approved change still shows its diff in the chat.
+
+**Dangerous commands always ask.** A list of dangerous kinds of command
+(`src/dangerousCommands.ts`) is checked on the server at the moment a command
+is about to be auto-approved. A command that matches an active entry is never
+covered by "Approve all commands in this session" (in a chat or a plan run): it
+raises the normal prompt, which says which entries matched and why, and the
+session-wide button is not offered on it. The built-in entries are stopping
+processes (kill, pkill, killall, service stops, kills by port), recursive or
+forced deletes, destructive git (force push, reset --hard, clean -fd, branch -D,
+forced worktree removal), sudo/su, disk tools (dd, mkfs, diskutil erase), shell
+commands that touch `settings.json`, `.keys` or the secret key file, downloads
+piped into a shell, and recursive chmod/chown. It splits compound commands
+(`;`, `&&`, `||`, `|`, newlines, `$(...)`, backticks) and looks inside
+`sh -c` / `bash -c` / `zsh -c` strings.
+It's on by default. Settings → Tools has the master switch, an on/off for each
+built-in entry, and custom entries (an id, a plain label and a regular
+expression, with a test box that shows whether a sample command matches);
+settings keep them as `dangerousCommands { enabled, off, custom }` and ignore
+unknown fields. The server reads the setting fresh on every decision. It
+fails closed: the check is skipped only when the settings were read and
+`enabled` is exactly `false`; missing, invalid or unreadable settings keep it on.
+The model can't change it (the settings file is off limits to its tools, and
+shell commands that touch it are on the list). This is plain text matching, a
+stand-in for a real sandbox, not one: a determined or unusual command can slip
+past it.
 
 The **Terminal** group (`server/terminal.ts`) has `run_command`, which runs a
 shell command the model suggests, in the working directory, an attached folder
@@ -1438,8 +1464,12 @@ the step, not in the chat.
   buttons along the bottom. While the thread's run is going the heading is
   **Running in a thread**, with a spinner, and the plan summary under it. When
   the run ends, the spinner goes away and the heading says how it ended, with
-  an icon: **Done in a thread** (every step done), **Failed in a thread** (a
-  step failed, or one didn't pass its check) or **Not finished in a thread**
+  an icon: **Done in a thread** (every step done), **Done in a thread, not
+  committed** (every step done, but the worktree has files not committed; a
+  warning look, not the error one, and the same buttons as Done),
+  **Failed in a thread** (a step failed, or one didn't pass its check; a failed
+  step with uncommitted files is still Failed; notes saved earlier keep
+  Failed, nothing is migrated) or **Not finished in a thread**
   (stopped, or waiting for you). Under the summary is a short report of what
   happened: a sentence or two when it worked, with a **Follow-up:** line only
   if something is still to do (restart the server, commit); when it didn't,

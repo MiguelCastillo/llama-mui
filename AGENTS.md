@@ -77,7 +77,11 @@ human to catch a violation is itself a failure of the principle.
     close a connection from any device but this computer unless Settings → Phone allows
     it, because binding only to the loopback would mean rebinding a server that runs hold open;
   - the host check in `inspect_page` (`server/inspect.ts`): localhost opens freely, any other host asks first,
-    because a page runs code in Chrome and a sandbox or network rule should be what limits that.
+    because a page runs code in Chrome and a sandbox or network rule should be what limits that;
+  - the dangerous-commands list (`src/dangerousCommands.ts`, "Dangerous commands always ask" in the guide):
+    a command matching an active entry always asks, whatever the approval setting, and only
+    `enabled: false` read from settings skips it. Plain text matching; the real fix is sandboxing
+    the stable servers.
 
   Don't add to this list without saying so here.
 

@@ -53,6 +53,8 @@ import { planRequestFor } from "../src/planThread.ts";
 import { attachedPaths, makeReply, modelLoaded } from "../src/runnerReply.ts";
 import type { Answer, Ask, RunnerEnv, RunnerHandle } from "../src/runnerTypes.ts";
 import { autoApproves } from "../src/autoApprove.ts";
+import { matchDangerous } from "../src/dangerousCommands.ts";
+import { readForDecision } from "./dangerousSetting.ts";
 import { type EndKind } from "../src/runEnd.ts";
 import { noteAbort } from "./upstreamLog.ts";
 import { audit, noteSession } from "./audit.ts";
@@ -332,7 +334,8 @@ function patchStep(e: Entry, id: string, patch: Omit<PlanStep, "id" | "text">) {
 
 // Stores the ask and resolves with the user's answer. An aborted request
 // counts as deny. Asks wait for as long as it takes; nothing pops up.
-function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
+async function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
+  ask = await withDangerMarks(ask);
   // Approved for the rest of the session (see autoApprove.ts): no question.
   if ("needsApproval" in ask && autoApproves(e.session.autoApprove, ask.needsApproval)) {
     const type = ask.needsApproval.type;
@@ -371,6 +374,19 @@ function askUser(e: Entry, ask: Ask, signal: AbortSignal): Promise<Answer> {
   });
 }
 
+// A command approval with the dangerous-commands list applied. The server decides
+// here, from the setting read now (unreadable settings mean the check is on); what
+// the tool or the model put in `dangerous` is thrown away first. A command that
+// matches carries the entries' plain reasons, so autoApproves skips it and the page
+// can say why it asks.
+async function withDangerMarks(ask: Ask): Promise<Ask> {
+  if (!("needsApproval" in ask) || ask.needsApproval.type !== "command") return ask;
+  const { dangerous: _ignored, ...approval } = ask.needsApproval;
+  const hits = matchDangerous(approval.command, await readForDecision());
+  if (!hits.length) return { needsApproval: approval };
+  return { needsApproval: { ...approval, dangerous: hits.map(({ id, label, description }) => ({ id, label, description })) } };
+}
+
 // Where an ask came from: the session, what kind of run, the step in flight.
 function askContext(e: Entry, askId: string) {
   noteSession(e.id);
@@ -391,7 +407,14 @@ export function askFacts(ask: Ask): Record<string, unknown> {
     case "change":
       return { ...base, path: a.path, action: a.action };
     case "command":
-      return { ...base, command: a.command, cwd: a.cwd, ...(a.readOnly !== undefined ? { readOnly: a.readOnly } : {}) };
+      return {
+        ...base,
+        command: a.command,
+        cwd: a.cwd,
+        ...(a.readOnly !== undefined ? { readOnly: a.readOnly } : {}),
+        // Ids of the list's entries it matched (facts only).
+        ...(a.dangerous?.length ? { dangerous: a.dangerous.map((d) => d.id) } : {}),
+      };
     case "worktree":
       return { ...base, action: a.action, repo: a.repo, branch: a.branch, path: a.path };
     case "page":

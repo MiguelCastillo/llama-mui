@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment, ChatMessage, PlanStep, PlanThread, Session } from "../api";
-import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage, threadResult, noteAskKind, worktreeTrouble, worktreeLine, worktreeLines, reportParts } from "../planThread";
+import { applyThreadEvent, isFreshPlan, noteView, planRequestFor, planToThread, threadLabel, threadStatus, threadsUpdate, planResult, finalMessage, threadResult, noteAskKind, worktreeTrouble, worktreeLine, worktreeLines, reportParts, withWorktreeTrouble } from "../planThread";
 
 const step = (id: string, status: PlanStep["status"] = "pending", extra: Partial<PlanStep> = {}): PlanStep => ({
   id,
@@ -240,7 +240,37 @@ describe("threadStatus", () => {
   });
 });
 
+describe("withWorktreeTrouble", () => {
+  const trouble = "Trouble: 2 files in worktree x (llama/x) not committed, so the work is not saved on its branch.";
+
+  it("turns done plus trouble into uncommitted", () => {
+    expect(withWorktreeTrouble("done", trouble)).toBe("uncommitted");
+  });
+
+  it("keeps done when there is no trouble", () => {
+    expect(withWorktreeTrouble("done", null)).toBe("done");
+    expect(withWorktreeTrouble("done", undefined)).toBe("done");
+    expect(withWorktreeTrouble("done", "")).toBe("done");
+  });
+
+  it("keeps a failed step failed even with dirty files", () => {
+    const status = threadStatus({ plan: [step("1", "done"), step("2", "failed")] });
+    expect(withWorktreeTrouble(status, trouble)).toBe("failed");
+    expect(withWorktreeTrouble("failed", null)).toBe("failed");
+  });
+
+  it("leaves every other status as it is", () => {
+    expect(withWorktreeTrouble("unfinished", trouble)).toBe("unfinished");
+    expect(withWorktreeTrouble("missing", trouble)).toBe("missing");
+    expect(withWorktreeTrouble("uncommitted", trouble)).toBe("uncommitted");
+  });
+});
+
 describe("threadLabel", () => {
+  it("says uncommitted in plain words, not as a failure", () => {
+    expect(threadLabel("uncommitted", "Build it")).toBe("Done in a thread, not committed: Build it");
+  });
+
   it("says each status in plain words", () => {
     expect(threadLabel("done", "Build it")).toBe("Done in a thread: Build it");
     expect(threadLabel("failed", "Build it")).toBe("Failed in a thread: Build it");

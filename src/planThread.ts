@@ -89,7 +89,18 @@ export function planToThread(
 // failed or is disputed. Anything else is "unfinished": a plan that is not
 // finished and has no run was stopped. While a run has it the child is
 // running, and the caller shows that (no status) rather than calling this.
-export type ThreadStatus = "missing" | "done" | "failed" | "unfinished";
+// "uncommitted": all steps are done but the thread's worktree has files that
+// are not committed, so the work is not saved on its branch. It is not a
+// failure; "failed" stays for a failed or disputed step only.
+export type ThreadStatus = "missing" | "done" | "uncommitted" | "failed" | "unfinished";
+
+// The status to report: `status` from threadStatus, and `trouble` from
+// worktreeTrouble (null when the worktrees are clean). Only "done" with
+// trouble becomes "uncommitted"; every other status stays as it is, so a
+// failed step with dirty files is still "failed".
+export function withWorktreeTrouble(status: ThreadStatus, trouble: string | null | undefined): ThreadStatus {
+  return status === "done" && trouble ? "uncommitted" : status;
+}
 
 export function threadStatus(child: Pick<Session, "plan"> | null): ThreadStatus {
   if (!child) return "missing";
@@ -148,6 +159,7 @@ export function applyThreadEvent(threads: PlanThread[], e: ThreadEvent): PlanThr
 // no outcome yet, is left out so the text only changes when there is news).
 const OUTCOME_WORDS: Record<ThreadOutcome, string> = {
   done: "done",
+  uncommitted: "done, but not committed",
   failed: "failed",
   unfinished: "not finished",
 };
@@ -221,6 +233,7 @@ function duration(ms: number): string {
 
 const OUTCOME_LINE: Record<Exclude<ThreadStatus, "missing">, string> = {
   done: "SUCCESS",
+  uncommitted: "DONE, NOT COMMITTED",
   failed: "FAILED",
   unfinished: "NOT FINISHED",
 };
@@ -237,10 +250,10 @@ export interface ThreadResultParts {
   next: string;
 }
 
-export function threadResultParts(child: Pick<Session, "plan" | "messages">): ThreadResultParts {
+export function threadResultParts(child: Pick<Session, "plan" | "messages">, trouble?: string | null): ThreadResultParts {
   const steps = child.plan ?? [];
   const messages = child.messages ?? [];
-  const status = threadStatus(child) as Exclude<ThreadStatus, "missing">;
+  const status = withWorktreeTrouble(threadStatus(child), trouble) as Exclude<ThreadStatus, "missing">;
   const parts: ThreadResultParts = {
     outcome: `Outcome: ${OUTCOME_LINE[status]}`,
     steps: steps.map((s, i) => ({
@@ -313,6 +326,8 @@ export function threadStatusWord(status: ThreadStatus | undefined): string {
   switch (status) {
     case "done":
       return "Done in a thread";
+    case "uncommitted":
+      return "Done in a thread, not committed";
     case "failed":
       return "Failed in a thread";
     case "unfinished":
