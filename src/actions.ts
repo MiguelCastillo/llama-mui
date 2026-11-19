@@ -17,6 +17,7 @@ export type Action =
   | "edit" // change the plan's steps
   | "resend" // send the failed message again
   | "send" // type and send a message
+  | "changeEnvironment" // change the model, connection, folders or approvals
   | "takeOver";
 
 // What the page draws: nothing until the chat has loaded and the server has

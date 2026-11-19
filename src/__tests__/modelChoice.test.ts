@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectionForChat, pickModel } from "../modelChoice";
+import { connectionForChat, defaultIfListed } from "../modelChoice";
 
 const a = { id: "a", name: "A" };
 const b = { id: "b", name: "B" };
@@ -35,36 +35,16 @@ describe("connectionForChat", () => {
   });
 });
 
-describe("pickModel", () => {
-  const models = [
-    { id: "m1", status: "unloaded" as const },
-    { id: "m2", status: "loaded" as const },
-    { id: "m3", status: "unloaded" as const },
-  ];
+describe("defaultIfListed", () => {
+  const models = [{ id: "m1" }, { id: "m2" }];
 
-  it("keeps the current model when the connection lists it", () => {
-    expect(pickModel({ current: "m3", defaultModel: "m1", models })).toBe("m3");
+  it("offers the connection's default when it lists it", () => {
+    expect(defaultIfListed("m2", models)).toBe("m2");
   });
 
-  it("uses the new connection's default when the current model isn't listed", () => {
-    expect(pickModel({ current: "other", defaultModel: "m3", models })).toBe("m3");
-  });
-
-  it("uses a loaded model when neither current nor default is listed", () => {
-    expect(pickModel({ current: "other", defaultModel: "nope", models })).toBe("m2");
-    expect(pickModel({ current: "", models })).toBe("m2");
-  });
-
-  it("uses the first model when none are loaded", () => {
-    const none = models.map((m) => ({ ...m, status: "unloaded" as const }));
-    expect(pickModel({ current: "", models: none })).toBe("m1");
-  });
-
-  it("starts a new chat on the connection's default model", () => {
-    expect(pickModel({ current: "", defaultModel: "m3", models })).toBe("m3");
-  });
-
-  it("returns an empty model for an empty list", () => {
-    expect(pickModel({ current: "m1", defaultModel: "m1", models: [] })).toBe("");
+  it("offers nothing otherwise: no loaded or first model is picked for the user", () => {
+    expect(defaultIfListed("nope", models)).toBe("");
+    expect(defaultIfListed(undefined, models)).toBe("");
+    expect(defaultIfListed("m1", [])).toBe("");
   });
 });

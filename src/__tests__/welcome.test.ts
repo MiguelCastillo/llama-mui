@@ -11,7 +11,6 @@ import {
   welcomeRedirect,
   welcomeSteps,
 } from "../welcomeState";
-import { pickModel } from "../modelChoice";
 
 const llama = { kind: "llama" as const, defaultModel: "m" };
 const anthropic = { kind: "anthropic" as const, defaultModel: "claude" };
@@ -76,35 +75,6 @@ describe("welcomeSteps", () => {
   it("stays on a finish state while both are done, whatever else changes", () => {
     const s = welcomeSteps({ connector: llama, connection: "ok", models: [...models("loaded"), ...models("loaded", "x")] });
     expect(welcomeDone(s)).toBe(true);
-  });
-});
-
-describe("pickModel", () => {
-  const ms = [
-    { id: "a", status: "unloaded" },
-    { id: "b", status: "loaded" },
-    { id: "c", status: "unloaded" },
-  ];
-  it("keeps the current pick if listed", () => {
-    expect(pickModel({ current: "c", defaultModel: "a", models: ms })).toBe("c");
-  });
-  it("then the default if listed", () => {
-    expect(pickModel({ current: "", defaultModel: "a", models: ms })).toBe("a");
-    expect(pickModel({ current: "gone", defaultModel: "c", models: ms })).toBe("c");
-  });
-  it("then a loaded model, then the first", () => {
-    expect(pickModel({ current: "", defaultModel: "missing", models: ms })).toBe("b");
-    expect(pickModel({ current: "", models: ms })).toBe("b");
-    expect(pickModel({ current: "", models: [ms[0], ms[2]] })).toBe("a");
-  });
-  it("starts a new session on the default, whatever the tab last used", () => {
-    // newChat asks with no current pick.
-    expect(pickModel({ current: "", defaultModel: "c", models: ms })).toBe("c");
-    expect(pickModel({ current: "", defaultModel: "gone", models: ms })).toBe("b");
-    expect(pickModel({ current: "", defaultModel: undefined, models: [ms[0], ms[2]] })).toBe("a");
-  });
-  it("is empty with no models", () => {
-    expect(pickModel({ current: "x", defaultModel: "y", models: [] })).toBe("");
   });
 });
 

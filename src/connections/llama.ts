@@ -43,6 +43,8 @@ export const llama: Connection = {
   reasoningIsSummary: false,
   needsCapabilities: true,
   capabilitiesPath: (model) => `/props?model=${encodeURIComponent(model)}&autoload=false`,
+  // llama.cpp lists every model it can serve, loaded or not, by exact id.
+  listsModel: (listed, id) => listed.some((m) => m.id === id),
   fromList: readList,
   fromAnswer: readProps,
 

@@ -5,6 +5,7 @@
 
 import { stat } from "node:fs/promises";
 import { resolveAllowed } from "./disk.ts";
+import { folderProblemMessage, folderProblems } from "./folderProblems.ts";
 import { spawn } from "./io/exec.ts";
 import { log } from "./log.ts";
 import { type ToolContext, ToolError, type ToolSpec, fn, note, reasonOf, requireApproval, textFact } from "./toolkit.ts";
@@ -15,6 +16,10 @@ const MAX_OUTPUT_CHARS = 50_000;
 // The folder to run in: the one the model named, or else the chat's working
 // directory. An attached folder is never the default.
 async function workingDir(ctx: ToolContext, raw: unknown): Promise<string> {
+  // A folder of the chat that is gone or unreadable stops every command, before
+  // any approval is asked: nothing runs in another folder in its place.
+  const problems = await folderProblems(ctx);
+  if (problems.length) throw new ToolError(folderProblemMessage(problems));
   if (raw) {
     const dir = await resolveAllowed(ctx, raw);
     if (!(await stat(dir)).isDirectory()) throw new ToolError(`${dir} is a file; cwd must be a folder`);

@@ -289,7 +289,8 @@ describe("replacing a chat's working directory", () => {
   const extra = [attach("/a/file.txt", "file"), attach("/docs", "folder")];
 
   it("leaves the attachments as they were, and the old folder is not kept as one", async () => {
-    await call("PUT", ["wd-replace"], saved("wd-replace", { workingDir: "/work/old", attachments: extra }));
+    // A chat not started yet: a started chat's folder changes only by the user's explicit request.
+    await call("PUT", ["wd-replace"], saved("wd-replace", { messages: [], workingDir: "/work/old", attachments: extra }));
     const first = (await call("GET", ["wd-replace"])).body;
     expect(first.workingDir).toBe("/work/old");
 
@@ -303,7 +304,7 @@ describe("replacing a chat's working directory", () => {
   });
 
   it("clearing it leaves the attachments as they were too, and nothing takes its place", async () => {
-    await call("PUT", ["wd-clear"], saved("wd-clear", { workingDir: "/work/old", attachments: extra }));
+    await call("PUT", ["wd-clear"], saved("wd-clear", { messages: [], workingDir: "/work/old", attachments: extra }));
     const first = (await call("GET", ["wd-clear"])).body;
     expect((await call("PUT", ["wd-clear"], { ...first, workingDir: null })).status).toBe(200);
     const after = (await call("GET", ["wd-clear"])).body;

@@ -42,7 +42,14 @@ describe("allowedActions", () => {
 
   for (const holder of ["none", "here"] as Holder[]) {
     describe(`when ${holder === "none" ? "no one runs it" : "this server runs it"}`, () => {
-      const go = (plan: PlanState | null, extra: object = {}) => list(allowedActions({ ...base, holder, plan, ...extra }));
+      // changeEnvironment is checked on its own below; the lists here are about the plan.
+      const go = (plan: PlanState | null, extra: object = {}) =>
+        list(allowedActions({ ...base, holder, plan, ...extra })).filter((a) => a !== "changeEnvironment");
+      it("lists changeEnvironment only when no one runs it", () => {
+        for (const p of [null, plan({}), plan({ running: true }), plan({ finished: true, unfinished: false })]) {
+          expect(list(allowedActions({ ...base, holder, plan: p })).includes("changeEnvironment")).toBe(holder === "none");
+        }
+      });
 
       it("a chat with no plan: send and resend", () => {
         expect(go(null)).toEqual(["approve", "resend", "send"]);
@@ -76,7 +83,8 @@ describe("sessionActions: the holder is decided from the run record", () => {
   const owner = (over: object = {}) => ({ pid: 1, port: 5173, checkedAt: now - 1000, serverId: "me", ...over });
   const record = (over: object = {}) => ({ startedAt: now - 5000, owner: owner(), ...over });
   const session = (...statuses: PlanStep["status"][]) => ({ plan: statuses.map((s) => step(s)) });
-  const actions = (s: any, run: any) => sessionActions(s, run, now, me);
+  // changeEnvironment has its own tests (environmentChange.test.ts); these lists are about the plan.
+  const actions = (s: any, run: any) => sessionActions(s, run, now, me).filter((a) => a !== "changeEnvironment");
 
   it("tells who holds the run", () => {
     expect(holderKind(null, now, me)).toBe("none");

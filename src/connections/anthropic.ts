@@ -120,6 +120,8 @@ export const anthropic: Connection = {
   reasoningIsSummary: true,
   needsCapabilities: true,
   capabilitiesPath: (model) => `/v1/models/${encodeURIComponent(model)}`,
+  // The Models API lists each model by its exact id.
+  listsModel: (listed, id) => listed.some((m) => m.id === id),
   // The list entries carry the same capabilities as one model's answer.
   fromList: (entry) => (entry?.capabilities ? readCapabilities(entry) : undefined),
   fromAnswer: (answer) => readCapabilities(answer),

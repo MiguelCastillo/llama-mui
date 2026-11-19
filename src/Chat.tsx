@@ -122,6 +122,8 @@ import {
   renameSession,
   runTool,
   saveSession,
+  changeEnvironment,
+  type FolderProblem,
   noteRevision,
   setOpenSession,
   sessionHeaders,
@@ -134,8 +136,9 @@ import { personaIsFixed, withChosenPersona } from "./persona";
 import { useShowSteps } from "./showSteps";
 import { connection, optionsFor } from "./connections/index";
 import { removeRow, upsertRow, watchSessionList } from "./sessionRows";
-import { connectionForChat, pickModel } from "./modelChoice";
-import { getSavedModelsConnectorId, pickModelsConnector, setSavedModelsConnectorId } from "./modelsConnector";
+import { folderNotice } from "./folderNotice";
+import { afterModelList, choiceFromSession, connectionForChat, connectionProblem, defaultIfListed, menuValue, shownModel, unlistedModel } from "./modelChoice";
+import { getSavedModelsConnectorId, setSavedModelsConnectorId } from "./modelsConnector";
 import { autoApproves } from "./autoApprove";
 import { copyText } from "./clipboard";
 import { flatAccordionSx, formatSeconds } from "./stepFormat";
@@ -693,6 +696,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // What the server lets this chat offer (see actions.ts). Empty until it has
   // answered, and again whenever a chat is opened or read anew.
   const [serverActions, setServerActions] = useState<readonly string[]>([]);
+  // The folders of this chat the server found gone or unreadable. The page
+  // only says them (see folderNotice); the server's answer sets and clears it.
+  const [folderProblems, setFolderProblems] = useState<readonly FolderProblem[]>([]);
   // Whether the last loadSession read its session (false: it opened as a new chat).
   const loadedOk = useRef(false);
   const [sessionsOpen, setSessionsOpenState] = useState(() => loadFlag(SESSIONS_OPEN_KEY, true));
@@ -709,9 +715,21 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // (which would move it to the top of the list).
   const savedKey = useRef("");
 
+  // Whether the server holds this chat (it answered for it, or this page saved
+  // it). Only then are the model and connection left out of a save and changed
+  // by the explicit request; a chat the server doesn't have yet is still new,
+  // and takes what the page chose when it is first saved.
+  const onServer = useRef(false);
+  const saveChat = (s: Session) => {
+    const own = s.id;
+    return saveSession(s, { leaveOutModelAndConnection: onServer.current }).then((row) => {
+      if (openId.current === own) onServer.current = true;
+      return row;
+    });
+  };
+
   // `live`: the session is a run's, as it is now (see mirrorView). A step that
-  // is running there really is, so it isn't reset to pending, and the model
-  // picker is left alone. `running`: that run has not ended, so the
+  // is running there really is, so it isn't reset to pending. `running`: that run has not ended, so the
   // "interrupted" mark it keeps while a request is in flight is not shown as
   // a failure (see shownFailure).
   const applySession = (s: Session, live = false, running = live) => {
@@ -723,10 +741,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     s = withSessionDefaults(s);
     savedKey.current = stateKey({ ...s, planAnchor: state.planAnchor, pastPlans: state.pastPlans });
     updateSession(state);
-    if (s.model && !live) setModel(s.model);
-    // A chat saved without a connection (older than this) has none yet and
-    // follows the last used one; a run's own copy that lacks it leaves it be.
-    if (!live || s.connectorId) setConnectorId(s.connectorId ?? null);
+    // The model and connection come from the server's copy of the chat, a
+    // run's copy included: the server keeps them as stored, so a reload during
+    // or just after a run shows the same ones. A chat saved without a
+    // connection (older than this) has none yet and follows the last used one.
+    const stored = choiceFromSession(s);
+    setModel(stored.model);
+    setConnectorId(stored.connectorId);
   };
 
   // Set below, once refreshModels exists; the latest one, for the listener.
@@ -777,13 +798,19 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     setLoaded(false);
     setHeldPort(null);
     setServerActions([]);
+    setFolderProblems([]);
     loadedOk.current = false;
+    onServer.current = false;
     dismiss(id);
     getSession(id)
       .then((s) => {
+        if (openId.current === id) onServer.current = true;
         applySession(s, !!s.run);
         setHeldPort(s.holder && !s.holder.mine ? s.holder.port : null);
-        if (openId.current === id) setServerActions(s.actions ?? []);
+        if (openId.current === id) {
+          setServerActions(s.actions ?? []);
+          setFolderProblems(s.folderProblems ?? []);
+        }
         // A draft saved on the server (a chat with words in it, not yet sent)
         // goes in the box, replacing this browser's own copy. It is counted as
         // saved, so opening the chat doesn't save it again.
@@ -799,7 +826,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       .catch((e) => {
         // The server says "no such chat" (a new one) together with what it may
         // offer; any other failure leaves the list empty.
-        if (e instanceof ApiError && e.status === 404 && Array.isArray(e.data.actions) && openId.current === id) setServerActions(e.data.actions);
+        if (e instanceof ApiError && e.status === 404 && Array.isArray(e.data.actions) && openId.current === id) {
+          setServerActions(e.data.actions);
+          // A new chat starts with what the server offers (its connection and
+          // default model); the page picks nothing.
+          if (e.data.environment && typeof e.data.environment === "object") {
+            const offered = choiceFromSession(e.data.environment as { model?: string; connectorId?: string });
+            setModel(offered.model);
+            setConnectorId(offered.connectorId);
+          }
+        }
       })
       .finally(() => setLoaded(true));
   };
@@ -910,7 +946,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (key === savedKey.current) return;
     savedKey.current = key;
     const savedId = sessionId;
-    saveSession(session)
+    // The model and connection of a chat the server holds are the server's:
+    // a save never carries them (they change through changeChoice).
+    saveChat(session)
       .then((summary) => setSessions((ss) => upsertRow(ss, summary)))
       .catch((e) => {
         // A refusal about a session that has since been closed is not this screen's to show.
@@ -1030,23 +1068,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       showSessionError(from, e instanceof Error ? e.message : String(e));
     }
   };
-  // A new session starts on the last used connection and that connection's
-  // default model (see pickModel), not on whatever this chat last used; opening
-  // a saved one keeps its own.
+  // A new session starts empty and shows what the server offers for it (its
+  // connection and default model); opening a saved one shows its own.
   const newChat = () => {
     openSession(newId());
     // Stopgap: the chat you were in lends its folder (see folderForNewChat).
     updateSession({ workingDir: folderForNewChat(workingDir) });
-    const next = connectors ? pickModelsConnector(connectors, getSavedModelsConnectorId()) : null;
-    setConnectorId(next?.id ?? null);
-    if (next && next.id === connector?.id) {
-      // Its models are the ones listed already.
-      const start = pickModel({ current: "", defaultModel: next.defaultModel, models });
-      if (start) setModel(start);
-    } else {
-      // Another connection's models load next, and the model is picked from them.
-      setModel("");
-    }
+    // Nothing is chosen here: the server's offer for a new chat fills the
+    // connection and model when the chat has answered (see loadSession).
+    setConnectorId(null);
+    setModel("");
   };
   // Discarding a plan (the card offers it only while nothing runs) asks first,
   // and removes the plan. If a run started meanwhile, it is stopped first. The steps' messages stay in the chat, and
@@ -1180,21 +1211,41 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
 
   // The chat's connection as of the latest render: a model list that arrives
   // after the chat moved to another connection is not for it, and is dropped.
+  const modelNow = useRef("");
+  modelNow.current = model;
   const connectorNow = useRef<string | null>(null);
   connectorNow.current = connector?.id ?? null;
-  // Loads the connection's models and picks the one to use (see pickModel for
-  // the order, with the connection's own default model).
+  // Loads the connection's models. The list only fills the menu's options: it
+  // never sets or replaces the chat's chosen model, listed or not.
+  // `listRead`: the connection whose list was last read successfully. A list
+  // that failed, or one for another connection, leaves it unmatched, and then
+  // nothing is said about the model (unknown is not "not listed").
+  const [listRead, setListRead] = useState<string | null>(null);
+  const missingModel = unlistedModel(connector?.kind, {
+    loaded,
+    connectorId: connector?.id ?? null,
+    listRead,
+    chosen: model,
+    options: models,
+  });
+  // `listFailed`: the connection whose list could not be read last time.
+  const [listFailed, setListFailed] = useState<string | null>(null);
+  const problem = connectionProblem({ loaded, connectors, storedId: connectorId, listFailed });
   const refreshModels = (c: Connector) =>
     listModels(c.id)
       .then((ms) => {
         if (connectorNow.current !== c.id) return;
-        setModels(ms);
-        setModel((cur) => pickModel({ current: cur, defaultModel: c.defaultModel, models: ms }));
+        setListFailed(null);
+        // The list becomes the menu's options; the chosen model is not touched.
+        setModels(afterModelList(modelNow.current, ms).options);
+        setListRead(c.id);
       })
       .catch((e) => {
         if (connectorNow.current !== c.id) return;
         // Don't offer models from a server we can't reach.
         setModels([]);
+        setListRead(null);
+        setListFailed(c.id);
         showGlobalError(e.message);
       });
 
@@ -1202,14 +1253,46 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (connector) refreshModels(connector);
   };
 
-  // The models follow the chat's connection: loaded when it is first known and
-  // whenever the chat moves to another one, and again each time the list of
-  // connections is read (below). A chat with no connection has no models.
+  // The user's choice of the model or the connection. A chat the server holds
+  // asks the server first (it refuses during a run, with the reason, and then
+  // nothing changes); the page shows the choice only once the server has it.
+  // A chat the server doesn't hold yet is new: the choice is shown, and the
+  // first save writes it. Answers whether the choice was made.
+  const changeChoice = async (item: "model" | "connectorId", value: string, show: () => void) => {
+    if (!onServer.current) {
+      show();
+      return true;
+    }
+    const id = sessionId;
+    try {
+      await changeEnvironment(id, item, value);
+    } catch (e) {
+      showSessionError(id, e instanceof Error ? e.message : String(e));
+      return false;
+    }
+    if (openId.current === id) show();
+    return true;
+  };
+  // After the user moves a chat to another connection: its model is chosen
+  // from that connection's list (its default, else one already loaded).
+  const chooseModelFor = async (c: Connector) => {
+    try {
+      const start = defaultIfListed(c.defaultModel, await listModels(c.id));
+      if (start) await changeChoice("model", start, () => setModel(start));
+    } catch {
+      // The list can't be read: the menu shows that (see refreshModels), and the model stays as it was.
+    }
+  };
+
+  // The models follow the chat's connection: loaded once the chat has answered
+  // (it says which connection) and whenever the chat moves to another one, and
+  // again each time the list of connections is read (below). A chat with no
+  // connection has no models.
   useEffect(() => {
-    if (connector === undefined) return;
+    if (connector === undefined || !loaded) return;
     if (connector) refreshModels(connector);
     else setModels([]);
-  }, [connector?.id, connectorsRead]);
+  }, [connector?.id, connectorsRead, loaded]);
 
   // Reload everything each time chat shows: Settings may have changed the
   // connections, their keys or the folders, and a server that was down may be back.
@@ -1290,17 +1373,43 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // Changes the open session's attachments or working directory. The folders
   // a run works in are fixed when it starts and the server owns the session
   // until it ends, so they can't change meanwhile (Session settings says so, too).
-  const attachmentsLocked = runActive;
+  // The environment (model, connection, folders) can be changed only when the
+  // server lists it, and nothing is open before its answer has arrived.
+  const envOpen = drawnActions(loaded, serverActions, true, runActive).has("changeEnvironment");
+  const attachmentsLocked = runActive || !envOpen;
+  // A chat the server holds asks the server first (the folders are its
+  // environment: a save no longer changes them once the chat has started); the
+  // page shows the choice only once the server has it, and says what the server
+  // now finds wrong with the folders. A new chat shows it and the first save writes it.
+  const chooseFolders = async (item: "workingDir" | "attachments", value: unknown, show: () => void) => {
+    if (!onServer.current) {
+      show();
+      return true;
+    }
+    const id = sessionId;
+    try {
+      const r = await changeEnvironment(id, item, value);
+      if (openId.current === id) setFolderProblems(r.folderProblems ?? []);
+    } catch (e) {
+      showSessionError(id, e instanceof Error ? e.message : String(e));
+      return false;
+    }
+    if (openId.current === id) show();
+    return true;
+  };
   const changeAttachments = (fn: (as: Attachment[]) => Attachment[]) => {
     if (runnerActive(sessionId)) showSessionError(sessionId, ATTACHMENTS_LOCKED_NOTE);
-    else updateSession((s) => ({ attachments: fn(s.attachments) }));
+    else {
+      const next = fn(attachments);
+      void chooseFolders("attachments", next, () => updateSession({ attachments: next }));
+    }
   };
   // Replaces the working directory (null clears it). The old one is not kept
   // as an attachment.
   const changeWorkingDir = (dir: string | null) => {
     if (runnerActive(sessionId)) showSessionError(sessionId, ATTACHMENTS_LOCKED_NOTE);
     else {
-      updateSession({ workingDir: dir });
+      void chooseFolders("workingDir", dir, () => updateSession({ workingDir: dir }));
       // Remembered for the picker; if that fails the folder is still set.
       if (dir) rememberFolder(dir).catch(() => {});
     }
@@ -1452,6 +1561,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // has marked its box done there, and that must be saved with the message).
   const send = async (text: string, images: PendingImage[] | undefined, accepted: () => void, base?: ChatMessage[]) => {
     const history = base ?? messages;
+    // The connection doesn't list the chat's model: nothing is sent (the note
+    // under the chat says so), and the model stays as stored.
+    if (missingModel || problem) return false;
+    // A folder of the chat is gone: nothing is sent either (the note says which).
+    if (folderProblems.length) return false;
     // While a plan runs, a message is a side question (Ask) or goes to the run
     // (Tell the plan): the server folds that in before the next step and says
     // which one (see the notes under the chat). Either way a refusal shows as
@@ -1629,7 +1743,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     try {
       savedKey.current = key;
       if (!inSync) {
-        const summary = await saveSession(toSend);
+        const summary = await saveChat(toSend);
         setSessions((ss) => upsertRow(ss, summary));
       }
       // Upload pending images before sending the chat turn, or use refs already
@@ -1699,7 +1813,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     try {
       savedKey.current = key;
       if (!inSync) {
-        const summary = await saveSession(toSend);
+        const summary = await saveChat(toSend);
         setSessions((ss) => upsertRow(ss, summary));
       }
       await sendChat(id, "", { ...options, planning: false, compact: true });
@@ -1736,7 +1850,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     try {
       savedKey.current = key;
       if (!inSync) {
-        const summary = await saveSession(toRun);
+        const summary = await saveChat(toRun);
         setSessions((ss) => upsertRow(ss, summary));
       }
       return await startRemoteRun(id, options);
@@ -2078,7 +2192,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const canClone = (!plan || plan.every((st) => st.status === "done")) && !runActive;
   // Only what the server lists is drawn (see actions.ts). The one thing the page
   // removes on its own is Send when no model is chosen; it adds nothing.
-  const allowed: ReadonlySet<Action> = drawnActions(loaded, serverActions, !!model, runActive);
+  const allowed: ReadonlySet<Action> = drawnActions(loaded, serverActions, !!model && !missingModel && !problem, runActive);
   // A plan from an earlier round is finished: the one thing it offers is Clone,
   // and only if the server lists it.
   const pastAllowed: ReadonlySet<Action> = pastPlanActions(allowed);
@@ -2291,28 +2405,33 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               // No visible label: the value says what it is. The name is for screen readers and hover.
               // Empty until the connections load, and when this chat's connection
               // was deleted: the user picks another, nothing is switched for them.
-              value={connector?.id ?? ""}
+              value={loaded ? connector?.id ?? "" : ""}
               onChange={(e) => {
-                if (e.target.value === MANAGE_CONNECTIONS) {
+                const next = e.target.value;
+                if (next === MANAGE_CONNECTIONS) {
                   location.hash = "#/settings/connectors";
                   return;
                 }
-                if (e.target.value === connector?.id) return;
-                // Kept as the last used one, so a new chat starts on it, and saved
-                // with this chat. The models of the new connection are loaded by
-                // the effect that follows the chat's connection, which picks the
-                // model again (see pickModel).
-                setSavedModelsConnectorId(e.target.value);
-                setModels([]);
-                setConnectorId(e.target.value);
+                if (next === connector?.id) return;
+                // Kept as the last used one, so a new chat starts on it. The
+                // server stores the choice first (changeChoice), then the models
+                // of the new connection load and its model is chosen.
+                const c = (connectors ?? []).find((x) => x.id === next);
+                void changeChoice("connectorId", next, () => {
+                  setSavedModelsConnectorId(next);
+                  setModels([]);
+                  setConnectorId(next);
+                }).then((ok) => {
+                  if (ok && c && onServer.current) void chooseModelFor(c);
+                });
               }}
-              disabled={runActive}
+              disabled={runActive || !envOpen}
               sx={{ width: narrow ? "100%" : 200 }}
               slotProps={{
                 select: {
                   displayEmpty: true,
                   renderValue: () =>
-                    connector ? (
+                    !loaded ? null : connector ? (
                       connector.name || connector.kind
                     ) : (
                       <Typography component="span" color="text.secondary">
@@ -2344,11 +2463,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
               // While the list is still loading, or the server can't be reached, the
               // chosen model isn't among the options: the menu then has no value (MUI
               // warns about one that isn't an option) and still shows the name.
-              value={models.some((m) => m.id === model) ? model : ""}
-              onChange={(e) =>
-                e.target.value === MANAGE_MODELS ? (location.hash = "#/settings/models") : setModel(e.target.value)
-              }
-              disabled={runActive}
+              value={menuValue(loaded, model, models)}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (next === MANAGE_MODELS) location.hash = "#/settings/models";
+                else void changeChoice("model", next, () => setModel(next));
+              }}
+              disabled={runActive || !envOpen}
               sx={{ width: narrow ? "100%" : 240 }}
               // The status chips are for the open menu; closed, just the name fits.
               // No padding under the list: Manage models' hover highlight then runs
@@ -2358,7 +2479,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 select: {
                   displayEmpty: true,
                   renderValue: () =>
-                    model || (
+                    shownModel(loaded, model) === null ? null : model || (
                       <Typography component="span" color="text.secondary">
                         Choose a model
                       </Typography>
@@ -2526,7 +2647,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   // This chat's saved connection was deleted: nothing is switched
                   // for the user; they pick another in the Connection menu.
                   <Typography color="text.secondary" sx={{ textAlign: "center" }}>
-                    This chat's connection no longer exists. Pick another one in the Connection menu.
+                    This chat's connection, {connectorId}, no longer exists. Nothing was sent, and the chat's connection was left
+                    unchanged. Pick another one in the Connection menu, or add it back in Settings.
                   </Typography>
                 )}
               </Stack>
@@ -2588,6 +2710,27 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                 uses the server's memory), or pick a model that's loaded.
               </Alert>
             )}
+            {problem?.kind === "unreachable" && (
+              <Alert
+                severity="warning"
+                action={
+                  <Button color="inherit" size="small" onClick={() => connector && refreshModels(connector)}>
+                    Try again
+                  </Button>
+                }
+              >
+                The connection {problem.name} can't be reached. Nothing was sent, and the chat's connection and model were left
+                unchanged. Check that its server is running, then try again, or pick another connection in the Connection menu.
+              </Alert>
+            )}
+            {missingModel && (
+              <Alert severity="warning">
+                This chat's model, {missingModel}, is not in the list that {connector?.name ?? "its connection"} gave. Nothing was
+                sent, and the chat's model was left unchanged. Pick another model in the model menu, or check that the server has{" "}
+                {missingModel}.
+              </Alert>
+            )}
+            {folderNotice(folderProblems) && <Alert severity="warning">{folderNotice(folderProblems)}</Alert>}
             {error && <Alert severity="error">{error}</Alert>}
           </Stack>
         </Container>
@@ -2654,7 +2797,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             folder={
               <FolderChip
                 workingDir={workingDir}
-                frozen={folderIsFrozen(fixedPromptDir)}
+                frozen={folderIsFrozen(fixedPromptDir) || !envOpen}
                 attachments={attachments}
                 locked={attachmentsLocked}
                 onSetWorkingDir={changeWorkingDir}

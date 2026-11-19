@@ -13,10 +13,16 @@ import { sessionsDir } from "./disk.ts";
 import { HttpError, type Route, readJson, sendJson } from "./http.ts";
 import * as hub from "./runHub.ts";
 import { holderOf, ownerAlive } from "./runRecord.ts";
-import { sessionActions } from "./allowedActions.ts";
+import { holderKind, sessionActions } from "./allowedActions.ts";
 import { settleSession } from "./restart.ts";
 import { descendantIds } from "../src/sessionTree.ts";
 import { personaToSave } from "../src/persona.ts";
+import { folderProblems } from "./folderProblems.ts";
+import { ENVIRONMENT_ITEMS, ENVIRONMENT_KEYS, environmentChanges, environmentForSave, environmentOf, newChatEnvironment } from "./sessionEnvironment.ts";
+import { resolveDefaultPersona } from "./personaChoice.ts";
+import { loadPersonas } from "./personas.ts";
+import { load } from "./store.ts";
+import { log } from "./log.ts";
 import { worktreeStatuses } from "./worktreeStatus.ts";
 import { convertWorkingDir, deleteSession, draftOf, queueFieldsOf, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
 
@@ -58,6 +64,11 @@ let migration: Promise<void> | undefined;
 //                  run whose owner is dead is settled as interrupted first)
 //   GET /<id>/worktrees → [{ name, branch, uncommitted, unmerged, base }], one per
 //                  worktree the session created (its create_worktree calls), read from git (see worktreeStatus.ts)
+//   POST         { id, workingDir? } → creates an empty chat with its environment filled
+//                  by the server (last used connection, its default model, the default
+//                  persona; the folder as sent). Answers its summary plus `revision`,
+//                  `environment` and `created`. A chat that exists is answered as it is
+//                  (`created: false`) and nothing is written.
 //   PUT /<id>    → saves it; the server sets createdAt, updatedAt and revision;
 //                  answers with its summary plus the new `revision`. The queue of
 //                  messages sent during a reply (`queue`, `queuePaused`) is the
@@ -65,6 +76,10 @@ let migration: Promise<void> | undefined;
 //                  `revision` the page loaded: if the file has moved on it answers
 //                  409 { error, revision } and saves nothing. While a plan runs in
 //                  the session, every PUT is a 409 (the run owns the session).
+//   POST /<id>/environment { item, value } → the user's choice of one environment
+//                  item (connectorId, model, workingDir, attachments, autoApprove);
+//                  answers its summary plus `revision` and `environment`. A 409,
+//                  nothing changed, while a run holds the chat or another server owns it.
 //   PATCH /<id>  → updates only the name fields and the group, keeps updatedAt; answers with its
 //                  summary plus `revision`. While a plan runs it goes through the
 //                  run's live session.
@@ -72,6 +87,24 @@ let migration: Promise<void> | undefined;
 //                  it, together with every session nested under it (any depth);
 //                  answers { id, deleted: [ids, the session last] }. A 409, with
 //                  nothing deleted, while a plan runs in it or in any of them
+// One line in the server's log per changed item, so a chat's environment can be
+// traced afterwards: chat id, item, who asked, and (model, connection, folder
+// names only) the old and new values. Never a key, prompt or reply.
+function logEnvironment(chat: string, who: "user choice" | "refused save" | "save before the first message", changes: ReturnType<typeof environmentChanges>) {
+  for (const c of changes) log("session.environment", { chat, who, ...c });
+}
+
+// What a brand-new chat starts with (see newChatEnvironment): used when one is
+// created, and offered to the page for a chat that isn't saved yet.
+async function offeredEnvironment(): Promise<Record<string, unknown>> {
+  const names = await readdir(sessionsDir).catch(() => [] as string[]);
+  const saved = (await Promise.all(names.map((n) => readSession(n).catch(() => null)))).filter((s) => s !== null);
+  const store = await load();
+  const { personas } = await loadPersonas();
+  const persona = (await resolveDefaultPersona(store.defaultPersona, personas.map((p) => p.name))).name;
+  return newChatEnvironment({ connectors: store.connectors, recent: saved.sort((a, b) => b.updatedAt - a.updatedAt), persona });
+}
+
 export async function sessionRoutes({ req, res, parts, method }: Route): Promise<boolean> {
   if (parts[0] !== "sessions") return false;
   // Before the first request is answered, so a list never misses a session still in the old folder.
@@ -97,10 +130,72 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
     sendJson(res, 200, list);
     return true;
   }
+  // A new chat: the server fills its environment once (see newChatEnvironment).
+  // A chat that already exists is answered as it is and nothing is written.
+  if (parts.length === 1 && method === "POST") {
+    const body = await readJson(req);
+    const id = typeof body.id === "string" ? body.id : "";
+    sessionFolder(id); // a bad id is a 400
+    const answer = (session: any, revision: number, created: boolean) => ({ ...summaryOf(session), revision, environment: environmentOf(session), created });
+    const existing = await readSession(id);
+    if (existing) {
+      sendJson(res, 200, answer(existing, revisionOf(existing), false));
+      return true;
+    }
+    const environment = await offeredEnvironment();
+    // The folder is the page's stopgap choice (see folderForNewChat), the one item it still supplies.
+    const folder = ENVIRONMENT_ITEMS.find((i) => i.key === "workingDir")?.choose?.(body.workingDir);
+    const { session, revision } = await hub.replace(id, (old) => {
+      if (old) throw new HttpError(409, "This chat already exists, so its environment was left as it is.");
+      const now = Date.now();
+      return { id, title: "New session", messages: [], ...environment, ...(folder !== undefined ? { workingDir: folder } : {}), modelName: null, userName: null, group: null, createdAt: now, updatedAt: now };
+    });
+    sendJson(res, 200, answer(session, revision, true));
+    return true;
+  }
   // Where the session's work lives, computed from git each time (see worktreeStatus.ts).
   if (parts.length === 3 && parts[2] === "worktrees" && method === "GET") {
     const session = await readSession(parts[1]);
     sendJson(res, 200, session ? await worktreeStatuses(parts[1], session.messages) : []);
+    return true;
+  }
+  // The user's explicit choice of one environment item (see sessionEnvironment.ts).
+  if (parts.length === 3 && parts[2] === "environment" && method === "POST") {
+    const id = parts[1];
+    const body = await readJson(req);
+    const item = ENVIRONMENT_ITEMS.find((i) => i.key === body.item);
+    if (!item) throw new HttpError(400, `"${String(body.item)}" is not something a chat's environment has.`);
+    if (!item.choose) throw new HttpError(400, `A chat's ${item.label} is fixed once the chat has started, so it can't be changed.`);
+    const value = item.choose(body.value);
+    if (value === undefined) throw new HttpError(400, `That isn't a valid ${item.label}, so nothing was changed.`);
+    if (await readSession(id)) await settleSession(id);
+    // The same list the page is given decides: no run, or no change.
+    const check = (old: any, run: any) => {
+      if (sessionActions(old, run).includes("changeEnvironment")) return;
+      const holder = holderKind(run);
+      const why =
+        holder === "elsewhere"
+          ? "Another server is running this chat"
+          : holder === "unknown"
+            ? "This server can't tell who is running this chat"
+            : "A reply or plan is running in this chat";
+      throw new HttpError(409, `${why}, so its ${item.label} was not changed. Change it when the run has ended; it applies from the next reply.`, {
+        reason: holder === "elsewhere" ? "running elsewhere" : holder === "unknown" ? "owner unknown" : "run active",
+      });
+    };
+    const saved = await readSession(id);
+    if (!saved) throw new HttpError(404, "No such session");
+    const live = hub.liveRun(id);
+    if (live) check(saved, live); // before the save's own, shorter refusal
+    let before: any;
+    const { session, revision } = await hub.replace(id, (old) => {
+      if (!old) throw new HttpError(404, "No such session");
+      check(old, old.run);
+      before = old;
+      return { ...old, [item.key]: value };
+    });
+    logEnvironment(id, "user choice", environmentChanges(before, session));
+    sendJson(res, 200, { ...summaryOf(session), revision, environment: environmentOf(session), folderProblems: await folderProblems(session) });
     return true;
   }
   if (parts.length !== 2) return false;
@@ -114,13 +209,15 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
     if (!session) {
       // A chat not saved yet (a new one) has no run and no owner: the server
       // still says what it may offer, so the page never has to guess.
-      sendJson(res, 404, { error: "No such session", actions: sessionActions({}, null) });
+      // It also says what a new chat would start with, so the page shows the
+      // server's choice of connection and model and never picks one itself.
+      sendJson(res, 404, { error: "No such session", actions: sessionActions({}, null), environment: await offeredEnvironment() });
       return true;
     }
     const { run: recorded, ...saved } = session;
     const run = hub.liveRun(id) ?? (recorded && ownerAlive(recorded) ? recorded : null);
     const holder = run ? holderOf(run) : null;
-    sendJson(res, 200, { ...saved, revision: revisionOf(session), ...(run ? { run } : {}), ...(holder ? { holder } : {}), actions: sessionActions(session, run) });
+    sendJson(res, 200, { ...saved, revision: revisionOf(session), ...(run ? { run } : {}), ...(holder ? { holder } : {}), actions: sessionActions(session, run), folderProblems: await folderProblems(session) });
     return true;
   }
   if (method === "PUT") {
@@ -128,9 +225,11 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
     if (!Array.isArray(body.messages)) throw new HttpError(400, "messages must be a list");
     const sent = body.revision;
     if (sent !== undefined && !(Number.isInteger(sent) && sent >= 0)) throw new HttpError(400, "revision must be a whole number");
+    let before: any;
     const { session, revision } = await hub.replace(
       id,
       (old) => {
+        before = old;
         const now = Date.now();
         // The names are PATCH's, never a save's: a save from a copy made before
         // the model named the session wiped the name out. The title follows them.
@@ -139,8 +238,12 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
         const group = old ? (old.group ?? null) : (body.group ?? null); // a PATCH's too
         const title = String(userName ?? modelName ?? body.title ?? "New session").slice(0, 100);
         // The chat's connection is kept when it is text and dropped otherwise.
-        const { connectorId, queue: _queue, queuePaused: _paused, ...rest } = body;
-        const connection = typeof connectorId === "string" && connectorId ? { connectorId } : {};
+        // `folderProblems` is looked up on every read (never stored), so a copy the page sends back is dropped.
+        const { queue: _queue, queuePaused: _paused, folderProblems: _problems, ...restWithEnvironment } = body;
+        // Every environment item except the persona: a started chat keeps its
+        // stored ones and a save without a connection no longer drops it.
+        const environment = environmentForSave(old, body);
+        const rest = Object.fromEntries(Object.entries(restWithEnvironment).filter(([k]) => !ENVIRONMENT_KEYS.includes(k) || k === "persona"));
         // The queue is the server's, like the names: a save from a copy made
         // before a message was queued or sent must not bring it back or lose it.
         // A new session has none, whatever the body says.
@@ -154,7 +257,7 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
         return {
           ...others,
           ...(draft ? { draft } : {}),
-          ...connection,
+          ...environment,
           ...(persona ? { persona } : {}),
           id,
           title,
@@ -168,6 +271,13 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
       },
       sent,
     );
+    if (before) {
+      // What the page sent and the chat kept instead was refused; the rest is a
+      // chat that had not started taking what was sent.
+      const refused = environmentChanges(session, body).filter((c) => c.item !== "persona" || before.persona !== undefined);
+      logEnvironment(id, "refused save", refused);
+      logEnvironment(id, "save before the first message", environmentChanges(before, session).filter((c) => c.item !== "persona"));
+    }
     sendJson(res, 200, { ...summaryOf(session), revision });
     return true;
   }

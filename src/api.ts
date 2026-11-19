@@ -820,6 +820,13 @@ export interface AutoApprove {
 
 export type AutoKind = keyof AutoApprove;
 
+// A working or attached folder the server found gone or unreadable (see server/folderProblems.ts).
+export interface FolderProblem {
+  item: "workingDir" | "attachments";
+  path: string;
+  why: "missing" | "not a folder" | "can't be read";
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -926,6 +933,9 @@ export interface Session {
   // What the server lets the page offer for this chat (read only). Missing from
   // an older server: then nothing is offered.
   actions?: string[];
+  // Folders of the chat that are gone or can't be read, as the server found
+  // them (read only). Missing from an older server: then nothing is said.
+  folderProblems?: FolderProblem[];
   // Messages sent while a reply was running, waiting to be sent in order (at
   // most MAX_QUEUE). The server owns them, like the names: a save never changes
   // them, and a nested session starts with none. Older saved chats don't have it.
@@ -1082,16 +1092,29 @@ export const listSessions = () => call<SessionSummary[]>("GET", "/api/sessions")
 // Answers with the session's list row. A 409 (ApiError) means the save was
 // refused: `data.reason` is "stale revision" (changed somewhere else) or
 // "run active" (a plan is running in it, so the run saves it).
-export const saveSession = (s: Session) => {
+//
+// `leaveOutModelAndConnection`: for a chat the server holds, whose model and
+// connection are the server's and change only through changeEnvironment.
+export const saveSession = (s: Session, { leaveOutModelAndConnection = false } = {}) => {
   const revision = knownRevision.get(s.id);
+  const { model: _model, connectorId: _connectorId, ...withoutChoice } = s;
   return call<SessionSummary & { revision: number }>("PUT", `/api/sessions/${s.id}`, {
-    ...s,
+    ...(leaveOutModelAndConnection ? withoutChoice : s),
     ...(revision === undefined ? {} : { revision }),
   }).then((row) => {
     knownRevision.set(s.id, row.revision);
     return row;
   });
 };
+// The user's explicit choice of one environment item of a chat the server
+// holds (see server/sessionEnvironment.ts). Refused (ApiError, a 409 with a plain
+// message) while a run holds the chat or another server owns it; then nothing
+// changed. The new revision is noted, so the next save is not taken as stale.
+export const changeEnvironment = (id: string, item: string, value: unknown) =>
+  call<SessionSummary & { revision: number; environment: Record<string, unknown>; folderProblems?: FolderProblem[] }>("POST", `/api/sessions/${id}/environment`, { item, value }).then((r) => {
+    noteRevision(id, r.revision);
+    return r;
+  });
 // Where the session's work lives: one row per worktree in its folder, from git.
 export interface WorktreeStatus {
   name: string;

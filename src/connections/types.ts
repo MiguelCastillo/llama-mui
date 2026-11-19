@@ -133,6 +133,10 @@ export interface Connection {
   // Where this connection asks for one model's capabilities, relative to the
   // connector's proxy (/api/c/<id>), or undefined when there is nowhere to ask.
   capabilitiesPath(model: string): string | undefined;
+  // Whether the server's model list (read just now) holds this model id. A
+  // chat's stored model that this says no to is shown in a notice and never
+  // replaced. Every connection answers; shared code never compares ids itself.
+  listsModel(listed: readonly { id: string }[], id: string): boolean;
   // What the model list says about a model, before anything is asked (a list
   // entry as the server sent it).
   fromList(entry: any): Capabilities | undefined;

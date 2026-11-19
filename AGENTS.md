@@ -48,27 +48,33 @@ human to catch a violation is itself a failure of the principle.
     list with the session answer and with the session's events; the page only
     draws it. The page may remove an action for a reason only it knows (no
     model chosen removes Send), never add one.
+- **The session environment belongs to the server and never changes by itself.**
+  It is the connection, the model, the working folder and attached folders,
+  the approvals and the persona. The chat's answer from the server carries all
+  of it. Once set it is constant: only an explicit user choice changes it. The
+  page never decides any of it in an existing chat, even during or just after a
+  run; a list (such as the models) only fills a menu and never picks the
+  chosen value; a default, fallback, reload, restart or autosave never
+  rewrites it. Until the chat has answered, its controls show nothing. If an
+  item is unavailable, the app names the stored value, says nothing was sent
+  or changed, and waits.
 - **Tools serve the agent's workflow.** A tool takes simple arguments and returns
-  something the model can act on. When it fails, its message says what to do
-  next (see the missing-path error in `runTool`, and what `create_worktree`
-  returns). It asks for approval only where the user is really deciding
-  something.
+  something the model can act on. A failure says what to do next (see the
+  missing-path error in `runTool`). Ask for approval only where the user is
+  really deciding something.
 - **Vendor-specific behaviour lives in that vendor's module, and shared code
-  never guesses.** Anything only one vendor does (its settings, headers, stream
-  fields, signatures, how to read a block, what an error means) goes in that
-  vendor's connector in `src/connections/`. Code that several vendors share (a
-  wire, `src/api.ts`, the agent loop, the UI) asks the connector a question and
-  uses the answer; it must not check a vendor's field itself, and must never
-  work because another vendor happens to leave that field out. If a change
-  needs the shared code to know something vendor-specific, add the question to
-  the connector interface (every vendor answers it, even if the answer is "no")
-  before writing the change. This is a rule, not a preference: decide it when
-  planning, so it is never found in review and fixed by a refactor. See
-  "Vendors and wires".
+  never guesses.** Anything only one vendor does (settings, headers, stream
+  fields, signatures, what an error means) goes in that vendor's connector in
+  `src/connections/`. Shared code (a wire, `src/api.ts`, the agent loop, the UI)
+  asks the connector a question and uses the answer; it must not check a
+  vendor's field itself, or work because another vendor leaves that field out.
+  If shared code needs a vendor fact, add the question to the connector
+  interface (every vendor answers, even "no") first. Decide this when
+  planning. See "Vendors and wires".
 - **Safety belongs to the environment, not the tools.** A sandbox, network rules
   and where secrets live stop damage whatever a tool does. A check inside a tool
-  is a stand-in until the environment does the job; when one takes over, the
-  check goes. Today's stand-ins:
+  is a stand-in; when the environment takes over, the check goes. Today's
+  stand-ins:
   - the path checks and access prompts in `server/disk.ts` and `server/write.ts`,
     including the `sessions/<id>/worktrees` exception;
   - the block on `settings.json`, `.keys` and the key file (`isSettingsFile`);
@@ -86,11 +92,10 @@ human to catch a violation is itself a failure of the principle.
   Don't add to this list without saying so here.
 
 **This file is loaded into every chat by the app.** When a chat's working
-directory has an `AGENTS.md`, its text goes into the model's system prompt (see
-`docs/guide.md`, "What the model is told"), whole and never cut. It should still
-stay short (under 20,000 characters; the chat shows a gentle recommendation
-beyond that), with the most important principles first. Loading is not enforcement: a model can still ignore a principle, so each
-principle also needs a test that fails when it is broken.
+directory has an `AGENTS.md`, its text goes into the model's system prompt whole
+(`docs/guide.md`, "What the model is told"). Keep it short (under 20,000
+characters), most important principles first. Loading is not enforcement, so
+each principle also needs a test that fails when it is broken.
 
 ## What's on screen stays
 
@@ -125,12 +130,9 @@ it first), not in a response to the browser (it's only told whether a connector
 has one, `hasKey`), not in a prompt or a tool result, not in a log, and not in
 `session.json`. The key that unlocks `.keys` is random and lives outside
 `~/.llama-mui`, in `~/.config/llama-mui/secret.key` (or `LLAMA_MUI_SECRET_KEY`),
-so copying `~/.llama-mui` copies nothing usable. Keeping a key out of
-`session.json` is what makes a session exportable by copying that one file,
-except sessions with images live in `sessions/<id>/` with an `images/` subfolder,
-so exporting requires copying the whole folder. Code that writes session data
-must never be handed a key. The app doesn't scrub
-anything for you.
+so copying `~/.llama-mui` copies nothing usable. That also makes a session
+exportable by copying its folder. Code that writes session data must never be
+handed a key; the app doesn't scrub anything for you.
 
 ## Session files
 

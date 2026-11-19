@@ -28,6 +28,7 @@ export type Action =
   | "resend" // send the failed message again
   | "send" // type and send a message
   | "approve" // answer an approval prompt: Approve, Deny, and both "Approve all ... in this session"
+  | "changeEnvironment" // the user changes the model, connection, folders or approvals (only while nothing runs the chat)
   | "takeOver";
 
 export type Holder = "unknown" | "none" | "here" | "elsewhere";
@@ -68,6 +69,8 @@ export function allowedActions({ loaded, holder, plan, canClone, hasModel = true
   if (hasModel || plan?.running) allowed.add("send");
   allowed.add("resend");
   allowed.add("approve");
+  // Only when nobody runs the chat: a run uses the environment it started with.
+  if (holder === "none") allowed.add("changeEnvironment");
   if (!plan) return allowed;
 
   if (plan.unfinished && !plan.running) allowed.add(plan.started ? "continue" : "run");
