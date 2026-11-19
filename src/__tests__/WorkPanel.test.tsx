@@ -101,6 +101,61 @@ describe("WorkPanel", () => {
     host.remove();
   });
 
+  it("shows the state as a chip with a color for each state", () => {
+    const chip = (e: WorkEntry) => render([e]).match(/<div class="MuiChip-root[^"]*"/)?.[0] ?? "";
+    expect(chip(entry({}))).toContain("MuiChip-colorSuccess");
+    expect(chip(entry({ kind: "branch" }))).toContain("MuiChip-colorWarning");
+    expect(chip(entry({ kind: "branch" }))).toContain("MuiChip-filled");
+    expect(chip(entry({ uncommitted: 2 }))).toContain("MuiChip-outlined");
+    expect(chip(entry({ merged: true }))).toContain("MuiChip-colorDefault");
+  });
+
+  it("puts entries needing attention first and merged ones last", () => {
+    const html = render([
+      entry({ purpose: "Merged one", merged: true }),
+      entry({ purpose: "Finished one" }),
+      entry({ purpose: "Dirty one", uncommitted: 2 }),
+    ]);
+    const at = (s: string) => html.indexOf(s);
+    expect(at("Dirty one")).toBeLessThan(at("Finished one"));
+    expect(at("Finished one")).toBeLessThan(at("Merged one"));
+  });
+
+  it("dims merged entries only", () => {
+    const opacityOf = (e: WorkEntry) => {
+      const host = document.createElement("div");
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+      act(() => root.render(<WorkPanel entries={[e]} />));
+      const card = host.querySelector("[data-work-entry]")!.parentElement!;
+      const value = getComputedStyle(card).opacity;
+      act(() => root.unmount());
+      host.remove();
+      return value;
+    };
+    expect(opacityOf(entry({ merged: true }))).toBe("0.6");
+    expect(opacityOf(entry({}))).toBe("1");
+  });
+
+  it("hides counts that contradict a merged state", () => {
+    const html = render([entry({ merged: true, uncommitted: 11, filesTotal: 0, files: [] })]);
+    expect(html).toContain("Merged");
+    expect(html).not.toContain("uncommitted");
+    expect(html).not.toContain("No files changed");
+  });
+
+  it("shows Open chat and Follow up together in one row", () => {
+    const f = () => {};
+    const html = renderToStaticMarkup(<WorkPanel entries={[entry({})]} onFollowUp={f} />);
+    const open = html.indexOf("Open chat");
+    const follow = html.indexOf(">Follow up<");
+    expect(open).toBeGreaterThan(-1);
+    expect(follow).toBeGreaterThan(open);
+    // Nothing but the two buttons sits between them.
+    expect(html.slice(open, follow)).not.toMatch(/<(p|span class="MuiTypography)/);
+  });
+
   it("names states in plain words", () => {
     expect(workState(entry({ merged: true }))).toBe("Merged");
     expect(workState(entry({ uncommitted: 2 }))).toBe("Has uncommitted files");

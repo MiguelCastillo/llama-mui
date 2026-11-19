@@ -41,8 +41,10 @@ const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
 // How far each level of nesting moves a row to the right (MUI spacing units).
 const INDENT = 1.5;
-// How tall the work-in-progress section may grow before it scrolls on its own.
-const WORK_MAX_HEIGHT = "24rem";
+// The least height each section keeps when both are open and the panel is
+// short; each scrolls on its own beyond that.
+const WORK_MIN_HEIGHT = "8rem";
+const SESSIONS_MIN_HEIGHT = "6rem";
 
 // Load the saved width, or default to 260.
 function loadWidth(): number {
@@ -459,7 +461,7 @@ export default function SessionsPanel({
             Your sessions show up here once you send a message.
           </Typography>
         ) : (
-          <List dense sx={{ overflowY: "auto", flexGrow: 1, px: 1, display: "flex", flexDirection: "column", gap: 0.25 }}>
+          <List dense sx={{ overflowY: "auto", flex: "0 1 auto", minHeight: SESSIONS_MIN_HEIGHT, px: 1, display: "flex", flexDirection: "column", gap: 0.25 }}>
             {groups.map((g, i) => {
               const key = `group:${g.name}`;
               // The sessions in no group get a header only beside named groups.
@@ -492,7 +494,7 @@ export default function SessionsPanel({
       {workOpen && (
         // Its own scroll, so a long list never pushes the panel's resize
         // handle out of reach.
-        <Box sx={{ overflowY: "auto", maxHeight: WORK_MAX_HEIGHT, px: 1 }}>
+        <Box sx={{ overflowY: "auto", flex: "1 1 0", minHeight: WORK_MIN_HEIGHT, px: 1 }}>
           <WorkPanel entries={workEntries ?? []} onFollowUp={onFollowUp} />
         </Box>
       )}
