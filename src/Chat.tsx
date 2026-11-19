@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, memo, useCallback, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import ChatUsageButton from "./ChatUsageButton";
 import ProjectInstructionsLine from "./ProjectInstructionsLine";
 import { projectLineTurnStart } from "./projectLineTurn";
@@ -154,6 +154,11 @@ import CutOffNote from "./CutOffNote";
 import { createMessageBox, type MessageBox, type PendingDocument, type PendingImage } from "./messageBox";
 import { useVoiceRecorder } from "./useVoiceRecorder";
 import { ChatLayout } from "./ChatLayout";
+import { holdPin, pinScrollTop, pinSpacer } from "./pinSent";
+import { pinsOnSend, readScrollMode } from "./scrollMode";
+import { endsPin, type PinInput } from "./pinRelease";
+import { findPinned, pinKeyFor, type PinKey } from "./pinTarget";
+import { hasArrived, isOwnScroll, nextScrollTop } from "./smoothScroll";
 import { composeMessage, isDocumentFile, prepareDocument, splitMessage } from "./documents";
 import EditButton from "./EditButton";
 import { submitDraft } from "./submitDraft";
@@ -585,8 +590,8 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const scrollRef = useRef<HTMLDivElement>(null);
   // Whether the chat follows new output: while you're at the bottom. Scrolling
   // up stops it, so you can read back while a reply streams (it used to pull
-  // you down on every token); scrolling back down, the arrow, or sending
-  // starts it again. Only a ref: it is read by the scroll effect, which runs
+  // you down on every token); scrolling back down or the arrow starts it
+  // again. Sending pins the message under the toolbar instead (see pinRef). Only a ref: it is read by the scroll effect, which runs
   // per token, and nothing on screen depends on it.
   const followingRef = useRef(true);
   const setFollowing = (on: boolean) => {
@@ -605,6 +610,170 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const el = scrollRef.current;
     if (el) setMoreBelow(fromBottom(el) > 80);
   };
+  // A message just sent (or Resent) is pinned: scrolled to just below the
+  // toolbar, with the reply flowing in below it while the view stays put.
+  // `key` says which of the user's messages it is, in a way the server's copy
+  // of the session doesn't change (pinTarget.ts); its index is found again in
+  // the messages shown now, and its bubble by that index (data-turn-start).
+  // `scrolled` once it has been moved there; `held` while the pin lasts.
+  // Following is off while it is held. A scroll by the user or the arrow ends
+  // it, and the usual following takes over. Plan messages and queued ones never pin.
+  const pinRef = useRef<{ key: PinKey; scrolled: boolean; held: boolean } | null>(null);
+  // The messages shown now, for the observers set up once, which would
+  // otherwise see the list of their first render.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  // The room drawn after the messages so the pinned message can reach the top
+  // in a chat whose end is near: measured, so in px. It only shrinks as the
+  // reply grows (nothing on screen moves), and starts again at the next send or
+  // another session. spacerRef is the last height worked out (null: none yet).
+  const [spacer, setSpacer] = useState(0);
+  const spacerRef = useRef<number | null>(null);
+  const stackRef = useRef<HTMLDivElement>(null);
+  const pinSent = (key: PinKey) => {
+    // The choice is read at each send, so changing it mid-chat applies from
+    // the next send. "Keep newest text in view" pins nothing: it follows the
+    // bottom (smoothly) as the reply grows.
+    if (!pinsOnSend(readScrollMode())) {
+      if (pinRef.current || spacerRef.current !== null) unpin();
+      toBottom();
+      return;
+    }
+    setFollowing(false);
+    pinRef.current = { key, scrolled: false, held: true };
+    spacerRef.current = null;
+    setSpacer(0);
+  };
+  const unpin = () => {
+    pinRef.current = null;
+    spacerRef.current = null;
+    setSpacer(0);
+  };
+  // Where the pinned message and the end of the messages are, from the top of
+  // the scroll content (the spacer not included), and the box's rooms.
+  const pinPlace = () => {
+    const box = scrollRef.current;
+    const stack = stackRef.current;
+    const pin = pinRef.current;
+    if (!box || !stack || !pin) return null;
+    // Not drawn yet: nothing now, and the next render tries again (see pinToTop).
+    const start = findPinned(messagesRef.current, pin.key);
+    if (start === null) return null;
+    const msg = box.querySelector<HTMLElement>(`[data-turn-start="${start}"]`);
+    if (!msg) return null;
+    const style = getComputedStyle(box);
+    const boxTop = box.getBoundingClientRect().top;
+    const msgView = msg.getBoundingClientRect().top;
+    return {
+      box,
+      boxTop,
+      msgView,
+      topRoom: parseFloat(style.paddingTop) || 0,
+      endRoom: parseFloat(style.paddingBottom) || 0,
+      msgTop: msgView - boxTop + box.scrollTop,
+      contentBottom: stack.getBoundingClientRect().bottom - boxTop + box.scrollTop,
+    };
+  };
+  const fitSpacer = (p: NonNullable<ReturnType<typeof pinPlace>>) => {
+    const h = pinSpacer(p.box.clientHeight, p.topRoom, p.endRoom, p.msgTop, p.contentBottom, spacerRef.current);
+    spacerRef.current = h;
+    setSpacer(h);
+  };
+  // Every path that ends a pin or keeps it from taking hold (read from the
+  // code, not measured). [user] = real user input; [layout] = layout or
+  // timing, with no input from the user; [rule] = a deliberate release.
+  // Ends the pin:
+  // 1. Real input on the scroll box (releasePin, below): a wheel, a finger
+  //    dragging, a scroll key, a press on the scrollbar. [user] The rule is
+  //    endsPin in pinRelease.ts. onScroll no longer ends it: it used to, on
+  //    any scrollTop change of more than 1 that the chat didn't write, which
+  //    also caught these, with no input from the user [layout]:
+  //    a. the browser clamping scrollTop when the spacer shrinks (fitSpacer
+  //       from the resize observer) while the box is at its end;
+  //    b. the box growing when the phone keyboard closes (or the toolbar,
+  //       usage warning or message box changing height), clamping the same way;
+  //    c. a scroll event that fires after pinToTop wrote A and lastScrollTop
+  //       = A, but after a later layout moved the box to B: moved = B - A;
+  //    d. a steps line or re-rendered markdown above the pinned message
+  //       changing height while the browser's scroll anchoring adjusts
+  //       scrollTop to keep the view steady.
+  //    Once held is false, onScroll and the resize observer below turn
+  //    following on as soon as the box is within 80 of its end, which is
+  //    the reported "pin mode still follows the bottom".
+  // 2. toBottom(), which unpins:
+  //    a. the jump arrow. [user]
+  //    b. the effect on [messages, shownPending] when a question or approval
+  //       shows at the bottom (not in the plan card). [rule]
+  //    c. a send that was refused, through settle() in send and in retry
+  //       (Resend), if the pin is still the one it made. [rule]
+  //    d. a message queued while a reply streams (queueReply). [user]
+  //    e. a side question or a note to a running plan, and Clone of a plan. [user]
+  // 3. pinSent with the "Keep newest text in view" choice: unpins and
+  //    follows instead. [rule]
+  // 4. A new send or Resend replaces the pin with a new one. [user]
+  // 5. Switching session (the effect on [sessionId]). [user]
+  // Skips the pin (it never reaches the top, or is moved off it):
+  // 6. pinPlace used to find the message by the index it had at send time,
+  //    which the server's copy of the session can move to another bubble or
+  //    none. It now finds the index again from the pin's key in the messages
+  //    shown now (pinTarget.ts); while the bubble isn't drawn, pinToTop does
+  //    nothing and is tried again after every render. [layout]
+  // 7. pinToTop moves the message only once (pin.scrolled). If the box can't
+  //    reach the target yet it waits for the spacer's height. Once scrolled
+  //    and while held, holdPinInPlace puts it back after a change above the
+  //    message or in the box's height (keyboard closing). [layout, fixed]
+  // 8. The spacer used to only shrink while pinned, so a box that grew
+  //    (keyboard closing) could lack the room to keep the message at the
+  //    top, and the browser clamped: path 1b. While held it is now worked out
+  //    afresh on each resize (holdPin); after release it only shrinks. [layout, fixed]
+  // Moves the pinned message to the top room, once. If the spacer isn't drawn
+  // tall enough yet the box can't scroll that far; it is tried again when the
+  // spacer has its height (the layout effect below).
+  const pinToTop = () => {
+    const pin = pinRef.current;
+    if (!pin?.held || pin.scrolled) return;
+    const p = pinPlace();
+    if (!p) return;
+    fitSpacer(p);
+    const target = pinScrollTop(p.boxTop, p.box.scrollTop, p.msgView, p.topRoom);
+    p.box.scrollTop = target;
+    // A scroll the chat makes itself never counts as the user's (see onScroll).
+    lastScrollTop.current = p.box.scrollTop;
+    if (Math.abs(p.box.scrollTop - target) <= 1) pin.scrolled = true;
+    measure();
+  };
+  // Once the message is at the top and until the user's first real input, a
+  // change in layout (the box growing when the keyboard closes, content above
+  // the message changing height, the reply growing) puts it back there: the
+  // spacer is worked out afresh (so a taller box still has room) and scrollTop
+  // is written, instead of the box drifting or following the bottom. Paths 7
+  // and 8 above. If the new spacer isn't drawn yet the browser clamps; the
+  // layout effect on [spacer] runs this again once it is.
+  const holdPinInPlace = () => {
+    const pin = pinRef.current;
+    if (!pin?.held || !pin.scrolled) return;
+    const p = pinPlace();
+    if (!p) return;
+    const h = holdPin(p.box.clientHeight, p.topRoom, p.endRoom, p.msgTop, p.contentBottom, p.box.scrollTop);
+    spacerRef.current = h.spacer;
+    setSpacer(h.spacer);
+    if (h.scrollTop !== null) {
+      p.box.scrollTop = h.scrollTop;
+      // A scroll the chat makes itself never counts as the user's (see onScroll).
+      lastScrollTop.current = p.box.scrollTop;
+    }
+    measure();
+  };
+  useLayoutEffect(() => {
+    pinToTop();
+    holdPinInPlace();
+  }, [spacer]);
+  // A pin whose message isn't drawn yet (or couldn't be reached) is tried
+  // again after every render, not only when the messages change. Cheap: it
+  // returns at once when nothing is waiting.
+  useLayoutEffect(() => {
+    if (pinRef.current?.held && !pinRef.current.scrolled) pinToTop();
+  });
   // Only a scroll up stops following. Output landing and the trackpad's bounce
   // at the end change the distance from the bottom too, and judging by that
   // alone flipped following off and on while you scrolled down.
@@ -612,22 +781,80 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const el = scrollRef.current;
     if (!el) return;
     measure();
-    const up = el.scrollTop < lastScrollTop.current - 1;
+    const moved = el.scrollTop - lastScrollTop.current;
     lastScrollTop.current = el.scrollTop;
+    // While a pin holds, a scroll alone changes nothing: a phone moves the box
+    // on its own (keyboard, spacer, clamping), and following stays off. Only
+    // real input ends the pin (releasePin), and from then on following works
+    // as usual.
+    if (pinRef.current?.held) return;
+    const up = moved < -1;
     if (up && fromBottom(el) > 80) {
       if (followingRef.current) setFollowing(false);
     } else if (fromBottom(el) < 80 && !followingRef.current) setFollowing(true);
   };
+  // Why following the bottom is jumpy today (found by reading the code, not
+  // measured; the smooth-follow work removes each one):
+  // 1. Every jump is instant (scrollTop = scrollHeight) and as big as what
+  //    just arrived. Text lands in bursts (a line wrapping, a code block, a
+  //    steps line), so the view moves in uneven steps instead of gliding.
+  // 2. The scroll runs in the effect on [messages, shownPending], which runs
+  //    after the browser may already have painted the new content, so a frame
+  //    shows the text below the view and the next frame jumps down to it.
+  // 3. The height can change after the scroll with nothing to follow it: a
+  //    message re-rendering (markdown, code, a steps line appearing when a
+  //    round ends) grows the content, but the observer that keeps the end only
+  //    watches the box, not the content, so the view stays short until the
+  //    next token and then jumps by both amounts at once.
+  // 4. The scroll is a one-off write, not a loop: nothing re-reads the target
+  //    while it moves, so any growth in the same frame is missed (see 3).
+  // 5. measure() sets state on every scroll and every resize, so the whole chat
+  //    renders again during streaming, which adds work to the same frames.
+  // 6. While a message is pinned, the spacer's height is set from the resize
+  //    observer on each change of the reply, another render per change.
   // Moves only the chat box (scrollIntoView moved the page too), and only when
   // it isn't at the bottom yet: reasoning tokens update the messages dozens of
   // times a second with nothing new on screen, and each scroll was a jitter.
+  // Now one animation-frame loop eases toward the bottom (see smoothScroll.ts).
+  // At most one loop runs; the target is read again each frame, so growing
+  // content is followed. The loop ends on arrival, when following is switched
+  // off, or when the box is not where the loop left it (the user moved it).
+  // Each write sets lastScrollTop first, so onScroll sees our own scroll as no
+  // movement. With reduced motion the jump is instant, as before.
+  const followFrame = useRef(0);
+  const followSet = useRef<number | null>(null);
+  const followTime = useRef(0);
   const stickToBottom = () => {
     const el = scrollRef.current;
-    if (!el || fromBottom(el) <= 1) return;
-    el.scrollTop = el.scrollHeight;
-    lastScrollTop.current = el.scrollTop;
+    if (!el || fromBottom(el) <= 1 || followFrame.current) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      el.scrollTop = el.scrollHeight;
+      lastScrollTop.current = el.scrollTop;
+      return;
+    }
+    followSet.current = el.scrollTop;
+    followTime.current = performance.now();
+    const step = (now: number) => {
+      followFrame.current = 0;
+      const box = scrollRef.current;
+      if (!box || !followingRef.current) return;
+      // Moved by someone else since our last write: the user's, so stop.
+      if (followSet.current !== null && !isOwnScroll(box.scrollTop, followSet.current)) return;
+      const target = box.scrollHeight - box.clientHeight;
+      const next = nextScrollTop(box.scrollTop, target, now - followTime.current);
+      followTime.current = now;
+      box.scrollTop = next;
+      followSet.current = box.scrollTop;
+      lastScrollTop.current = box.scrollTop;
+      if (!hasArrived(box.scrollTop, box.scrollHeight - box.clientHeight)) {
+        followFrame.current = requestAnimationFrame(step);
+      }
+    };
+    followFrame.current = requestAnimationFrame(step);
   };
+  // Ends a pin too, and drops its spacer, so the bottom is the end of the messages.
   const toBottom = () => {
+    if (pinRef.current) unpin();
     setFollowing(true);
     stickToBottom();
   };
@@ -641,7 +868,16 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (!box || !content) return;
     const recheck = () => {
       measure();
-      if (!followingRef.current && fromBottom(box) < 80) setFollowing(true);
+      // The reply growing (or the box's size changing) shrinks the spacer by
+      // as much, so nothing moves. A held pin keeps following off, and once
+      // at the top it is kept there (holdPinInPlace).
+      const pin = pinRef.current;
+      if (pin?.held && pin.scrolled) holdPinInPlace();
+      else if (pin) {
+        const p = pinPlace();
+        if (p) fitSpacer(p);
+      }
+      if (!followingRef.current && !pinRef.current?.held && fromBottom(box) < 80) setFollowing(true);
     };
     const observer = new ResizeObserver(recheck);
     observer.observe(content);
@@ -652,9 +888,55 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       if (followingRef.current) stickToBottom();
     });
     keepEnd.observe(box);
+    // Content growing after the loop arrived (a message re-rendering) is
+    // followed too, instead of waiting for the next token.
+    keepEnd.observe(content);
     return () => {
       observer.disconnect();
       keepEnd.disconnect();
+      cancelAnimationFrame(followFrame.current);
+      followFrame.current = 0;
+    };
+  }, []);
+  // Ends a held pin when the user really scrolls (pinRelease.ts says which
+  // input does). The pin's spacer stays; following works as usual from here
+  // (onScroll and the resize observer above).
+  const releasePin = (input: PinInput) => {
+    const pin = pinRef.current;
+    if (pin?.held && endsPin(input)) pin.held = false;
+  };
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (!box) return;
+    const onWheel = (e: WheelEvent) => releasePin({ kind: "wheel", deltaY: e.deltaY });
+    const onTouchStart = () => releasePin({ kind: "touchstart" });
+    const onTouchMove = () => releasePin({ kind: "touchmove" });
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const editable = !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+      releasePin({ kind: "key", key: e.key, editable });
+    };
+    // A press on the box itself (not a message) at its right edge is on the
+    // scrollbar: past clientWidth for a classic one, or within the last rem
+    // for an overlay one, which takes no width.
+    const onPointer = (e: PointerEvent) => {
+      if (e.target !== box) return;
+      const x = e.clientX - box.getBoundingClientRect().left;
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const edge = box.clientLeft + box.clientWidth;
+      if (x >= edge || x >= box.offsetWidth - rem) releasePin({ kind: "scrollbar" });
+    };
+    box.addEventListener("wheel", onWheel, { passive: true });
+    box.addEventListener("touchstart", onTouchStart, { passive: true });
+    box.addEventListener("touchmove", onTouchMove, { passive: true });
+    box.addEventListener("keydown", onKey);
+    box.addEventListener("pointerdown", onPointer);
+    return () => {
+      box.removeEventListener("wheel", onWheel);
+      box.removeEventListener("touchstart", onTouchStart);
+      box.removeEventListener("touchmove", onTouchMove);
+      box.removeEventListener("keydown", onKey);
+      box.removeEventListener("pointerdown", onPointer);
     };
   }, []);
 
@@ -667,6 +949,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   useEffect(() => {
     setOpenSession(sessionId);
     return () => setOpenSession(undefined);
+  }, [sessionId]);
+  // A pin and its spacer belong to the chat they were made in.
+  useEffect(() => {
+    if (pinRef.current || spacerRef.current !== null) unpin();
   }, [sessionId]);
   // First load: the address takes the open chat's id, replacing the current
   // entry so it isn't an extra step back. A Settings or pairing address stays.
@@ -997,7 +1283,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const card = cards.find((c) => want.planId && c.dataset.planId === want.planId) ?? cards.find((c) => c.dataset.current) ?? cards[cards.length - 1];
     if (!card) return;
     // Moves only the chat box, like stickToBottom.
-    box.scrollTop += card.getBoundingClientRect().top - box.getBoundingClientRect().top - 72;
+    // Lands the card just below the top room (the box's top padding).
+    const topRoom = parseFloat(getComputedStyle(box).paddingTop) || 0;
+    box.scrollTop += card.getBoundingClientRect().top - box.getBoundingClientRect().top - topRoom;
     lastScrollTop.current = box.scrollTop;
   }, [loaded, sessionId]);
 
@@ -1366,8 +1654,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const promptInPlan = !!shownPending && planRunning && !!plan;
   // Not smooth: an animation per token never caught up, and fought the user.
   // A prompt in the plan card scrolls itself into view instead.
+  // A message just sent is pinned under the toolbar instead (see pinRef),
+  // until a question for the user shows at the bottom: that must be seen, so
+  // the chat goes to it and follows again.
   useEffect(() => {
-    if (followingRef.current && !promptInPlan) stickToBottom();
+    if (pinRef.current?.held && shownPending && !promptInPlan) toBottom();
+    else if (pinRef.current?.held) pinToTop();
+    else if (followingRef.current && !promptInPlan) stickToBottom();
   }, [messages, shownPending]);
 
   // Changes the open session's attachments or working directory. The folders
@@ -1616,7 +1909,14 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // No check of the model here: the server looks, as it starts the reply, and
     // says in the reply if the model isn't loaded or is still loading. That is
     // one request from the tap instead of two.
-    toBottom();
+    // The message is pinned under the toolbar where it will show (an edit
+    // replaces the message at its place); a refused send goes back to following.
+    pinSent(pinKeyFor(history.slice(0, editTarget && stillEditing ? editTarget.index : history.length), text));
+    const pin = pinRef.current;
+    const settle = (went: boolean) => {
+      if (!went && pinRef.current === pin) toBottom();
+      return went;
+    };
     // The quote goes with the message and the card closes once it is accepted;
     // a send that then fails brings the card back, as the box gets its text back.
     const quoted = pendingReply;
@@ -1640,11 +1940,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       // Refused: the text is back in the box, so it is still an edit.
       if (!went && openId.current === id) setEditing(index);
       if (!went && quoted) setReplyTarget((now) => now ?? quoted);
-      return went;
+      return settle(went);
     }
     const went = await chatTurn(text, history, planOn, images, undefined, quoted?.text);
     if (!went && quoted) setReplyTarget((now) => now ?? quoted);
-    return went;
+    return settle(went);
   };
 
   // What the server needs from here to run a plan or a reply: which connector
@@ -2043,10 +2343,13 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (!userMsg || runActive || starting.current) return;
     if (!model || !connector) return;
     const index = messages.indexOf(userMsg);
-    toBottom();
+    // Pinned under the toolbar like a new message; refused, back to following.
+    pinSent(pinKeyFor(messages.slice(0, index), userMsg.content));
+    const pin = pinRef.current;
     // The images are already on the server: send the same refs again.
     const refs = userMsg.images?.length ? userMsg.images : undefined;
-    await chatTurn(userMsg.content, messages.slice(0, index), false, undefined, refs, userMsg.replyTo?.text);
+    const went = await chatTurn(userMsg.content, messages.slice(0, index), false, undefined, refs, userMsg.replyTo?.text);
+    if (!went && pinRef.current === pin) toBottom();
   };
 
   // Tool results show inside the call that asked for them, and the assistant
@@ -2631,7 +2934,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         }
         messages={
         <Container maxWidth={false} ref={contentRef} sx={{ maxWidth: CHAT_MAX_WIDTH }}>
-          <Stack spacing={2}>
+          <Stack spacing={2} ref={stackRef}>
             {/* With a plan, the note is at the bottom of the plan card instead. */}
             {!plan && <HeldElsewhereLine port={heldPort} sessionId={sessionId} canTakeOver={allowed.has("takeOver")} />}
             {connector === null ? (
@@ -2733,6 +3036,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
             {folderNotice(folderProblems) && <Alert severity="warning">{folderNotice(folderProblems)}</Alert>}
             {error && <Alert severity="error">{error}</Alert>}
           </Stack>
+          {/* Room for a just-sent message to reach the top (see pinRef). Its
+              height is measured from the page, so it is in px; 0 draws nothing. */}
+          <Box aria-hidden data-pin-spacer sx={{ height: `${spacer}px` }} />
         </Container>
         }
         // The empty chat: the heading, the creature (hangs above the heading)
@@ -4038,7 +4344,11 @@ const MessageBubble = memo(function MessageBubble({
     </Stack>
   );
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", gap: 1, opacity: isAside ? 0.85 : 1 }}>
+    <Box
+      // The turn's first message index, so the chat can find this message to pin it under the top bar after sending.
+      data-turn-start={start}
+      sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", gap: 1, opacity: isAside ? 0.85 : 1 }}
+    >
       {isAside && (
         <Typography variant="caption" color="text.secondary" sx={{ mb: -0.5 }}>
           Side question

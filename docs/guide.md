@@ -1802,8 +1802,32 @@ step that was running when the page closed comes back as pending.
   keeps the waiting dots and shows its history as it comes.
 - The chat follows new output while you're at the bottom. Scroll up to read
   back, even while a reply streams, and it stays put; a down arrow at the
-  bottom jumps to the latest and follows again, as does scrolling back down or
-  sending a message.
+  bottom jumps to the latest and follows again, as does scrolling back down.
+  Following is smooth: one animation eases the view toward the bottom and
+  re-reads where the bottom is on every frame, so text arriving in bursts
+  moves the view steadily instead of in jumps. Scrolling yourself cancels it,
+  and with "reduce motion" on in the system the view jumps instead.
+  Settings → Chat has a choice, "When I send a message", kept in this browser
+  like Show steps:
+  - "Keep newest text in view" (the default): sending a message, or Resend,
+    follows the bottom as the reply streams.
+  - "Move my message to the top": sending a message, or Resend, moves that
+    message to just below the top bar and the reply flows in below it without
+    moving the view, so you can read it from its start. The message stays
+    there until you do something yourself: scroll with the wheel or
+    trackpad, touch and drag, press a scroll key (arrows, Page Up/Down,
+    space, Home/End), drag the scrollbar, or tap the down arrow. A question
+    or approval waiting for your answer also lets go, so it comes into view.
+    Nothing else ends it: the view shifting on its own (the phone keyboard
+    closing, a steps line appearing, the space below shrinking, the server's
+    copy of the chat arriving) keeps the message at the top instead of
+    following the bottom. Once it lets go, the chat follows as usual.
+    Changing the choice takes effect on the next send.
+
+  The choice is saved in this browser only, so a phone and a computer can
+  each have their own.
+
+  Messages sent by a plan run and queued messages always follow the bottom.
 - While a reply runs, a counter shows how long it's taken: on the live line
   (with the speed it's streaming at, once the answer is being written); during a plan run it's on the plan card. A finished reply keeps the total in small print, for example
   "2.8s · 52 tps (client) · 58 tps (server)": the client speed is what reached

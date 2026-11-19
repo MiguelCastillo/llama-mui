@@ -1,27 +1,45 @@
+import { useLayoutEffect, useState } from "react";
 import type { ReactNode, Ref, UIEventHandler } from "react";
 import { Box, Container, Paper } from "@mui/material";
 import { useVisibleHeight } from "./useVisibleHeight";
 
-// The shared values of the chat page layout. They depend on each other, so
-// change them together and only here:
-//  - The scrolling area runs OVERLAP under the message box, so messages show
-//    through the transparent strip and past the box's rounded corners.
-//  - Floating things (jump button, empty-chat block) sit GAP above the message
-//    box. Measured from the bottom of the scrolling area that is
-//    OVERLAP + GAP (see ANCHOR_BOTTOM).
-//  - SCROLL_PADDING is the room left under the last message and the distance
-//    kept when scrolling something into view. It must be at least OVERLAP, or
-//    the last line ends up behind the message box.
-export const CHAT_OVERLAP = "2.5rem";
+// The shared values of the chat page layout. Change them only here:
+//  - The scrolling box fills the whole column down to the bottom of the
+//    visible height, so its scrollbar reaches the screen bottom. The strip with
+//    the message box floats over its bottom edge.
+//  - The strip's height is measured in one place (useStripHeight) because it
+//    changes when the message box grows or the phone keyboard opens. Everything
+//    that must clear the message box derives from it: END_ROOM is the strip's
+//    height plus GAP (clear space above the box). It is the scrolling box's
+//    bottom padding and the distance kept when scrolling something into view,
+//    and it is where floating things (jump button, empty-chat block) sit.
+//  - STRIP_FALLBACK is the strip's height used until it is measured, or where
+//    ResizeObserver doesn't exist.
 export const CHAT_GAP = "1.5rem";
-export const CHAT_SCROLL_PADDING = "3rem";
-export const CHAT_ANCHOR_BOTTOM = `calc(${CHAT_OVERLAP} + ${CHAT_GAP})`;
+// TOP_ROOM is the scrolling box's top padding: it keeps the first message clear
+// of the floating toolbar, and it is where a just-sent message is pinned so the
+// reply flows in below it.
+export const CHAT_TOP_ROOM = "4.5rem";
+export const CHAT_STRIP_FALLBACK = "7rem";
+export const chatEndRoom = (strip: string) => `calc(${strip} + ${CHAT_GAP})`;
 
-// How far the strip with the message box is pulled up over the scrolling
-// area: the overlap plus the strip's own top padding (0.5rem on phones, 1rem
-// otherwise) and, on wide screens, 1rem more.
-const STRIP_PULL_NARROW = `calc(-1 * (${CHAT_OVERLAP} + 0.5rem))`;
-const STRIP_PULL_WIDE = `calc(-1 * (${CHAT_OVERLAP} + 2rem))`;
+// The strip's height as a CSS length: measured in px (a computed value, not a
+// written one), or the fallback while nothing is measured.
+export const chatStripLength = (measuredPx: number | null) => (measuredPx === null ? CHAT_STRIP_FALLBACK : `${measuredPx}px`);
+
+function useStripHeight(): [string, (el: HTMLElement | null) => void] {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [px, setPx] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const read = () => setPx(el.getBoundingClientRect().height);
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return [chatStripLength(px), setEl];
+}
 
 type Props = {
   // The sessions list beside the chat column.
@@ -47,6 +65,8 @@ export function ChatLayout({ sidebar, top, messages, composer, floating, anchore
   // Sized from the visible height, which follows the phone keyboard, never
   // from the full screen.
   const height = useVisibleHeight();
+  const [strip, stripRef] = useStripHeight();
+  const endRoom = chatEndRoom(strip);
   return (
     <Box sx={{ display: "flex", height }}>
       {sidebar}
@@ -57,23 +77,24 @@ export function ChatLayout({ sidebar, top, messages, composer, floating, anchore
           <Box
             ref={scrollRef}
             onScroll={onScroll}
-            sx={{ flexGrow: 1, minHeight: 0, overflowY: "auto", pt: 9, pb: narrow ? 8 : 9, scrollPaddingBottom: CHAT_SCROLL_PADDING, position: "relative" }}
+            sx={{ flexGrow: 1, minHeight: 0, overflowY: "auto", pt: CHAT_TOP_ROOM, pb: endRoom, scrollPaddingBottom: endRoom, position: "relative" }}
           >
             {messages}
-            {anchored && <Box sx={{ position: "absolute", bottom: CHAT_ANCHOR_BOTTOM, left: 0, right: 0 }}>{anchored}</Box>}
+            {anchored && <Box sx={{ position: "absolute", bottom: endRoom, left: 0, right: 0 }}>{anchored}</Box>}
           </Box>
           {floating && (
-            <Box sx={{ position: "absolute", bottom: CHAT_ANCHOR_BOTTOM, left: 0, right: 0, height: 0, display: "flex", justifyContent: "center", zIndex: 2 }}>
+            <Box sx={{ position: "absolute", bottom: endRoom, left: 0, right: 0, height: 0, display: "flex", justifyContent: "center", zIndex: 2 }}>
               {floating}
             </Box>
           )}
         </Box>
-        {/* Transparent strip over the bottom of the chat. Clicks and the wheel
-            pass through it to the chat; only the content inside takes them. */}
+        {/* Transparent strip floating over the bottom of the chat. Clicks and
+            the wheel pass through it to the chat; only the content inside takes them. */}
         <Paper
+          ref={stripRef}
           square
           elevation={0}
-          sx={{ py: narrow ? 1 : 2, mt: narrow ? STRIP_PULL_NARROW : STRIP_PULL_WIDE, position: "relative", bgcolor: "transparent", pointerEvents: "none" }}
+          sx={{ pb: narrow ? 1 : 2, position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 1, bgcolor: "transparent", pointerEvents: "none" }}
         >
           <Container maxWidth={false} sx={{ maxWidth, pointerEvents: "auto", ...(narrow && { px: 1 }) }}>
             {composer}
