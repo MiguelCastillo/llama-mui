@@ -1376,6 +1376,32 @@ in it or it is running a plan.
 - The reply is made by the same code as before (`runTurn`, the naming, the
   usage and the planning turns work as they did); only where it runs changed.
 
+### How the page holds the open chat
+
+The open chat's data (its messages, plan, todos, queue and the rest of what is
+saved with it) lives on the page in one place, the session store
+(`src/sessionStore.ts`), a small store outside React shaped like the message
+box's (`src/messageBox.ts`) and the steps setting's (`src/showSteps.ts`).
+
+- **One copy.** Drawing the chat reads it through a subscription
+  (`useSyncExternalStore(store.subscribe, store.get)` in `src/Chat.tsx`), so
+  the page redraws when it changes. Code that runs across waits (a send, the
+  plan runner, a tool call, a save) reads `store.get()`, which is always the
+  latest state and never a value left from an older drawing. There is no
+  second copy in a ref: a send once read the drawn messages while the latest
+  ones were three ahead, and dropped messages. A test
+  (`src/__tests__/noSessionRefs.test.ts`) fails if such a ref comes back.
+- **One way to change it.** `store.update` takes a partial change, or a
+  function from the current state to one. A change that alters nothing (every
+  key the same by `Object.is`) is dropped: nothing redraws and the save timer
+  doesn't start again.
+- **Message changes are marked.** Each new message list is reported as
+  `msgs:<source>:<before>><after>` to the scroll recorder (see `scroll.trace`
+  in "The server's log"), so a recording shows what replaced the list.
+
+A shared provider for the rest of the page may come once the chat page is
+split into smaller parts; for now the store is made and read in the chat page.
+
 ### After a restart
 
 A run lives in the server's memory, so when the server stops, so does the run.
@@ -1451,7 +1477,10 @@ the step, not in the chat.
   pending, at the end of the chat; the original stays as it ran. Clone shows
   only while no other plan is unfinished, since the clone would replace it,
   and not while anything runs. Or send a message and the model writes a new
-  plan.
+  plan. While a reply runs, a finished plan keeps its Result and the room of
+  its button row even with Clone gone, so the cards above a message you just
+  sent don't shrink and move it; the Result hides only while that plan itself
+  runs.
 - When the model writes a new plan, a finished one stays where it is, and
   the new one shows after its own turn. Its steps all start pending, even
   ones with the same text as a done step.
@@ -1813,7 +1842,13 @@ step that was running when the page closed comes back as pending.
     follows the bottom as the reply streams.
   - "Move my message to the top": sending a message, or Resend, moves that
     message to just below the top bar and the reply flows in below it without
-    moving the view, so you can read it from its start. The message stays
+    moving the view, so you can read it from its start. The message first
+    jumps to about 10rem below its place under the top bar (or stays where
+    it is, if it is already closer) and then glides up to that place, the
+    same on phone and desktop, so the glide always starts from the same
+    distance even while the phone keyboard closes (with reduced motion
+    turned on in the system, it jumps straight there); a touch or scroll
+    during the glide stops it and lets go. The message stays
     there until you do something yourself: scroll with the wheel or
     trackpad, touch and drag, press a scroll key (arrows, Page Up/Down,
     space, Home/End), drag the scrollbar, or tap the down arrow. A question
@@ -2406,6 +2441,26 @@ the `tail -f` command that follows it, when it starts. Each line has `t` (time),
   `limit`) and `refused` is true when it was far enough over to be refused. Never
   the words. The plan itself is saved unless `refused`. To see how often it
   happens: `grep plan.over_guideline ~/.llama-mui/logs/server-*.log`.
+- `scroll.trace`: written by the page about 4 seconds after each send with
+  "Move my message to the top" (`src/scrollRecorder.ts`, switch
+  `SCROLL_TRACE_ON` in `src/scrollTrace.ts`). `frames` holds one entry per
+  animation frame: the box's scroll position and sizes, `off` (where the
+  message is against its place under the top bar: negative is past it),
+  `wy`/`vt` (the whole page moving), the spacer and the pin's state.
+  `changes` lists what in the message list changed size, appeared or went
+  away (`what` is a label such as `turn:12` or `plan`, `above` says whether
+  it is above the message, `dh` the height change). `marks` are the chat's
+  own moves: `glide-start`, `glide-shift:<px>`, `glide-end:<px>`,
+  `hold:<px>` (a correction, the snap back), `restore:<px>` (the glide's
+  position put back after the chat grew, before the frame is drawn),
+  `release:<input>`, `toBottom`,
+  `unpin`, `msgs:<source>:<before>><after>` (the message list replaced, with
+  where it came from: `send`, `run-<status>`, `load`, `final`, `queue` or
+  `page`) and `drawn:<messages>:<turns>` (a new list drawn, with how many
+  turns are on the page). `summary` gives the furthest overshoot (`worstOff`), the biggest
+  one-frame jump after arriving, and `suspects`: changes above the message
+  within 120 ms before either. Numbers and labels only, never text:
+  `jq -c 'select(.event=="scroll.trace") | .summary' ~/.llama-mui/logs/server-<day>.log`.
 - `llama.watch`, `llama.down`, `llama.up`, `llama.model`: every 15 seconds the
   server asks each llama server for its models and writes a line only when
   something changed: it stopped answering, answered again (`downForMs` is how

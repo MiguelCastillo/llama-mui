@@ -154,15 +154,20 @@ import CutOffNote from "./CutOffNote";
 import { createMessageBox, type MessageBox, type PendingDocument, type PendingImage } from "./messageBox";
 import { useVoiceRecorder } from "./useVoiceRecorder";
 import { ChatLayout } from "./ChatLayout";
-import { holdPin, pinScrollTop, pinSpacer } from "./pinSent";
+import { holdPin, pinSpacer } from "./pinSent";
 import { pinsOnSend, readScrollMode } from "./scrollMode";
 import { endsPin, type PinInput } from "./pinRelease";
+import { GLIDE_START_REM, glideDone, glideScrollTop, glideShift, glideStart } from "./pinGlide";
+import { SCROLL_TRACE_ON } from "./scrollTrace";
+import { type Recorder, startRecorder } from "./scrollRecorder";
+import { sendScrollTrace } from "./api";
 import { findPinned, pinKeyFor, type PinKey } from "./pinTarget";
 import { hasArrived, isOwnScroll, nextScrollTop } from "./smoothScroll";
 import { composeMessage, isDocumentFile, prepareDocument, splitMessage } from "./documents";
 import EditButton from "./EditButton";
 import { submitDraft } from "./submitDraft";
 import { optimisticSend } from "./optimisticSend";
+import { keepOrTake, type SentMessage } from "./keepSent";
 import { lastEditable } from "./editLast";
 import { newId } from "./uuid";
 import FolderChip, { AttachmentIcon } from "./FolderChip";
@@ -259,6 +264,7 @@ import {
 import { withSessionDefaults } from "./sessionDefaults";
 import { CONTEXT_FULL_AT, CONTEXT_WARN_AT, contextShare } from "./contextShare";
 import { emptySessionState, fromSession, stateKey, toSession, type SessionState } from "./sessionState";
+import { createSessionStore, type SessionChange } from "./sessionStore";
 import { SESSION_KEY, sessionFromHash, setSessionAddress } from "./sessionRoute";
 import { descendantIds, nestedHeldBy, nestedSessionFrom } from "./sessionTree";
 
@@ -395,28 +401,27 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   // Everything about the open chat that is saved with it, in one object (see
-  // sessionState.ts for what each field is). `sessionRef` is always the latest
-  // one, so a change made right after another, before a render, starts from the
-  // first, and the plan runner and tool calls can read the plan and the todos
-  // between awaits through planRef and todosRef.
-  const [session, setSession] = useState<SessionState>(emptySessionState);
-  const sessionRef = useRef(session);
-  const planRef = useRef<PlanStep[] | null>(null);
-  const todosRef = useRef<Todo[]>([]);
+  // sessionState.ts for what each field is), held in the session store
+  // (sessionStore.ts). Rendering reads it through a subscription; the store's
+  // get() is always the latest one, so a change made right after another,
+  // before a render, starts from the first; code that runs between awaits
+  // reads store.get().
+  // The scroll recorder's mark function, set further down; the store reports
+  // each change of the message list to it as msgs:<source>:<before>><after>.
+  const traceHook = useRef<((name: string) => void) | null>(null);
+  const [store] = useState(() => {
+    const s = createSessionStore();
+    s.onMessages((mark) => traceHook.current?.(mark));
+    return s;
+  });
+  const session = useSyncExternalStore(store.subscribe, store.get);
+  // The message just sent, until the server's copy holds it (keepSent.ts).
+  const sentRef = useRef<SentMessage | null>(null);
   // The one way to change it: a partial change, or a function from the current
-  // state to one. A change that alters nothing is dropped, so setting a field
-  // to what it already is renders nothing and doesn't restart the save timer.
-  const updateSession = (change: Partial<SessionState> | ((current: SessionState) => Partial<SessionState>)) => {
-    const current = sessionRef.current;
-    const part = typeof change === "function" ? change(current) : change;
-    const keys = Object.keys(part) as (keyof SessionState)[];
-    if (keys.every((k) => Object.is(current[k], part[k]))) return;
-    const next = { ...current, ...part };
-    sessionRef.current = next;
-    planRef.current = next.plan;
-    todosRef.current = next.todos;
-    setSession(next);
-  };
+  // state to one (see sessionStore.ts; a change that alters nothing is
+  // dropped). `source` says where a new message list came from, for the
+  // scroll recorder.
+  const updateSession = (change: SessionChange, source = "page") => store.update(change, source);
   // The fields by name, so reads stay as they were.
   const {
     messages,
@@ -516,7 +521,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // Matched again by text: the user may have changed the plan since. A step
     // kept from an older plan, with no summary, takes the proposal's. The plan's
     // own summary stays: a proposal changes steps, not what the plan is for.
-    const old = planRef.current ?? [];
+    const old = store.get().plan ?? [];
     const keep = (p: PlanStep) => {
       const o = old.find((x) => x.text === p.text);
       return o ? (o.summary || !p.summary ? o : { ...o, summary: p.summary }) : p;
@@ -640,11 +645,54 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       return;
     }
     setFollowing(false);
+    stopGlide();
     pinRef.current = { key, scrolled: false, held: true };
     spacerRef.current = null;
     setSpacer(0);
+    startTrace();
+  };
+  // The scroll recorder (scrollRecorder.ts): from each pinned send, for a few
+  // seconds, every frame and every change in the message list, sent to the
+  // server log as scroll.trace. Numbers and labels only. A new send or another
+  // session ends the one before (it is sent with what it has).
+  const recorder = useRef<Recorder | null>(null);
+  const traceMark = (name: string) => recorder.current?.mark(name);
+  traceHook.current = traceMark;
+  // Each time a new message list is drawn: how many messages the page has and
+  // how many turns are on the page (drawn:<messages>:<turns>), so a recording
+  // shows the moment a message leaves the page and what list caused it.
+  useLayoutEffect(() => {
+    if (!recorder.current) return;
+    const drawn = stackRef.current?.querySelectorAll("[data-turn-start]").length ?? 0;
+    traceMark(`drawn:${messages.length}:${drawn}`);
+  }, [messages]);
+  const startTrace = () => {
+    recorder.current?.stop();
+    recorder.current = null;
+    if (!SCROLL_TRACE_ON) return;
+    const session = sessionId;
+    recorder.current = startRecorder(
+      () => {
+        const p = pinPlace();
+        return {
+          box: scrollRef.current,
+          stack: stackRef.current,
+          msg: p?.msg ?? null,
+          topRoom: p?.topRoom ?? 0,
+          msgTop: p?.msgTop ?? null,
+          spacer: spacerRef.current,
+          held: !!pinRef.current?.held,
+          scrolled: !!pinRef.current?.scrolled,
+          gliding: !!glide.current,
+          following: followingRef.current,
+        };
+      },
+      (trace, summary) => sendScrollTrace({ session, summary, ...trace }),
+    );
   };
   const unpin = () => {
+    traceMark("unpin");
+    stopGlide();
     pinRef.current = null;
     spacerRef.current = null;
     setSpacer(0);
@@ -666,6 +714,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const msgView = msg.getBoundingClientRect().top;
     return {
       box,
+      msg,
       boxTop,
       msgView,
       topRoom: parseFloat(style.paddingTop) || 0,
@@ -674,10 +723,24 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       contentBottom: stack.getBoundingClientRect().bottom - boxTop + box.scrollTop,
     };
   };
-  const fitSpacer = (p: NonNullable<ReturnType<typeof pinPlace>>) => {
-    const h = pinSpacer(p.box.clientHeight, p.topRoom, p.endRoom, p.msgTop, p.contentBottom, spacerRef.current);
+  // Sets the spacer's height on the element at once, as well as in state. A
+  // resize observer runs after layout and before the screen is drawn, so a
+  // spacer written here is in place before that frame shows; through state
+  // alone it would only be drawn on the next render, a frame later. Path 9.
+  const spacerEl = useRef<HTMLDivElement>(null);
+  const applySpacer = (h: number) => {
     spacerRef.current = h;
+    if (spacerEl.current) spacerEl.current.style.height = `${h}px`;
     setSpacer(h);
+  };
+  const fitSpacer = (p: NonNullable<ReturnType<typeof pinPlace>>) => {
+    applySpacer(pinSpacer(p.box.clientHeight, p.topRoom, p.endRoom, p.msgTop, p.contentBottom, spacerRef.current));
+  };
+  // The spacer worked out afresh (it may grow), as holdPin does: while the
+  // glide runs, so a box that grew (the keyboard closing) still has the room
+  // to reach the stop. Paths 7 and 8 below.
+  const freshSpacer = (p: NonNullable<ReturnType<typeof pinPlace>>) => {
+    applySpacer(pinSpacer(p.box.clientHeight, p.topRoom, p.endRoom, p.msgTop, p.contentBottom, null));
   };
   // Every path that ends a pin or keeps it from taking hold (read from the
   // code, not measured). [user] = real user input; [layout] = layout or
@@ -718,29 +781,121 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   //    none. It now finds the index again from the pin's key in the messages
   //    shown now (pinTarget.ts); while the bubble isn't drawn, pinToTop does
   //    nothing and is tried again after every render. [layout]
-  // 7. pinToTop moves the message only once (pin.scrolled). If the box can't
-  //    reach the target yet it waits for the spacer's height. Once scrolled
-  //    and while held, holdPinInPlace puts it back after a change above the
-  //    message or in the box's height (keyboard closing). [layout, fixed]
-  // 8. The spacer used to only shrink while pinned, so a box that grew
-  //    (keyboard closing) could lack the room to keep the message at the
-  //    top, and the browser clamped: path 1b. While held it is now worked out
-  //    afresh on each resize (holdPin); after release it only shrinks. [layout, fixed]
-  // Moves the pinned message to the top room, once. If the spacer isn't drawn
-  // tall enough yet the box can't scroll that far; it is tried again when the
-  // spacer has its height (the layout effect below).
+  // 7. pinToTop moves the message only once (pin.scrolled). pin.scrolled used
+  //    to be set only if the glide reached the stop, and holdPinInPlace runs
+  //    only once it is set, so a glide that ended short (keyboard closing,
+  //    spacer not drawn yet) stayed short with nothing retrying. Now the
+  //    glide's end always sets pin.scrolled and calls holdPinInPlace, which
+  //    puts the message at the top and keeps it there after a change above
+  //    the message or in the box's height. [layout, fixed]
+  // 8. The spacer used to only shrink while pinned: sized at send for the
+  //    short box (keyboard open), so the box that grew when the keyboard
+  //    closed lacked the room to reach the top, and the browser clamped (path
+  //    1b). While held it is now worked out afresh: at glide start and on each
+  //    resize while the glide runs (freshSpacer), and once at the top on each
+  //    resize (holdPin). After release it only shrinks. [layout, fixed]
+  // 9. Even sized afresh, the spacer went through state, so it was drawn a
+  //    frame after the box grew (the keyboard closing). In that frame the
+  //    browser clamped scrollTop and the message dropped ~200px, then the
+  //    glide jumped it back up (seen in a scroll.trace: chat area 434 to 745px
+  //    at 108 ms). Now the spacer is set on its element at once
+  //    (applySpacer) and the glide's position restored, in the resize
+  //    observer, before the frame is drawn. [layout, fixed]
+  // Moves the pinned message to the top room, once. The stop is worked out
+  // once in content coordinates (the message's offset in the content minus
+  // the top room, as holdPin uses), so the keyboard closing doesn't move it.
+  // The box jumps to a fixed GLIDE_START_REM short of the stop, or stays where
+  // it is if closer (glideStart in pinGlide.ts), the same on phone and
+  // desktop; then one animation-frame loop glides up to the stop. Each frame
+  // re-reads only the message's offset in the content: if content above it
+  // changed height, stop and start move by that amount (glideShift). No
+  // per-frame reading of screen positions for the target. The
+  // glide's scrolls are the chat's own and never end the pin (onScroll ignores
+  // scrolls while a pin holds); real input ends the pin (releasePin), which
+  // also stops the glide, and so do a new send, unpin and switching session.
+  // With reduced motion it jumps straight to the top, as before. If the spacer
+  // isn't drawn tall enough yet the box can't scroll that far; it is tried
+  // again when the spacer has its height (the layout effect below), and from
+  // wherever the box is then.
+  // `want` is where the glide means the box to be: what it last asked for, not
+  // what the box ended up at. The browser can cut the box short (content
+  // below shrinking, the box growing), and a scroll event then records the
+  // cut-short value; the resize check puts the box back to `want` (path 9).
+  const glide = useRef<{ frame: number; pin: NonNullable<typeof pinRef.current>; want: number } | null>(null);
+  const stopGlide = () => {
+    if (glide.current) cancelAnimationFrame(glide.current.frame);
+    glide.current = null;
+  };
   const pinToTop = () => {
     const pin = pinRef.current;
     if (!pin?.held || pin.scrolled) return;
+    if (glide.current?.pin === pin) return;
+    stopGlide();
     const p = pinPlace();
     if (!p) return;
-    fitSpacer(p);
-    const target = pinScrollTop(p.boxTop, p.box.scrollTop, p.msgView, p.topRoom);
-    p.box.scrollTop = target;
-    // A scroll the chat makes itself never counts as the user's (see onScroll).
+    freshSpacer(p);
+    // The stop, in content coordinates (as holdPin uses): the message's offset
+    // in the content minus the top room. It doesn't move when the box's place
+    // on screen does (the keyboard opening or closing).
+    let stop = p.msgTop - p.topRoom;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      p.box.scrollTop = stop;
+      // A scroll the chat makes itself never counts as the user's (see onScroll).
+      lastScrollTop.current = p.box.scrollTop;
+      if (Math.abs(p.box.scrollTop - stop) <= 1) pin.scrolled = true;
+      traceMark("jump");
+      measure();
+      return;
+    }
+    // A fixed GLIDE_START_REM short of the stop, the same on phone and desktop.
+    const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    let start = glideStart(p.box.scrollTop, stop, GLIDE_START_REM * rootPx);
+    let msgTop = p.msgTop;
+    p.box.scrollTop = start;
     lastScrollTop.current = p.box.scrollTop;
-    if (Math.abs(p.box.scrollTop - target) <= 1) pin.scrolled = true;
+    traceMark("glide-start");
     measure();
+    const began = performance.now();
+    const step = (now: number) => {
+      const g = glide.current;
+      if (!g || g.pin !== pin) return;
+      // Ended (real input), replaced by a new send, or unpinned: stop here.
+      if (pinRef.current !== pin || !pin.held) {
+        glide.current = null;
+        return;
+      }
+      const q = pinPlace();
+      if (!q) {
+        // The bubble isn't drawn this frame: try again on the next one.
+        g.frame = requestAnimationFrame(step);
+        return;
+      }
+      // Only content above the message changing height moves the stop; then
+      // start and stop move together (glideShift), so the distance stays.
+      if (Math.abs(q.msgTop - msgTop) > 1) {
+        const moved = stop + (q.msgTop - msgTop);
+        traceMark(`glide-shift:${Math.round(q.msgTop - msgTop)}`);
+        start = glideShift(start, stop, moved);
+        stop = moved;
+        msgTop = q.msgTop;
+      }
+      const elapsed = now - began;
+      g.want = glideScrollTop(start, stop, elapsed);
+      q.box.scrollTop = g.want;
+      lastScrollTop.current = q.box.scrollTop;
+      if (glideDone(q.box.scrollTop, stop, elapsed)) {
+        glide.current = null;
+        traceMark(`glide-end:${Math.round(q.box.scrollTop - stop)}`);
+        // Done, whether or not it reached the stop: from here holdPinInPlace
+        // keeps the message at the top, and puts it there if the glide ended
+        // short (the spacer not drawn tall enough yet, the keyboard closing).
+        pin.scrolled = true;
+        holdPinInPlace();
+        return;
+      }
+      g.frame = requestAnimationFrame(step);
+    };
+    glide.current = { frame: requestAnimationFrame(step), pin, want: start };
   };
   // Once the message is at the top and until the user's first real input, a
   // change in layout (the box growing when the keyboard closes, content above
@@ -755,9 +910,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const p = pinPlace();
     if (!p) return;
     const h = holdPin(p.box.clientHeight, p.topRoom, p.endRoom, p.msgTop, p.contentBottom, p.box.scrollTop);
-    spacerRef.current = h.spacer;
-    setSpacer(h.spacer);
+    // At once, so the scrollTop written below isn't clamped by an old spacer.
+    applySpacer(h.spacer);
     if (h.scrollTop !== null) {
+      // How far the hold moves the box: the size of a correction (a snap back).
+      const d = Math.round(h.scrollTop - p.box.scrollTop);
+      if (d !== 0) traceMark(`hold:${d}`);
       p.box.scrollTop = h.scrollTop;
       // A scroll the chat makes itself never counts as the user's (see onScroll).
       lastScrollTop.current = p.box.scrollTop;
@@ -854,6 +1012,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
   // Ends a pin too, and drops its spacer, so the bottom is the end of the messages.
   const toBottom = () => {
+    traceMark("toBottom");
     if (pinRef.current) unpin();
     setFollowing(true);
     stickToBottom();
@@ -871,11 +1030,28 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       // The reply growing (or the box's size changing) shrinks the spacer by
       // as much, so nothing moves. A held pin keeps following off, and once
       // at the top it is kept there (holdPinInPlace).
+      // While its glide runs, the spacer is worked out afresh (it may grow), so
+      // the keyboard closing mid-glide leaves room to reach the stop.
+      // Path 9: the box growing (the keyboard closing) or content below the
+      // message shrinking lets the browser clamp scrollTop at layout, before
+      // this runs, because the old spacer is too short. During a glide the
+      // spacer is set at once and the box put back to where the glide wants
+      // it (glide.want; lastScrollTop may already hold the clamped value from
+      // a scroll event), all before the frame is drawn, so the message
+      // doesn't drop and jump back.
       const pin = pinRef.current;
       if (pin?.held && pin.scrolled) holdPinInPlace();
       else if (pin) {
         const p = pinPlace();
-        if (p) fitSpacer(p);
+        const g = glide.current;
+        if (p && pin.held && g?.pin === pin) {
+          freshSpacer(p);
+          if (Math.abs(box.scrollTop - g.want) > 1) {
+            traceMark(`restore:${Math.round(g.want - box.scrollTop)}`);
+            box.scrollTop = g.want;
+            lastScrollTop.current = box.scrollTop;
+          }
+        } else if (p) fitSpacer(p);
       }
       if (!followingRef.current && !pinRef.current?.held && fromBottom(box) < 80) setFollowing(true);
     };
@@ -896,6 +1072,9 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
       keepEnd.disconnect();
       cancelAnimationFrame(followFrame.current);
       followFrame.current = 0;
+      stopGlide();
+      recorder.current?.stop();
+      recorder.current = null;
     };
   }, []);
   // Ends a held pin when the user really scrolls (pinRelease.ts says which
@@ -903,7 +1082,12 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // (onScroll and the resize observer above).
   const releasePin = (input: PinInput) => {
     const pin = pinRef.current;
-    if (pin?.held && endsPin(input)) pin.held = false;
+    if (pin?.held && endsPin(input)) {
+      traceMark(`release:${input.kind}`);
+      pin.held = false;
+      // A glide still bringing the message up stops where it is.
+      stopGlide();
+    }
   };
   useEffect(() => {
     const box = scrollRef.current;
@@ -1016,15 +1200,22 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // is running there really is, so it isn't reset to pending. `running`: that run has not ended, so the
   // "interrupted" mark it keeps while a request is in flight is not shown as
   // a failure (see shownFailure).
-  const applySession = (s: Session, live = false, running = live) => {
+  const applySession = (s: Session, live = false, running = live, source = "server") => {
     // fromSession fills the gaps of shared or older sessions, and pins a plan
     // saved before plans had a place after the chat's last message, where it
     // showed, so later messages go below it. That is counted as saved, so
     // opening the chat doesn't save it (see savedKey).
-    const state = fromSession(s, { live, running });
+    let state = fromSession(s, { live, running });
+    // A copy from before the server added the message just sent would take
+    // it off the page for a moment: the list on screen stays until a copy
+    // holds it (keepSent.ts). Everything else in the copy is taken.
+    if (keepOrTake(state.messages, sentRef.current, openId.current, Date.now()) === "keep") {
+      traceHook.current?.(`msgs:kept:${state.messages.length}`);
+      state = { ...state, messages: store.get().messages };
+    } else if (sentRef.current) sentRef.current = null;
     s = withSessionDefaults(s);
     savedKey.current = stateKey({ ...s, planAnchor: state.planAnchor, pastPlans: state.pastPlans });
-    updateSession(state);
+    updateSession(state, source);
     // The model and connection come from the server's copy of the chat, a
     // run's copy included: the server keeps them as stored, so a reload during
     // or just after a run shows the same ones. A chat saved without a
@@ -1047,7 +1238,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   const mirrorView = (v: RunnerView) => {
     setHeldPort(v.status !== "stopped" ? v.heldElsewhere?.port ?? null : null);
     if (v.actions) setServerActions(v.actions);
-    if (v.session) applySession(v.session, true, v.status !== "stopped");
+    if (v.session) applySession(v.session, true, v.status !== "stopped", `run-${v.status}`);
     // The run's error shows in its session, and clears only a run error, so
     // a message of Chat's own (a refusal, a server that can't be reached) isn't
     // wiped by every streamed piece.
@@ -1089,7 +1280,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     getSession(id)
       .then((s) => {
         if (openId.current === id) onServer.current = true;
-        applySession(s, !!s.run);
+        applySession(s, !!s.run, !!s.run, "load");
         setHeldPort(s.holder && !s.holder.mine ? s.holder.port : null);
         if (openId.current === id) {
           setServerActions(s.actions ?? []);
@@ -1385,7 +1576,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         // brings the revision up to date for the save that follows.
         const final = await getSession(id);
         if (openId.current !== id) return;
-        applySession(final, true);
+        applySession(final, true, true, "final");
         setRunnerView(null);
       } catch (e) {
         if (openId.current === id) showSessionError(id, e instanceof Error ? e.message : String(e));
@@ -1770,7 +1961,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     if (runnerActive(id)) return;
     try {
       const s = await getSession(id);
-      if (openId.current === id && !runnerActive(id)) applySession(s, true, false);
+      if (openId.current === id && !runnerActive(id)) applySession(s, true, false, "queue");
     } catch {
       // Not read: the list stays as it was until the next change.
     }
@@ -1851,7 +2042,10 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // `base`: the messages to build the turn on instead of the ones shown (Do it
   // has marked its box done there, and that must be saved with the message).
   const send = async (text: string, images: PendingImage[] | undefined, accepted: () => void, base?: ChatMessage[]) => {
-    const history = base ?? messages;
+    // The latest list (the store's), not this render's: the message box can
+    // hold a send from an older render, whose list lacks what arrived since
+    // (a scroll trace showed a send dropping the last 3 messages on screen).
+    const history = base ?? store.get().messages;
     // The connection doesn't list the chat's model: nothing is sent (the note
     // under the chat says so), and the model stays as stored.
     if (missingModel || problem) return false;
@@ -1986,14 +2180,21 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // images have no refs until they're uploaded, so they appear later. If it
     // doesn't go, what was shown before comes back (unless the server's copy of
     // the session has arrived and replaced it already).
+    // Until the server's copy holds this message, a copy without it doesn't
+    // replace the list (keepSent.ts, applySession).
+    const sent: SentMessage = { session: id, index: before.length, content: text, at: Date.now() };
+    sentRef.current = sent;
     return optimisticSend({
       before,
       message: { role: "user", content: text, replyTo: replyTo ? { text: replyTo.slice(0, MAX_REPLY_QUOTE) } : undefined },
-      prior: messages,
-      setMessages: (shown) => updateSession({ messages: shown }),
+      prior: store.get().messages,
+      setMessages: (shown) => updateSession({ messages: shown }, "send"),
       canShow: () => openId.current === id,
       canRestore: () => openId.current === id && !getView(id)?.session,
       work: () => runTurn(text, before, planning, pendingImages, existingRefs, replyTo),
+    }).then((went) => {
+      if (!went && sentRef.current === sent) sentRef.current = null;
+      return went;
     });
   };
   // Sends a message typed while a reply streams: the server puts it in the
@@ -2155,7 +2356,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     const id = sessionId;
     // The chat is on the connection it runs on from now on.
     setConnectorId(options.connectorId);
-    const toRun = { ...snapshot(options.connectorId), plan: planRef.current };
+    const toRun = { ...snapshot(options.connectorId), plan: store.get().plan };
     const key = stateKey(toRun);
     // Not sent again if the server already holds exactly this (see chatTurn).
     const inSync = sessions.some((x) => x.id === id) && savedKey.current === key;
@@ -2409,7 +2610,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     // latest list (see noteDone).
     doIt: (parts, box) => {
       const id = sessionId;
-      const now = sessionRef.current.messages;
+      const now = store.get().messages;
       const at = now.indexOf(parts[box.part]);
       const press = doItPress(now, at, box.note);
       if (!press.send) return;
@@ -2557,7 +2758,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
                   steps={plan}
                   summary={planSummary}
                   context={planContext}
-                  result={runActive ? null : planResult(plan, messages)}
+                  // Hidden only while this plan runs: a chat reply starting must
+                  // not fold it away (the cards above a sent message would
+                  // shrink and move it). planResult reads only the plan's own
+                  // step messages, so a reply can't change it.
+                  result={planRunning ? null : planResult(plan, messages)}
                   where={ownWhere}
                   running={runActive}
                   since={planRunning ? taskSince : null}
@@ -2618,7 +2823,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
   useEffect(() => {
     if (!pendingStart || !loaded || (pendingStart.sessionId && pendingStart.sessionId !== sessionId)) return;
-    const action = settleStart(pendingStart, loadedOk.current, todosRef.current);
+    const action = settleStart(pendingStart, loadedOk.current, store.get().todos);
     if (action.kind === "fill") {
       setPendingStart(null);
       box.fill(action.text);
@@ -3044,7 +3249,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           </Stack>
           {/* Room for a just-sent message to reach the top (see pinRef). Its
               height is measured from the page, so it is in px; 0 draws nothing. */}
-          <Box aria-hidden data-pin-spacer sx={{ height: `${spacer}px` }} />
+          <Box ref={spacerEl} aria-hidden data-pin-spacer style={{ height: `${spacer}px` }} />
         </Container>
         }
         // The empty chat: the heading, the creature (hangs above the heading)

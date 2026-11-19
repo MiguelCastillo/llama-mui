@@ -319,6 +319,10 @@ HTTPS_PORT=5167 HTTP_PORT=5166 npm run prod`) and stop it when done.
   `main`, work and test in it (on spare ports), and merge into `main` only when
   the checks pass and the user asks. The user restarts dev-stable when ready.
 - Check with `npx tsc --noEmit -p . && npx vitest run`.
+- **The open chat's data lives only in the session store** (`src/sessionStore.ts`):
+  draw from its subscription, read `store.get()` in code that runs across waits,
+  change it with `store.update`. Don't keep a second copy in a ref
+  (`src/__tests__/noSessionRefs.test.ts`; `docs/guide.md`, "How the page holds the open chat").
 - Tests never touch the real `~/.llama-mui`: they point `os.homedir` at a temp
   folder before importing anything (see `server/__tests__/worktree.test.ts`).
 - Don't open `~/.llama-mui/.keys` or `~/.config/llama-mui/secret.key`; they hold the API keys.

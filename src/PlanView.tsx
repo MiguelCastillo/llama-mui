@@ -5,7 +5,7 @@
 // draws them, or returns null for a step with none. Each step is drawn by
 // PlanStepRow.
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -123,7 +123,14 @@ export function PlanView({
   const showDiscard = can("discard") && !!onCancel;
   // A plan that can still run keeps the row's room, so buttons coming and going
   // don't make the card jump.
-  const keepRow = !steps.every((s) => s.status === "done");
+  // Once the row has been drawn it keeps its room too, even for a finished
+  // plan whose only button (Clone) goes away while a reply runs: otherwise
+  // every finished card above a sent message shrinks as the reply starts and
+  // the message jumps. The row stays empty; no button is drawn that isn't allowed.
+  const anyButton = showRun || showPause || showClone || showDiscard;
+  const rowDrawn = useRef(false);
+  if (anyButton) rowDrawn.current = true;
+  const keepRow = !steps.every((s) => s.status === "done") || rowDrawn.current;
 
   const save = () => {
     if (!editing) return;
@@ -246,7 +253,7 @@ export function PlanView({
           prompts: the main one filled (Run), the rest outlined (Pause, Clone,
           Discard). Removing the plan is for a plan that isn't running: pause it first. */}
         {(keepRow || showRun || showPause || showClone || showDiscard) && (
-          <Stack direction="row" spacing={1} sx={keepRow ? { minHeight: ACTION_ROW_HEIGHT } : undefined}>
+          <Stack data-plan-actions direction="row" spacing={1} sx={keepRow ? { minHeight: ACTION_ROW_HEIGHT } : undefined}>
             {showRun && (
               <PanelAction
                 label={can("continue") ? "Continue" : "Run"}
