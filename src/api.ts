@@ -478,6 +478,12 @@ export function getDownloadProgressStream(connectorId: string): ReadableStream {
   });
 }
 
+// One pinned send's scroll recording (src/scrollRecorder.ts), for the server
+// log's scroll.trace line. Numbers and labels only; a failure is ignored.
+export function sendScrollTrace(body: { session: string; summary: unknown; frames: unknown[]; changes: unknown[]; marks: unknown[] }): void {
+  call<void>("POST", "/api/scroll-trace", body).catch(() => {});
+}
+
 export function loadModel(connectorId: string, model: string): Promise<void> {
   return call<void>("POST", `/api/c/${connectorId}/models/load`, { model });
 }

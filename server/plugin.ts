@@ -34,6 +34,7 @@ import { stopAllRuns } from "./runners.ts";
 import { setOwnerPort } from "./runHub.ts";
 import { startSessionWatch } from "./sessionWatch.ts";
 import { whisperRoutes } from "./whisper.ts";
+import { scrollTraceRoutes } from "./scrollTrace.ts";
 
 async function route(r: Route) {
   if (await phoneRoutes(r)) return;
@@ -55,6 +56,7 @@ async function route(r: Route) {
   if (await skillRoutes(r)) return;
   if (await imageRoutes(r)) return;
   if (await whisperRoutes(r)) return;
+  if (await scrollTraceRoutes(r)) return;
   throw new HttpError(404, "Not found");
 }
 
