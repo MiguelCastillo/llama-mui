@@ -95,16 +95,16 @@ describe("the working directory in the tool context", () => {
     expect(update).toBe("Chat update:\nNothing else is attached.");
   });
 
-  it("names the project instructions the prompt carries, and recommends a shorter file when it is long", async () => {
+  it("never puts the project instructions note in the update (the page draws it once)", async () => {
     const loaded = await post("context", { workingDir: work, attachments: [], promptDir: work, projectInstructions: { file: "AGENTS.md", text: "Be kind." } });
-    expect(loaded.update).toBe("Chat update:\nProject instructions loaded: AGENTS.md\nNothing else is attached.");
+    expect(loaded.update).toBe("Chat update:\nNothing else is attached.");
     // A chat saved earlier may still send a `cut` field: it is ignored.
     const old = await post("context", { workingDir: work, attachments: [], promptDir: work, projectInstructions: { file: "CLAUDE.md", text: "Be kind.", cut: true } });
-    expect(old.update).toBe("Chat update:\nProject instructions loaded: CLAUDE.md\nNothing else is attached.");
+    expect(old.update).toBe("Chat update:\nNothing else is attached.");
     expect(old.systemPrompt).toContain("Be kind.");
     const longText = "y".repeat(20_001);
     const long = await post("context", { workingDir: work, attachments: [], promptDir: work, projectInstructions: { file: "CLAUDE.md", text: longText } });
-    expect(long.update).toContain("Project instructions loaded: CLAUDE.md\nProject instructions are long (20,001 characters); keeping CLAUDE.md under 20,000 is recommended.");
+    expect(long.update).toBe("Chat update:\nNothing else is attached.");
     expect(long.systemPrompt).toContain(longText);
     const none = await post("context", { workingDir: work, attachments: [], promptDir: work, projectInstructions: null });
     expect(none.update).not.toContain("Project instructions");

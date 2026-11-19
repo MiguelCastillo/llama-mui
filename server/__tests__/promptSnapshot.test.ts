@@ -110,7 +110,7 @@ describe("the project's instructions in the prompt", () => {
     expect(p).toContain("not the user's preferences; follow them");
   });
 
-  it("a long file is in the prompt in full; the recommendation is in the update only", async () => {
+  it("a long file is in the prompt in full; the recommendation is in neither the prompt nor the update", async () => {
     await setRules(null);
     const long = `${"x".repeat(25_000)}\nLAST-LINE`;
     const dir = await makeProject(long);
@@ -118,16 +118,14 @@ describe("the project's instructions in the prompt", () => {
     expect(r.systemPrompt).toContain(long);
     expect(count(r.systemPrompt, "LAST-LINE")).toBe(1);
     expect(r.systemPrompt).not.toContain("recommended");
-    expect(r.update).toContain("Project instructions loaded: AGENTS.md");
-    expect(r.update).toContain("Project instructions are long (25,010 characters); keeping AGENTS.md under 20,000 is recommended.");
+    expect(r.update).not.toContain("Project instructions");
   });
 
-  it("a short file has no recommendation line", async () => {
+  it("a short file adds nothing to the update", async () => {
     await setRules(null);
     const dir = await makeProject("short");
     const r = await ask({ promptDir: dir });
-    expect(r.update).toContain("Project instructions loaded: AGENTS.md");
-    expect(r.update).not.toContain("are long");
+    expect(r.update).not.toContain("Project instructions");
   });
 
   it("without a file the prompt is exactly what it was", async () => {

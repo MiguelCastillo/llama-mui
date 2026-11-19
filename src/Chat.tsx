@@ -1,6 +1,8 @@
 import { Fragment, memo, useCallback, type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import ChatUsageButton from "./ChatUsageButton";
 import ProjectInstructionsLine from "./ProjectInstructionsLine";
+import { projectLineTurnStart } from "./projectLineTurn";
+import type { ProjectInstructionsFixed } from "./api";
 import { StopButton } from "./StopButton";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import { isImageFile, prepareImage, revokePreview } from "./images";
@@ -2007,6 +2009,11 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   // One turn drawn as a bubble; `i` is its place among all turns.
   // Values that change often (the task's start, whether a reply runs, the
   // error) go only to the bubbles that show them; the others get a constant.
+  // The one turn that shows the project-instructions line: the first user
+  // message (not a side question, not a plan step) at or after the context start,
+  // so a context clear shows it again. Drawn from the session's saved project
+  // instructions, never from a message's update text.
+  const projectLineStart = projectLineTurnStart(turns, contextStart);
   const bubble = (t: (typeof turns)[number], i: number) => {
     const streaming = t.parts[0].aside ? asideRunning && i === lastAsideTurn : !!runnerView?.streaming && i === lastPlainTurn;
     return (
@@ -2014,6 +2021,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
         key={t.start}
         start={t.start}
         parts={t.parts}
+        projectInstructions={t.start === projectLineStart ? projectInstructions : undefined}
         streaming={streaming}
         since={streaming && !t.parts[0].aside ? taskSince : null}
         rate={streamRate}
@@ -3348,6 +3356,7 @@ const DONE_STYLE: { icon: ReactNode; label: SxProps<Theme>; text: SxProps<Theme>
 const MessageBubble = memo(function MessageBubble({
   start,
   parts,
+  projectInstructions,
   streaming,
   toolResults,
   renderMarkdown,
@@ -3377,6 +3386,8 @@ const MessageBubble = memo(function MessageBubble({
   // The turn's first message index, passed back to onEdit.
   start: number;
   parts: ChatMessage[];
+  // Set only on the turn that shows the project-instructions line.
+  projectInstructions?: ProjectInstructionsFixed | null;
   streaming: boolean;
   // The results of this turn's own tool calls, by call id.
   toolResults: Map<string, ChatMessage>;
@@ -3903,7 +3914,7 @@ const MessageBubble = memo(function MessageBubble({
         </Panel>
       )}
       {/* Which project file the model was given, from this message's update. */}
-      {isUser && !isAside && <ProjectInstructionsLine update={parts[0].update} />}
+      {isUser && !isAside && <ProjectInstructionsLine project={projectInstructions} />}
       {/* A message sent to a running plan: which step saw it. */}
       {isUser && (parts[0].seenByStep || parts[0].notSeen) && (
         <Typography variant="caption" color="text.secondary">

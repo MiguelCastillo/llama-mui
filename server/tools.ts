@@ -25,7 +25,7 @@ import { FETCH_TOOLS } from "./fetch.ts";
 import { INSPECT_TOOLS } from "./inspect.ts";
 import { PLAN_TOOLS, planInstructions } from "./plan.ts";
 import { personaForChat } from "./personaChoice.ts";
-import { type ProjectInstructions, RECOMMENDED_PROJECT_INSTRUCTIONS, readProjectInstructions } from "./projectInstructions.ts";
+import { type ProjectInstructions, readProjectInstructions } from "./projectInstructions.ts";
 import { BUILDER_NAME, type Persona, loadPersonas, personaPromptText } from "./personas.ts";
 import { cleanPersona } from "../src/persona.ts";
 import { readSession, sessionFolder } from "./sessionFile.ts";
@@ -302,26 +302,12 @@ export function sessionNote(chatId: string, host: unknown): string | null {
 // chat sends after the user's next message when it differs from the last one
 // (see `update` on ChatMessage). The working directory, if it's not the one
 // the system prompt names; the attachments (the working directory is not one);
-// and tools that are off.
-// The line saying which project instructions the prompt carries, and that they
-// are loaded, plus a gentle recommendation when the text is longer than
-// RECOMMENDED_PROJECT_INSTRUCTIONS (the whole text is sent either way); nothing
-// when there is no file. Stated from the fixed text, so it is the same on every
-// request of a chat and is sent with its first message only.
-export function projectNoteText(p: ProjectInstructions | null): string | null {
-  if (!p) return null;
-  const loaded = `Project instructions loaded: ${p.file}`;
-  if (p.text.length <= RECOMMENDED_PROJECT_INSTRUCTIONS) return loaded;
-  const count = p.text.length.toLocaleString("en-US");
-  const limit = RECOMMENDED_PROJECT_INSTRUCTIONS.toLocaleString("en-US");
-  return `${loaded}\nProject instructions are long (${count} characters); keeping ${p.file} under ${limit} is recommended.`;
-}
-
+// and tools that are off. The project instructions note is not in it: the page
+// draws that once from the session's saved instructions (see projectNote.ts).
 async function chatUpdate(
   ctx: ToolContext,
   promptDir: string | null,
   personaNote: string | null = null,
-  projectNote: string | null = null,
 ): Promise<string> {
   const dir = ctx.workingDir;
   const others = ctx.attachments;
@@ -330,7 +316,6 @@ async function chatUpdate(
     "Chat update:",
     ...(dir !== promptDir ? [dir ? `The working directory is now ${dir}.` : "There's no working directory now."] : []),
     ...(personaNote ? [personaNote] : []),
-    ...(projectNote ? [projectNote] : []),
     others.length ? `Also attached:\n${others.map((d) => `- ${d}`).join("\n")}` : "Nothing else is attached.",
     ...(!ctx.store.toolsEnabled
       ? ["Tools are turned off in Settings, so calls to any of them fail."]
@@ -661,7 +646,7 @@ export async function toolRoutes({ req, res, parts, method }: Route): Promise<bo
       persona: personaName,
       // The text the prompt was built with, for the chat to fix at its first reply.
       personaText,
-      update: await chatUpdate(ctx, promptDir, personaNote, projectNoteText(project)),
+      update: await chatUpdate(ctx, promptDir, personaNote),
       // The working directory's only: attachments have none (see SessionSettings).
       checkCommands: ctx.workingDir && ctx.store.checkCommands[ctx.workingDir]
         ? { [ctx.workingDir]: ctx.store.checkCommands[ctx.workingDir] }

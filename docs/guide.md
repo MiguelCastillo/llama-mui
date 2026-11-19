@@ -637,8 +637,12 @@ reprocess everything after it (measured: about a minute for a 40k-token chat).
   file later doesn't change a running chat, only new chats. When a chat fixes
   them, the chat shows "Project instructions loaded: <file>" (and, over 20,000
   characters, a gentle line "Project instructions are long (N characters);
-  keeping <file> under 20,000 is recommended", shown in the chat only and never
-  sent to the model); with no file nothing is shown. They are loaded without asking, even from a project you only just
+  keeping <file> under 20,000 is recommended"). The lines are drawn once, under
+  the first message of the chat's current context (so a context clear shows
+  them again; plan steps and side questions don't), from the instructions the
+  session saved. They are never part of the chat update, so nothing in the
+  update (thread outcomes, attachments) can make them repeat, and the model
+  never receives them; with no file nothing is shown. They are loaded without asking, even from a project you only just
   downloaded. Asking first (trust) is not built yet; the place for it is a
   small check in the reader that for now always says yes.
 - **Your rules** tune that and govern the model; tools are only

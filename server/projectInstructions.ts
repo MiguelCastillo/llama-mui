@@ -8,9 +8,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-// Not a cap: the whole file is always sent. Above this length the chat shows a
-// gentle recommendation to keep the file shorter (never part of the prompt).
-export const RECOMMENDED_PROJECT_INSTRUCTIONS = 20_000;
+// The recommended length lives in projectNote.ts (the page imports it too).
+export { RECOMMENDED_PROJECT_INSTRUCTIONS } from "./projectNote.ts";
 
 // The files read, in order; each that exists and has text would be loaded.
 // Only AGENTS.md for now. Letting users choose more context files (another
