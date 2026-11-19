@@ -162,7 +162,7 @@ describe("a thread reports to its parent when its run ends", () => {
     expect(input.messages.at(-1)!.content).toBe("I changed a.ts and b.ts.");
   });
 
-  it("all steps done with files left uncommitted is an uncommitted note, not a failed one", async () => {
+  it("all steps done with files left uncommitted is a plain done note, with no warning in its text", async () => {
     mockWorktrees.mockResolvedValue(DIRTY);
     parentSession();
     threadSession();
@@ -171,7 +171,8 @@ describe("a thread reports to its parent when its run ends", () => {
     await vi.waitFor(() => expect(fileOf("kid").plan[0].status).toBe("done"));
     finish("kid", "s2");
     await finished;
-    expect(thread()).toMatchObject({ status: "uncommitted", report: { text: expect.stringContaining("2 files in worktree ui") } });
+    expect(thread()).toMatchObject({ status: "done", report: { text: "It made both changes." } });
+    expect(thread()!.report!.text).not.toContain("not committed");
   });
 
   it("a failed step stays failed even when files are uncommitted", async () => {

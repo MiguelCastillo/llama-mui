@@ -27,11 +27,10 @@
 
 import { type ReportInput, askForReport, fallbackReport } from "../src/agent/threadReport.ts";
 import type { PlanThread, Session, ThreadOutcome } from "../src/api.ts";
-import { threadStatus, withWorktreeTrouble, worktreeTrouble } from "../src/planThread.ts";
+import { threadStatus } from "../src/planThread.ts";
 import type { RunnerEnv } from "../src/runnerTypes.ts";
 import { HttpError } from "./http.ts";
 import * as hub from "./runHub.ts";
-import { worktreeStatuses } from "./worktreeStatus.ts";
 
 // How a run ended, as the runner knows it.
 export interface RunEnd {
@@ -109,9 +108,9 @@ export async function reportToParent(end: RunEnd, ask: AskReport = askModel): Pr
   try {
     let status = threadStatus(end.session);
     if (status === "missing") return;
-    // Files left uncommitted in the thread's worktree: all steps done, but the work isn't saved on its branch.
-    const trouble = worktreeTrouble(await worktreeStatuses(end.id, end.session.messages).catch(() => []));
-    status = withWorktreeTrouble(status, trouble) as typeof status;
+    // Files left uncommitted in the thread's worktree are not part of how the run
+    // went: a thread whose steps all finished is "done", with no warning on its card.
+    // (read_thread still shows the Trouble line to the model.)
     if (!(await writeNote(parentId, end.id, status, undefined))) return;
 
     const steps = end.session.plan ?? [];
@@ -124,8 +123,7 @@ export async function reportToParent(end: RunEnd, ask: AskReport = askModel): Pr
       stopped: end.stopped,
     };
     const said = await reportText(end, input, ask);
-    const text = trouble ? `${said}\n${trouble}` : said;
-    await writeNote(parentId, end.id, status, { text, at: Date.now() });
+    await writeNote(parentId, end.id, status, { text: said, at: Date.now() });
   } catch (e) {
     console.warn(`Couldn't report on thread ${end.id} to session ${parentId}: ${e}`);
   }
