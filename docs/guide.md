@@ -2441,9 +2441,10 @@ the `tail -f` command that follows it, when it starts. Each line has `t` (time),
   `limit`) and `refused` is true when it was far enough over to be refused. Never
   the words. The plan itself is saved unless `refused`. To see how often it
   happens: `grep plan.over_guideline ~/.llama-mui/logs/server-*.log`.
-- `scroll.trace`: written by the page about 4 seconds after each send with
-  "Move my message to the top" (`src/scrollRecorder.ts`, switch
-  `SCROLL_TRACE_ON` in `src/scrollTrace.ts`). `frames` holds one entry per
+- `scroll.trace`: off by default. With `SCROLL_TRACE_ON` set to true in
+  `src/scrollTrace.ts`, written by the page about 4 seconds after each send
+  with "Move my message to the top" (`src/scrollRecorder.ts`); turn it on to
+  track down a jump or jitter, and off again after. `frames` holds one entry per
   animation frame: the box's scroll position and sizes, `off` (where the
   message is against its place under the top bar: negative is past it),
   `wy`/`vt` (the whole page moving), the spacer and the pin's state.

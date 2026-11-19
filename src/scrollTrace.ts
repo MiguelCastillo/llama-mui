@@ -4,8 +4,11 @@
 // server log as one `scroll.trace` line (server/scrollTrace.ts checks it).
 // Numbers, timings and element labels only: never any text from the chat.
 
-/** Record every pinned send. Turn off to stop writing scroll.trace lines. */
-export const SCROLL_TRACE_ON = true;
+/**
+ * Record every pinned send. Off by default: set to true to write scroll.trace
+ * lines again while tracking down a jump or jitter, then set it back.
+ */
+export const SCROLL_TRACE_ON = false;
 /** How long one recording lasts after a send, in ms. */
 export const SCROLL_TRACE_MS = 4000;
 export const SCROLL_TRACE_MAX_FRAMES = 360;
