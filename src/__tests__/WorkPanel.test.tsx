@@ -1,7 +1,10 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { MergeAttemptState, WorkEntry } from "../api";
-import WorkPanel, { workState, type MergeUi } from "../WorkPanel";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import type { WorkEntry } from "../api";
+import WorkPanel, { workState } from "../WorkPanel";
 
 const entry = (over: Partial<WorkEntry>): WorkEntry => ({
   kind: "worktree",
@@ -63,78 +66,39 @@ describe("WorkPanel", () => {
     expect(render([entry({ files, filesTotal: 9 })])).toContain("and 4 more");
   });
 
-  it("has no buttons that change anything", () => {
+  it("offers Follow up on every entry that is not merged, and none on merged ones", () => {
+    const f = () => {};
+    const r = (entries: WorkEntry[]) => renderToStaticMarkup(<WorkPanel entries={entries} onFollowUp={f} />);
+    const loose = entry({ kind: "loose", branch: null, unmerged: null, uncommitted: 2, source: null });
+    const html = r([entry({}), entry({ kind: "branch", name: "old", branch: "old" }), loose]);
+    expect(html.match(/>Follow up</g)?.length).toBe(3);
+    expect(r([entry({ merged: true })])).not.toContain("<button");
+  });
+
+  it("draws no buttons when nothing handles Follow up", () => {
     expect(render([entry({})])).not.toContain("<button");
   });
 
-  describe("merging", () => {
-    const noop = () => {};
-    const ui = (attempt: MergeAttemptState | null, error: string | null = null): MergeUi => ({
-      attempt,
-      error,
-      start: noop,
-      approve: noop,
-      discard: noop,
-      dismiss: noop,
-    });
-    const att = (over: Partial<MergeAttemptState>): MergeAttemptState => ({ id: "1", branch: "llama/w", state: "ready", checks: [], ...over });
-    const renderM = (entries: WorkEntry[], merge: MergeUi) =>
-      renderToStaticMarkup(<WorkPanel entries={entries} merge={merge} />);
+  it("has no Merge text anywhere", () => {
+    const f = () => {};
+    const html = renderToStaticMarkup(<WorkPanel entries={[entry({}), entry({ kind: "branch", name: "old", branch: "old" })]} onFollowUp={f} />);
+    expect(html).not.toMatch(/>(Merge|Approve|Discard)</);
+  });
 
-    it("offers Merge on thread and older branches with unmerged commits and no uncommitted files", () => {
-      const html = renderM([entry({}), entry({ kind: "branch", name: "old", branch: "old" })], ui(null));
-      expect(html.match(/>Merge</g)?.length).toBe(2);
-    });
-
-    it("offers no Merge on loose, merged, empty or uncommitted entries", () => {
-      const loose = entry({ kind: "loose", branch: null, unmerged: null, uncommitted: 2 });
-      expect(renderM([loose], ui(null))).not.toContain("<button");
-      expect(renderM([entry({ merged: true })], ui(null))).not.toContain("<button");
-      expect(renderM([entry({ unmerged: 0 })], ui(null))).not.toContain("<button");
-      expect(renderM([entry({ uncommitted: 1 })], ui(null))).not.toContain("<button");
-    });
-
-    it("shows progress while replaying and while checking", () => {
-      expect(renderM([entry({})], ui(att({ state: "replaying", replayed: 2 })))).toContain("Replaying 2 commits");
-      const html = renderM([entry({})], ui(att({ state: "checking", check: "tests" })));
-      expect(html).toContain("Running tests");
-      expect(html).not.toContain(">Merge<");
-    });
-
-    it("lists the clashing files on a conflict", () => {
-      const html = renderM([entry({})], ui(att({ state: "conflict", files: ["a.ts", "z.ts"] })));
-      expect(html).toContain("a.ts, z.ts");
-      expect(html).toContain("nothing was merged");
-    });
-
-    it("shows passed checks with Approve and Discard", () => {
-      const html = renderM([entry({})], ui(att({ checks: [{ name: "tests", ok: true, output: "", seconds: 1 }] })));
-      expect(html).toContain("tests: passed");
-      expect(html).toContain(">Approve<");
-      expect(html).toContain(">Discard<");
-    });
-
-    it("shows the output of a failed check and no Approve", () => {
-      const html = renderM([entry({})], ui(att({ state: "failed", checks: [{ name: "build", ok: false, output: "boom at line 3", seconds: 1 }] })));
-      expect(html).toContain("build: failed");
-      expect(html).toContain("boom at line 3");
-      expect(html).not.toContain(">Approve<");
-      expect(html).toContain(">Discard<");
-    });
-
-    it("says Merged after merging", () => {
-      expect(renderM([entry({})], ui(att({ state: "merged" })))).toContain("Merged");
-    });
-
-    it("hides Merge on other entries while an attempt is open", () => {
-      const other = entry({ name: "o", branch: "llama/o" });
-      const html = renderM([entry({}), other], ui(att({ state: "checking", check: "tests" })));
-      expect(html).not.toContain(">Merge<");
-    });
-
-    it("shows a start error", () => {
-      expect(renderM([entry({})], ui(null, "Already in progress"))).toContain("Already in progress");
-    });
+  it("calls onFollowUp with the entry when Follow up is clicked", () => {
+    const e = entry({});
+    const calls: WorkEntry[] = [];
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    act(() => root.render(<WorkPanel entries={[e]} onFollowUp={(x) => calls.push(x)} />));
+    const button = [...host.querySelectorAll("button")].find((b) => b.textContent === "Follow up");
+    expect(button).toBeTruthy();
+    act(() => button!.click());
+    expect(calls).toEqual([e]);
+    act(() => root.unmount());
+    host.remove();
   });
 
   it("names states in plain words", () => {

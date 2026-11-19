@@ -30,7 +30,7 @@ import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import SubdirectoryArrowRightIcon from "@mui/icons-material/SubdirectoryArrowRight";
 import type { SessionSummary, WorkEntry } from "./api";
 import { StatusIcon } from "./StatusMark";
-import WorkPanel, { type MergeUi } from "./WorkPanel";
+import WorkPanel from "./WorkPanel";
 import { buildSessionTree, deleteLockedIds, groupNames, groupTree, type SessionNode } from "./sessionTree";
 import { ARROW_SLOT } from "./SectionHeader";
 import SectionHeader from "./SectionHeader";
@@ -330,7 +330,7 @@ export default function SessionsPanel({
   onGroup,
   onClose,
   workEntries,
-  merge,
+  onFollowUp,
 }: {
   sessions: SessionSummary[];
   currentId: string;
@@ -339,7 +339,7 @@ export default function SessionsPanel({
   // Work started but not yet in the main branch: shown under a collapsible
   // section below the sessions list (see WorkPanel).
   workEntries?: WorkEntry[];
-  merge?: MergeUi;
+  onFollowUp?: (entry: WorkEntry) => void;
   // A reply is running: switching chats would cut it off, so only the
   // current one stays clickable.
   busy: boolean;
@@ -493,7 +493,7 @@ export default function SessionsPanel({
         // Its own scroll, so a long list never pushes the panel's resize
         // handle out of reach.
         <Box sx={{ overflowY: "auto", maxHeight: WORK_MAX_HEIGHT, px: 1 }}>
-          <WorkPanel entries={workEntries ?? []} merge={merge} />
+          <WorkPanel entries={workEntries ?? []} onFollowUp={onFollowUp} />
         </Box>
       )}
     </Box>

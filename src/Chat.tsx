@@ -2,7 +2,7 @@ import { Fragment, memo, useCallback, type ReactNode, useEffect, useLayoutEffect
 import ChatUsageButton from "./ChatUsageButton";
 import ProjectInstructionsLine from "./ProjectInstructionsLine";
 import { projectLineTurnStart } from "./projectLineTurn";
-import type { ProjectInstructionsFixed } from "./api";
+import type { ProjectInstructionsFixed, WorkEntry } from "./api";
 import { StopButton } from "./StopButton";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import { isImageFile, prepareImage, revokePreview } from "./images";
@@ -171,7 +171,7 @@ import DangerousNote, { offersSessionWide } from "./DangerousNote";
 import { ATTACHMENTS_LOCKED_NOTE, folderForNewChat, folderIsFrozen } from "./sessionFolder";
 import SessionsPanel from "./SessionsPanel";
 import { useWorkInProgress } from "./useWorkInProgress";
-import { useMergeAttempt } from "./useMergeAttempt";
+import { followUpMessage } from "./followUpMessage";
 import Panel, { PanelAction, PanelButton } from "./Panel";
 import QueuedMessages from "./QueuedMessages";
 import { pausedReason } from "./queue";
@@ -994,9 +994,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
   };
   // On phones the panel is a drawer that starts closed every time.
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [workReload, setWorkReload] = useState(0);
-  const workEntries = useWorkInProgress(workingDir, workReload);
-  const workMerge = useMergeAttempt(workingDir, () => setWorkReload((n) => n + 1));
+  const workEntries = useWorkInProgress(workingDir);
   // What was last saved or loaded, so opening a chat doesn't save it again
   // (which would move it to the top of the list).
   const savedKey = useRef("");
@@ -1947,6 +1945,21 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
     return settle(went);
   };
 
+  // The WIP card's Follow up: asks the entry's own chat how the work stands. The
+  // open chat gets the message sent (for an entry with no chat, or its own chat).
+  // Another chat is opened with the message in its box, so its model, folders
+  // and approvals are the ones it already has when the user sends it.
+  const followUpWork = (entry: WorkEntry) => {
+    const text = followUpMessage(entry);
+    const target = entry.source ?? sessionId;
+    if (target === sessionId) {
+      void send(text, undefined, () => {});
+      return;
+    }
+    openSession(target);
+    box.fill(text);
+  };
+
   // What the server needs from here to run a plan or a reply: which connector
   // and model, whether tools are on, and the model's settings (Think, effort). The server looks up the
   // connector (and its key, which the page never has), the models and the tools
@@ -2643,14 +2656,7 @@ export default function Chat({ visible, onOpenSettings }: { visible: boolean; on
           onGroup={groupSessionLocal}
           onClose={() => setDrawerOpen(false)}
           workEntries={workEntries}
-          merge={{
-            attempt: workMerge.attempt,
-            error: workMerge.error,
-            start: (b) => void workMerge.start(b),
-            approve: () => void workMerge.approve(),
-            discard: () => void workMerge.discard(),
-            dismiss: workMerge.dismiss,
-          }}
+          onFollowUp={followUpWork}
         />
       }
       top={

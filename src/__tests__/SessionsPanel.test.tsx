@@ -59,6 +59,7 @@ describe("SessionsPanel", () => {
     expect(html).toContain("Make the thing");
     expect(html).toContain("Thread branches (1)");
     expect(html).toContain('href="#/session/abc123"');
+    expect(html).not.toContain(">Merge<");
   });
 
   it("shows the work-in-progress section with no entries", () => {
