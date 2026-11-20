@@ -55,6 +55,16 @@ describe("io.exec: execFile", () => {
     expect(lastLine()).toMatchObject({ why: "test.slow", timedOut: true, signal: "SIGTERM" });
   });
 
+  it("writes a line by default, and none for a call marked quiet", async () => {
+    const before = lines().length;
+    await execFile("echo", ["loud"], undefined, { why: "test.loud" });
+    expect(lines().length).toBe(before + 1);
+    await execFile("echo", ["hush"], undefined, { why: "test.hush", quiet: true });
+    await expect(execFile("sh", ["-c", "exit 1"], undefined, { why: "test.hush-fail", quiet: true })).rejects.toThrow();
+    expect(lines().length).toBe(before + 1);
+    expect(JSON.stringify(lines())).not.toContain("test.hush");
+  });
+
   it("never writes the environment or the output", async () => {
     await execFile("sh", ["-c", "echo PRINTED-OUTPUT"], { env: { ...process.env, SECRET_TOKEN: "ENV-SECRET" } }, { why: "test.secret" });
     const raw = JSON.stringify(lines());
@@ -78,6 +88,13 @@ describe("io.exec: spawn", () => {
     await Promise.all([timeout, closed(child)]);
     expect(child.timedOut).toBe(true);
     expect(lastLine()).toMatchObject({ why: "test.spawn-slow", timedOut: true, signal: "SIGKILL" });
+  });
+
+  it("writes no line for a quiet spawn", async () => {
+    const before = lines().length;
+    const child = spawn("sh", ["-c", "exit 0"], { stdio: "ignore" }, { why: "test.spawn-quiet", quiet: true });
+    await closed(child);
+    expect(lines().length).toBe(before);
   });
 
   it("writes a line when the program can't start", async () => {

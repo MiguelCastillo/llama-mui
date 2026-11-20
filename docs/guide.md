@@ -2525,6 +2525,18 @@ A failure to write a line never stops a reply or a request.
   `jq -c 'select(.call=="<id>")' ~/.llama-mui/audit/audit-*.log`. `io.fs.batch`
   is a once-a-minute count for state saved very often (a session's file, the
   usage log, the settings), so those saves are counted but don't drown the log.
+  **One narrow exception:** the read-only git checks behind the work-in-progress
+  list (`why` is `git.status`) are not audited. The page asks for that list every
+  15 seconds from every open tab, and these checks made up about 95% of all
+  `io.exec` lines (185,732 of 196,686 on one day, a 61 MB file) while carrying no
+  decision. The wrapper skips the line only when a call sets `quiet: true`; the
+  default is always audited, and only the list's own read-only git helper sets it.
+  Nothing that writes (merge, approve, discard, creating a worktree) is quiet.
+  The list is worked out for each repo once, its worktrees checked up to four at a
+  time, and the finished answer is shared for 5 seconds (`LIST_CACHE_MS`), so many
+  tabs cost one set of git calls. Starting, approving or discarding a merge clears
+  that repo's saved answer so the page's reload right after sees the change. A
+  failed load is not saved.
 - `api.request`: every request that changes something, and every request that was
   refused or failed (cross-site, unpaired device, stale save and so on): method,
   route, status, time, the reason, and who sent it (address and the start of the

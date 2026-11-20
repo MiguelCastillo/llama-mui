@@ -21,6 +21,10 @@ const ARG_MAX = 300;
 export interface Why {
   // A short constant naming the reason, e.g. 'git.status', 'file.pick'.
   why: string;
+  // Skips the audit line for this one call. Never a default and never set by
+  // a caller that carries a decision: only polled, read-only checks (see
+  // "The audit log" in docs/guide.md).
+  quiet?: boolean;
 }
 
 const clip = (s: string) => (s.length > ARG_MAX ? `${s.slice(0, ARG_MAX)}…` : s);
@@ -41,8 +45,10 @@ function line(
   program: string,
   args: readonly string[],
   started: number,
+  quiet: boolean | undefined,
   end: { exit: number | null; signal: string | null; timedOut: boolean; error?: string },
 ) {
+  if (quiet) return;
   audit("io.exec", {
     why,
     ...cause,
@@ -63,19 +69,19 @@ export function execFile(
   program: string,
   args: readonly string[],
   options: Omit<ExecFileOptions, "encoding"> | undefined,
-  { why }: Why,
+  { why, quiet }: Why,
 ): Promise<{ stdout: string; stderr: string }> {
   const cause = causeFields();
   const started = Date.now();
   return new Promise((resolve, reject) => {
     nodeExecFile(program, [...args], { ...options, encoding: "utf8" }, (err, stdout, stderr) => {
       if (!err) {
-        line(why, cause, program, args, started, { exit: 0, signal: null, timedOut: false });
+        line(why, cause, program, args, started, quiet, { exit: 0, signal: null, timedOut: false });
         return resolve({ stdout, stderr });
       }
       const e = err as NodeJS.ErrnoException & { code?: number | string; signal?: string | null; killed?: boolean };
       const exit = typeof e.code === "number" ? e.code : null;
-      line(why, cause, program, args, started, {
+      line(why, cause, program, args, started, quiet, {
         exit,
         signal: e.signal ?? null,
         timedOut: Boolean(options?.timeout && e.killed && e.signal),
@@ -97,7 +103,7 @@ export type AuditedChild = ChildProcess & { readonly timedOut: boolean; stdout: 
 
 // Starts a program and hands back the child, as spawn does. The line is
 // written when it ends ('close') or fails to start ('error').
-export function spawn(program: string, args: readonly string[], options: SpawnOptions, { why, timeoutMs }: SpawnWhy): AuditedChild {
+export function spawn(program: string, args: readonly string[], options: SpawnOptions, { why, timeoutMs, quiet }: SpawnWhy): AuditedChild {
   const cause = causeFields();
   const started = Date.now();
   const child = nodeSpawn(program, [...args], options) as ChildProcess;
@@ -107,7 +113,7 @@ export function spawn(program: string, args: readonly string[], options: SpawnOp
     if (written) return;
     written = true;
     clearTimeout(timer);
-    line(why, cause, program, args, started, { ...end, timedOut });
+    line(why, cause, program, args, started, quiet, { ...end, timedOut });
   };
   const timer = timeoutMs
     ? setTimeout(() => {

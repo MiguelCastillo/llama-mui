@@ -11,6 +11,8 @@ import { execFile } from "./io/exec.ts";
 import { readSession } from "./sessionFile.ts";
 
 export const FILES_CAP = 50;
+// How many worktrees are read from git at the same time.
+export const WORKTREES_AT_ONCE = 4;
 
 export interface WorkEntry {
   kind: "worktree" | "branch" | "loose";
@@ -80,7 +82,9 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
       timeout: 10_000,
       maxBuffer: 8 * 1024 * 1024,
     },
-    { why: "git.status" },
+    // Polled, read-only checks that carry no decision: not audited (guide, "The audit log").
+    // Only read-only git commands may go through this helper.
+    { why: "git.status", quiet: true },
   );
   return stdout.trim();
 }
@@ -141,31 +145,32 @@ export async function workInProgress(repo: string, opts: WipOptions = {}): Promi
   try {
     const root = opts.sessionsRoot ?? sessionsDir;
     const loadSessions = opts.loadSessions ?? (() => loadSavedSessions(root));
-    let sessions: SessionInfo[] | null = null;
     const rootReal = await real(root);
     const main = await realpath(await git(repo, "rev-parse", "--show-toplevel"));
     const trees = parseWorktrees(await git(main, "worktree", "list", "--porcelain"));
     const base = await git(main, "symbolic-ref", "--short", "HEAD").catch(() => null);
     const entries: WorkEntry[] = [];
 
-    for (const t of trees) {
-      if ((await realpath(t.folder).catch(() => t.folder)) === main) continue;
+    // Saved chats are read at most once, shared by every worktree.
+    let sessionsOnce: Promise<SessionInfo[]> | null = null;
+    const getSessions = () => (sessionsOnce ??= loadSessions().catch(() => []));
+
+    const describeTree = async (t: Tree): Promise<WorkEntry | null> => {
+      if ((await realpath(t.folder).catch(() => t.folder)) === main) return null;
       try {
         const ref = t.branch ?? "HEAD";
-        const d = await describeRef(t.folder, ref, base);
-        const folderReal = await real(t.folder);
+        const [d, uncommitted, folderReal] = await Promise.all([describeRef(t.folder, ref, base), uncommittedIn(t.folder), real(t.folder)]);
         // A server-made worktree sits at <root>/<session id>/worktrees/<name>.
         const rel = path.relative(rootReal, folderReal).split(path.sep);
         let source: string | null = rel.length === 3 && rel[1] === "worktrees" && !rel[0].startsWith("..") ? rel[0] : null;
-        sessions ??= await loadSessions().catch(() => []);
+        const sessions = await getSessions();
         const owner = source
           ? sessions.find((s) => s.id === source)
           : sessions.find((s) => createdWorktrees(s.messages).some((w) => w.path === t.folder || w.path === folderReal));
         source = owner?.id ?? source;
-        const uncommitted = await uncommittedIn(t.folder);
         // Already in the main branch and nothing left uncommitted: nothing to track.
-        if (d.unmerged === 0 && uncommitted === 0) continue;
-        entries.push({
+        if (d.unmerged === 0 && uncommitted === 0) return null;
+        return {
           kind: "worktree",
           name: path.basename(t.folder),
           branch: t.branch,
@@ -175,11 +180,24 @@ export async function workInProgress(repo: string, opts: WipOptions = {}): Promi
           merged: d.unmerged === 0,
           purpose: owner?.planSummary?.trim() || d.lastCommitSubject,
           source,
-        });
+        };
       } catch {
-        // one broken worktree is left out
+        return null; // one broken worktree is left out
       }
-    }
+    };
+
+    // At most WORKTREES_AT_ONCE worktrees at a time; results keep the order git listed them in.
+    const described: (WorkEntry | null)[] = new Array(trees.length).fill(null);
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(WORKTREES_AT_ONCE, trees.length) }, async () => {
+        while (next < trees.length) {
+          const i = next++;
+          described[i] = await describeTree(trees[i]);
+        }
+      }),
+    );
+    for (const e of described) if (e) entries.push(e);
 
     if (base) {
       const held = new Set(trees.map((t) => t.branch).filter(Boolean));

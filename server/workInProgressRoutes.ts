@@ -29,6 +29,56 @@ import {
 } from "./integration.ts";
 import { workInProgress } from "./workInProgress.ts";
 
+// How long a finished list is kept and shared by every request for the same folder.
+export const LIST_CACHE_MS = 5000;
+
+// Seams for tests: the loader and the clock.
+export const listSettings: { load: typeof workInProgress; now: () => number } = { load: workInProgress, now: () => Date.now() };
+
+interface Cached {
+  at: number;
+  list?: Awaited<ReturnType<typeof workInProgress>>;
+  pending?: Promise<Awaited<ReturnType<typeof workInProgress>>>;
+  generation: number;
+}
+const listCache = new Map<string, Cached>();
+let generation = 0;
+
+// Forgets saved lists, so the next request reads git again. A merge action
+// changes the repo, and the cache is keyed by the folder asked about (which may be
+// any folder inside the repo or one of its worktrees), so all of it goes.
+export function clearListCache(): void {
+  generation++;
+  listCache.clear();
+}
+
+async function cachedList(dir: string) {
+  const hit = listCache.get(dir);
+  if (hit && hit.generation === generation) {
+    if (hit.pending) return hit.pending;
+    if (hit.list && listSettings.now() - hit.at < LIST_CACHE_MS) return hit.list;
+  }
+  const entry: Cached = { at: 0, generation };
+  const pending = listSettings.load(dir).then(
+    (list) => {
+      // Only a finished answer from the current generation is kept.
+      if (listCache.get(dir) === entry) {
+        entry.list = list;
+        entry.at = listSettings.now();
+        entry.pending = undefined;
+      }
+      return list;
+    },
+    (e) => {
+      if (listCache.get(dir) === entry) listCache.delete(dir);
+      throw e;
+    },
+  );
+  entry.pending = pending;
+  listCache.set(dir, entry);
+  return pending;
+}
+
 export type MergeState = "replaying" | "checking" | "ready" | "failed" | "conflict" | "merged" | "discarded" | "error";
 
 interface Attempt {
@@ -130,6 +180,7 @@ async function mergeRoutes({ req, res, parts, method }: Route): Promise<void> {
     }
     const a: Attempt = { id: randomUUID(), repo, branch, state: "replaying", checks: [] };
     attempts.set(a.id, a);
+    clearListCache();
     void run(a);
     sendJson(res, 202, view(a));
     return;
@@ -153,12 +204,14 @@ async function mergeRoutes({ req, res, parts, method }: Route): Promise<void> {
       throw e;
     }
     a.state = "merged";
+    clearListCache();
   } else {
     if (!LIVE.includes(a.state) || a.state === "replaying" || a.state === "checking") {
       throw new HttpError(409, a.state === "replaying" || a.state === "checking" ? "Wait for the checks to finish before discarding." : "This merge is already over.");
     }
     await discardMerge(a.repo, asAttempt(a));
     a.state = "discarded";
+    clearListCache();
   }
   sendJson(res, 200, view(a));
 }
@@ -174,6 +227,6 @@ export async function workInProgressRoutes(route: Route): Promise<boolean> {
   if (method !== "GET") throw new HttpError(405, "Method not allowed");
   const dir = new URLSearchParams(search).get("dir");
   if (!dir || !path.isAbsolute(dir)) throw new HttpError(400, "dir must be a full folder path");
-  sendJson(res, 200, await workInProgress(dir));
+  sendJson(res, 200, await cachedList(dir));
   return true;
 }
