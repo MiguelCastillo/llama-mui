@@ -1696,7 +1696,18 @@ step that was running when the page closed comes back as pending.
     revision) for each save or rename, `removed` for a delete, `status`
     when a run starts, asks something or ends, and `thread` when a
     thread's run ends and its note in the chat that started it changes (see
-    [Where plans show](#where-plans-show)). The Sessions panel
+    [Where plans show](#where-plans-show)). It also sends `work` (no session, so
+    its id is empty and its data is `{}`) when a merge starts, is approved or is
+    discarded, and when a worktree is made or removed. It means only "ask the
+    list again": it carries no list and no buttons, and it goes to this stream
+    only, never to a session's own. The server clears its saved answer for the
+    work list (shared for 5 seconds so many tabs cost one set of git calls)
+    before it sends the event, so the page's reload right after is fresh. The
+    work list in the page reads again on that event, when the tab becomes
+    visible, when a run ends, and on a one-minute timer. The timer stays
+    because events only come from the server that made the change: a commit made
+    by hand, or a change made by the other server (dev and prod share
+    `~/.llama-mui`), sends nothing, so only the timer catches it. The Sessions panel
     follows it, so a session saved or deleted in another window changes its
     row without reloading, and the list is read again after a dropped
     connection. The page opens one `/api/events`
@@ -2526,8 +2537,9 @@ A failure to write a line never stops a reply or a request.
   is a once-a-minute count for state saved very often (a session's file, the
   usage log, the settings), so those saves are counted but don't drown the log.
   **One narrow exception:** the read-only git checks behind the work-in-progress
-  list (`why` is `git.status`) are not audited. The page asks for that list every
-  15 seconds from every open tab, and these checks made up about 95% of all
+  list (`why` is `git.status`) are not audited. Before the work event (see
+  "Live updates") the page asked for that list every 15 seconds from every open
+  tab, and these checks made up about 95% of all
   `io.exec` lines (185,732 of 196,686 on one day, a 61 MB file) while carrying no
   decision. The wrapper skips the line only when a call sets `quiet: true`; the
   default is always audited, and only the list's own read-only git helper sets it.
@@ -2536,7 +2548,9 @@ A failure to write a line never stops a reply or a request.
   time, and the finished answer is shared for 5 seconds (`LIST_CACHE_MS`), so many
   tabs cost one set of git calls. Starting, approving or discarding a merge clears
   that repo's saved answer so the page's reload right after sees the change. A
-  failed load is not saved.
+  failed load is not saved. Those actions, and making or removing a worktree, now
+  also send the work event, so the page reads the list when something changes and
+  asks on a one-minute timer only as a backup.
 - `api.request`: every request that changes something, and every request that was
   refused or failed (cross-site, unpaired device, stale save and so on): method,
   route, status, time, the reason, and who sent it (address and the start of the

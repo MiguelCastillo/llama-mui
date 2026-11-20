@@ -2,11 +2,14 @@ import { useEffect, useState } from "react";
 import { openAppEvents } from "./appEvents";
 import { getWorkInProgress, type WorkEntry } from "./api";
 
-export const WORK_REFRESH_MS = 15_000;
+// Only a safety net for changes this server can't see (commits made by hand,
+// the other server). Changes this server makes arrive as a "work" event.
+export const WORK_REFRESH_MS = 60_000;
 
-// Keeps `onEntries` current for one project folder: loads now, then every
-// `everyMs` while the page is visible, when the page becomes visible again, and
-// right after any run ends (the app event stream says a run is gone). A failed
+// Keeps `onEntries` current for one project folder: loads now, when the server
+// says work changed ("work" event), right after any run ends (the app event
+// stream says a run is gone), when the page becomes visible again, and every
+// `everyMs` while the page is visible as a backup. A failed
 // load keeps what was shown. Returns a function that stops all of it.
 export function watchWorkInProgress(dir: string, onEntries: (entries: WorkEntry[]) => void, everyMs = WORK_REFRESH_MS): () => void {
   let stopped = false;
@@ -32,12 +35,15 @@ export function watchWorkInProgress(dir: string, onEntries: (entries: WorkEntry[
       // not ours
     }
   };
+  const onWork = () => load();
   events?.source.addEventListener("status", onStatus);
+  events?.source.addEventListener("work", onWork);
   return () => {
     stopped = true;
     clearInterval(timer);
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
     events?.source.removeEventListener("status", onStatus);
+    events?.source.removeEventListener("work", onWork);
     events?.release();
   };
 }

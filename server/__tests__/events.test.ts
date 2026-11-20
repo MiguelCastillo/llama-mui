@@ -212,4 +212,26 @@ describe("GET /api/events", () => {
     for (const e of saved) expect(JSON.stringify(e)).not.toContain("messages");
     stream.close();
   });
+
+  it("passes on a work event (no session, no data) to the global stream only, and leaves the snapshot as it was", async () => {
+    await put("w-a", {});
+    const global = await listen("/events");
+    const one = await listen("/sessions/w-a/events");
+    await global.until((e) => e.length >= 1);
+    await one.until((e) => e.length >= 1);
+    const snapshot = JSON.stringify(global.events[0]);
+    expect(Object.keys(global.events[0].data)).toEqual(["runs"]);
+
+    hub.publish({ type: "work", id: "", data: {} });
+    // A later event that does reach both streams, so "nothing yet" means "not sent".
+    await put("w-a", { title: "After" });
+    await global.until((e) => e.some((x) => x.type === "work"));
+    await one.until((e) => e.some((x) => x.type === "saved"));
+
+    expect(global.events.filter((e) => e.type === "work")).toEqual([{ type: "work", data: { id: "" } }]);
+    expect(one.events.some((e) => e.type === "work")).toBe(false);
+    expect(JSON.stringify(global.events[0])).toBe(snapshot);
+    global.close();
+    one.close();
+  });
 });

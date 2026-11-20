@@ -19,6 +19,7 @@ import { createdText } from "./createdWorktrees.ts";
 import { isInside, toAbsolute } from "./disk.ts";
 import { execFile } from "./io/exec.ts";
 import { sessionFolder } from "./sessions.ts";
+import { workChanged } from "./workChanged.ts";
 import { type ToolContext, ToolError, type ToolSpec, fn, note, reasonOf, requireApproval, textFact } from "./toolkit.ts";
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -134,6 +135,7 @@ export async function makeWorktree(
 
   await fsio.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }, { why: "worktree.create" });
   await git(top, "worktree", "add", "-b", branch, target, base);
+  workChanged();
   return { repo: top, path: target, branch, base };
 }
 
@@ -214,6 +216,7 @@ const removeWorktree: ToolSpec = {
     requireApproval(ctx, { type: "worktree", action: "remove", repo, branch, path: target, ...(reason ? { reason } : {}) });
     note(ctx, { repo, path: target, branch, approvedBy: "approval" });
     await git(repo, "worktree", "remove", target);
+    workChanged();
     return `Removed the worktree ${target}. The branch ${branch} is kept in ${repo}, with its commits.`;
   },
   audit: (args) => ({ name: textFact(args.name, 100) }),

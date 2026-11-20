@@ -111,11 +111,11 @@ export function noteChanged(id: string, path: string): Promise<void> {
 
 setChangedFileSink((session, path) => void noteChanged(session, path).catch(() => {}));
 
-export type HubEventType = "status" | "step" | "ask" | "session" | "saved" | "removed" | "thread" | "ack";
+export type HubEventType = "status" | "step" | "ask" | "session" | "saved" | "removed" | "thread" | "ack" | "work";
 
 export interface HubEvent {
   type: HubEventType;
-  id: string; // the session
+  id: string; // the session ("" for `work`, which belongs to no session)
   data: Record<string, unknown>;
 }
 

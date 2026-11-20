@@ -9,7 +9,10 @@
 //                                   (a run started, asked, ended: data.run
 //                                   is its state, or null), `saved` (data.summary is
 //                                   the list row, data.revision the new revision),
-//                                   `removed`, `thread`. Never the chat itself.
+//                                   `removed`, `thread`, and `work` (the work
+//                                   list may have changed: id is "", data is {};
+//                                   it means "ask again", it carries no list).
+//                                   Never the chat itself.
 //   GET /api/sessions/<id>/events   one session, for the page that has it open.
 //                                   First event `snapshot`: { id, session, revision,
 //                                   run, actions } (run is null when nothing runs;
@@ -51,7 +54,7 @@ const actionsKey = (run: any, actions: string[]) =>
 
 // What the list-wide stream passes on. The rest (steps, the chat's changes,
 // asks) is for the page that has the session open.
-const GLOBAL_TYPES = new Set<hub.HubEventType>(["status", "saved", "removed", "thread"]);
+const GLOBAL_TYPES = new Set<hub.HubEventType>(["status", "saved", "removed", "thread", "work"]);
 
 type Send = (type: string, data: unknown) => void;
 

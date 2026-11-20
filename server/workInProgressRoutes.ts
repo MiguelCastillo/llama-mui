@@ -28,6 +28,7 @@ import {
   runChecks,
 } from "./integration.ts";
 import { workInProgress } from "./workInProgress.ts";
+import { onWorkChangedClear, workChanged } from "./workChanged.ts";
 
 // How long a finished list is kept and shared by every request for the same folder.
 export const LIST_CACHE_MS = 5000;
@@ -51,6 +52,8 @@ export function clearListCache(): void {
   generation++;
   listCache.clear();
 }
+
+onWorkChangedClear(clearListCache);
 
 async function cachedList(dir: string) {
   const hit = listCache.get(dir);
@@ -180,7 +183,7 @@ async function mergeRoutes({ req, res, parts, method }: Route): Promise<void> {
     }
     const a: Attempt = { id: randomUUID(), repo, branch, state: "replaying", checks: [] };
     attempts.set(a.id, a);
-    clearListCache();
+    workChanged();
     void run(a);
     sendJson(res, 202, view(a));
     return;
@@ -204,14 +207,14 @@ async function mergeRoutes({ req, res, parts, method }: Route): Promise<void> {
       throw e;
     }
     a.state = "merged";
-    clearListCache();
+    workChanged();
   } else {
     if (!LIVE.includes(a.state) || a.state === "replaying" || a.state === "checking") {
       throw new HttpError(409, a.state === "replaying" || a.state === "checking" ? "Wait for the checks to finish before discarding." : "This merge is already over.");
     }
     await discardMerge(a.repo, asAttempt(a));
     a.state = "discarded";
-    clearListCache();
+    workChanged();
   }
   sendJson(res, 200, view(a));
 }

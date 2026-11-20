@@ -63,6 +63,36 @@ describe("watchWorkInProgress", () => {
     stop();
   });
 
+  it("reloads when the server says work changed", async () => {
+    const stop = watchWorkInProgress("/p", () => {}, 600_000);
+    await flush();
+    FakeSource.all[0].emit("work", {});
+    await flush();
+    expect(calls).toHaveLength(2);
+    stop();
+  });
+
+  it("removes the work listener on stop", async () => {
+    const stop = watchWorkInProgress("/p", () => {}, 600_000);
+    await flush();
+    expect(FakeSource.all[0].listeners["work"]).toHaveLength(1);
+    stop();
+    expect(FakeSource.all[0].listeners["work"]).toHaveLength(0);
+    FakeSource.all[0].emit("work", {});
+    await flush();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("uses a 60 second timer by default, not 15", async () => {
+    const stop = watchWorkInProgress("/p", () => {});
+    await flush();
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toHaveLength(2);
+    stop();
+  });
+
   it("stops refreshing once stopped", async () => {
     const stop = watchWorkInProgress("/p", () => {}, 1000);
     await flush();
