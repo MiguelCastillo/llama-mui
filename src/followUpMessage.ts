@@ -25,6 +25,10 @@ export function followUpMessage(entry: WorkEntry): string {
     lines.push("2. Check whether the files are still there.");
   }
   lines.push("3. List what has to be cleaned up for the card to be done (for example delete the branch, remove the worktree, commit or drop the uncommitted files), and say what is still unmerged, if anything.");
+  if (entry.kind === "worktree" && entry.unmerged === 0 && entry.uncommitted > 0) {
+    lines.push("");
+    lines.push("The branch has no commits that are not in main, so the work itself is already in main. Only leftover uncommitted files remain. Even if they are harmless, they still need cleaning up: once I agree, commit or drop them, then remove the worktree.");
+  }
   lines.push("");
   lines.push("Only look and report for now. Don't delete, remove or discard anything until I agree.");
   return lines.join("\n");

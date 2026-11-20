@@ -56,4 +56,12 @@ describe("followUpMessage", () => {
     const m = followUpMessage(entry({ kind: "branch" }));
     expect(m).not.toContain("Folder:");
   });
+
+  it("for leftover files with no commits ahead, says the work is in main and asks for cleanup", () => {
+    const m = followUpMessage(entry({ unmerged: 0, uncommitted: 4 }));
+    expect(m).toContain("the work itself is already in main");
+    expect(m).toContain("leftover uncommitted files");
+    expect(m).toContain("commit or drop them, then remove the worktree");
+    expect(followUpMessage(entry({ unmerged: 3, uncommitted: 4 }))).not.toContain("Only leftover uncommitted files remain");
+  });
 });

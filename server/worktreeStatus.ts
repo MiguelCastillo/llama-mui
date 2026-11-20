@@ -23,7 +23,8 @@ export interface WorktreeStatus {
   base: string | null;
   // The branch's latest commit as "<short hash> <title>"; null when unknown.
   lastCommit: string | null;
-  // True when every commit of the branch is already on `base` (nothing to merge).
+  // True when every commit of the branch is already on `base` and nothing is left
+  // uncommitted (nothing to merge, nothing to clean up).
   merged: boolean;
 }
 
@@ -67,7 +68,7 @@ async function statusOf(dir: string, name: string): Promise<WorktreeStatus | nul
       }
     }
     const lastCommit = (await git(dir, "log", "-1", "--format=%h %s").catch(() => "")) || null;
-    return { name, branch, uncommitted: changes.length, unmerged, base, lastCommit, merged: unmerged === 0 };
+    return { name, branch, uncommitted: changes.length, unmerged, base, lastCommit, merged: unmerged === 0 && changes.length === 0 };
   } catch {
     return null;
   }

@@ -127,7 +127,13 @@ describe("worktreeStatuses", () => {
     git(wt, "add", "b.txt");
     git(wt, "commit", "-q", "-m", "b");
     git(repo, "merge", "-q", "--no-ff", "-m", "merge", "llama/ui");
-    expect((await worktreeStatuses(id, messages))[0]).toMatchObject({ unmerged: 0, uncommitted: 0 });
+    expect((await worktreeStatuses(id, messages))[0]).toMatchObject({ unmerged: 0, uncommitted: 0, merged: true });
+  });
+
+  it("no commits ahead but uncommitted files is not merged", async () => {
+    const { id, wt, messages } = await setup();
+    await writeFile(path.join(wt, "left.txt"), "x");
+    expect((await worktreeStatuses(id, messages))[0]).toMatchObject({ unmerged: 0, uncommitted: 1, merged: false });
   });
 
   it("uses the branch checked out in the main checkout, not a fixed name", async () => {

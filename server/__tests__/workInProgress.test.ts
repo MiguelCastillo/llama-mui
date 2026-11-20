@@ -101,13 +101,13 @@ describe("workInProgress", () => {
     expect(await workInProgress(repo)).toEqual([]);
   });
 
-  it("keeps a merged worktree that still has uncommitted files", async () => {
+  it("keeps a worktree with no commits ahead but uncommitted files, and does not call it merged", async () => {
     const { root, repo } = makeRepo();
     const wt = path.join(root, "same");
     git(repo, "worktree", "add", "-b", "same", wt);
     writeFileSync(path.join(wt, "left.txt"), "x\n");
     const [e] = await workInProgress(repo);
-    expect(e).toMatchObject({ kind: "worktree", unmerged: 0, merged: true, uncommitted: 1 });
+    expect(e).toMatchObject({ kind: "worktree", unmerged: 0, merged: false, uncommitted: 1 });
   });
 
   it("reports uncommitted files in the main folder as one loose entry", async () => {

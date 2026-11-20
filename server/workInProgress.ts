@@ -177,7 +177,8 @@ export async function workInProgress(repo: string, opts: WipOptions = {}): Promi
           folder: t.folder,
           uncommitted,
           ...d,
-          merged: d.unmerged === 0,
+          // Leftover uncommitted files still need cleaning up, so they are never "merged".
+          merged: d.unmerged === 0 && uncommitted === 0,
           purpose: owner?.planSummary?.trim() || d.lastCommitSubject,
           source,
         };

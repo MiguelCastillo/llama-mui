@@ -136,13 +136,28 @@ describe("WorkPanel", () => {
     };
     expect(opacityOf(entry({ merged: true }))).toBe("0.6");
     expect(opacityOf(entry({}))).toBe("1");
+    // Leftover files keep the card at full strength.
+    expect(opacityOf(entry({ merged: false, unmerged: 0, uncommitted: 11 }))).toBe("1");
+    expect(opacityOf(entry({ merged: true, uncommitted: 11 }))).toBe("1");
   });
 
-  it("hides counts that contradict a merged state", () => {
-    const html = render([entry({ merged: true, uncommitted: 11, filesTotal: 0, files: [] })]);
+  it("dims a merged, clean entry and hides its counts", () => {
+    const html = render([entry({ merged: true, uncommitted: 0, filesTotal: 0, files: [] })]);
     expect(html).toContain("Merged");
     expect(html).not.toContain("uncommitted");
     expect(html).not.toContain("No files changed");
+  });
+
+  it("never reads uncommitted files as merged: warns, shows the count, keeps both buttons", () => {
+    const e = entry({ merged: false, unmerged: 0, uncommitted: 11 });
+    const html = renderToStaticMarkup(<WorkPanel entries={[e]} onFollowUp={() => {}} />);
+    expect(html).toContain("Has uncommitted files");
+    expect(html).toContain("11 uncommitted");
+    expect(html).not.toContain("Merged");
+    expect(html).toContain(">Follow up<");
+    expect(html).toContain("Open chat");
+    // Even if a stale entry still says merged, leftover files win.
+    expect(workState(entry({ merged: true, uncommitted: 11 }))).toBe("Has uncommitted files");
   });
 
   it("shows Open chat and Follow up together in one row", () => {

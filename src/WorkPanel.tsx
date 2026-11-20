@@ -7,11 +7,14 @@ import { ago } from "./SessionsPanel";
 // How many file names an entry lists before "and N more".
 const FILES_SHOWN = 5;
 
+// Leftover files are never "merged": they still have to be cleaned up.
+const isMerged = (e: WorkEntry) => e.merged && e.uncommitted === 0;
+
 // What state the work is in, in plain words.
 export function workState(e: WorkEntry): string {
   if (e.kind === "loose") return "Has uncommitted files";
-  if (e.merged) return "Merged";
   if (e.uncommitted > 0) return "Has uncommitted files";
+  if (e.merged) return "Merged";
   if (e.kind === "worktree") return "Finished and committed";
   return "Needs a decision";
 }
@@ -63,7 +66,7 @@ function Entry({ entry: e, onFollowUp }: { entry: WorkEntry; onFollowUp?: (entry
   const more = e.filesTotal - shown.length;
   return (
     // The look of a quiet panel (Panel.tsx), without its hover toolbar.
-    <Box sx={{ ...PANEL_VARIANTS.actionDone, opacity: e.merged ? 0.6 : 1 }}>
+    <Box sx={{ ...PANEL_VARIANTS.actionDone, opacity: isMerged(e) ? 0.6 : 1 }}>
       <Box sx={{ width: "100%", minWidth: 0 }} data-work-entry={e.kind}>
         <Typography
           variant="body2"
@@ -86,9 +89,8 @@ function Entry({ entry: e, onFollowUp }: { entry: WorkEntry; onFollowUp?: (entry
           <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
             {[
               e.unmerged ? plural(e.unmerged, "commit") : "",
-              // A merged entry's leftover counts would contradict its state.
-              e.uncommitted > 0 && e.kind !== "loose" && !e.merged ? `${e.uncommitted} uncommitted` : "",
-              e.merged && e.filesTotal === 0 ? "" : workSize(e),
+              e.uncommitted > 0 && e.kind !== "loose" ? `${e.uncommitted} uncommitted` : "",
+              isMerged(e) && e.filesTotal === 0 ? "" : workSize(e),
               // The server sends git's commit time in seconds; ago wants milliseconds.
               e.lastCommitTime ? ago(e.lastCommitTime * 1000) : "",
             ]
@@ -102,14 +104,14 @@ function Entry({ entry: e, onFollowUp }: { entry: WorkEntry; onFollowUp?: (entry
             {more > 0 ? ` and ${more} more` : ""}
           </Typography>
         )}
-        {(e.source || (onFollowUp && !e.merged)) && (
+        {(e.source || (onFollowUp && !isMerged(e))) && (
           <Box sx={{ mt: 0.5, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1 }}>
             {e.source && (
               <Button size="small" component="a" href={sessionHash(e.source)}>
                 Open chat
               </Button>
             )}
-            {onFollowUp && !e.merged && (
+            {onFollowUp && !isMerged(e) && (
               <Button size="small" variant="outlined" onClick={() => onFollowUp(e)}>
                 Follow up
               </Button>
