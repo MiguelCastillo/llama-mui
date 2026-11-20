@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Box, ButtonBase, Typography } from "@mui/material";
 import { useVisibleShorterThan } from "./useVisibleHeight";
-import { listSessions } from "./api";
+import { editTodo, listSessions, restoreTodo } from "./api";
 import MyTodos from "./MyTodos";
 import { pickSuggestions, visibleCount } from "./suggestions";
-import { todoGroups, type Start, type TodoSession } from "./todos";
+import { todoGroups, withOpenTodos, type Start, type TodoSession } from "./todos";
 
 // A few random starters under the empty chat's message, and a "My Todos…"
 // button when past sessions have unfinished plan steps (the session list
@@ -81,7 +81,21 @@ export default function EmptyChatSuggestions({
           </Typography>
         </ButtonBase>
       ))}
-      <MyTodos groups={groups} onStart={onStart} onOpenSession={onOpenSession} />
+      <MyTodos
+        groups={groups}
+        onStart={onStart}
+        onOpenSession={onOpenSession}
+        onEdit={async (sessionId, todoId, action) => {
+          // The list changes only from the server's answer.
+          const r = await editTodo(sessionId, todoId, action);
+          setSessions((cur) => (cur ? withOpenTodos(cur, sessionId, r.todos) : cur));
+          return r.removed;
+        }}
+        onRestore={async (sessionId, removed) => {
+          const r = await restoreTodo(sessionId, removed);
+          setSessions((cur) => (cur ? withOpenTodos(cur, sessionId, r.todos) : cur));
+        }}
+      />
     </Box>
   );
 }

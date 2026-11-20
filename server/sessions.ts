@@ -24,7 +24,8 @@ import { loadPersonas } from "./personas.ts";
 import { load } from "./store.ts";
 import { log } from "./log.ts";
 import { worktreeStatuses } from "./worktreeStatus.ts";
-import { convertWorkingDir, deleteSession, draftOf, queueFieldsOf, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
+import { editTodo } from "./todoEdit.ts";
+import { convertWorkingDir, deleteSession, draftOf, openTodoList, queueFieldsOf, readSession, revisionOf, sessionFolder, summaryOf, writeSession } from "./sessionFile.ts";
 
 // Other modules (and tests) have always got these from here.
 export { openTodoList, sessionFolder, summaryOf } from "./sessionFile.ts";
@@ -83,6 +84,10 @@ let migration: Promise<void> | undefined;
 //   PATCH /<id>  → updates only the name fields and the group, keeps updatedAt; answers with its
 //                  summary plus `revision`. While a plan runs it goes through the
 //                  run's live session.
+//   POST /<id>/todos/<todoId> { action: "done" | "remove" } → sets that todo's
+//                  status to done, or deletes it; changes nothing else, keeps
+//                  updatedAt; answers { id, todos: [{ id, summary }] }, the
+//                  chat's open todos. A 404 names the todos it has; a 400, the actions.
 //   DELETE /<id> → deletes its session.json, and its folder if nothing else is in
 //                  it, together with every session nested under it (any depth);
 //                  answers { id, deleted: [ids, the session last] }. A 409, with
@@ -196,6 +201,22 @@ export async function sessionRoutes({ req, res, parts, method }: Route): Promise
     });
     logEnvironment(id, "user choice", environmentChanges(before, session));
     sendJson(res, 200, { ...summaryOf(session), revision, environment: environmentOf(session), folderProblems: await folderProblems(session) });
+    return true;
+  }
+  // One todo of a chat: Done or Remove. Edited like a rename (the lock, the live
+  // run's own copy, the revision), keeping updatedAt; answers with the chat's open todos.
+  if (parts.length === 4 && parts[2] === "todos" && method === "POST") {
+    const body = await readJson(req);
+    sessionFolder(parts[1]); // a bad id is a 400
+    // A refusal thrown here leaves before anything is written.
+    let removed: { todo: any; index: number } | undefined;
+    const { session } = await hub.edit(parts[1], (s) => {
+      const r = editTodo(s.todos, parts[3], body.action, body);
+      if (!r.ok) throw new HttpError(r.status, r.error);
+      s.todos = r.todos;
+      removed = r.removed;
+    });
+    sendJson(res, 200, { id: parts[1], todos: openTodoList(session.todos), ...(removed ? { removed } : {}) });
     return true;
   }
   if (parts.length !== 2) return false;

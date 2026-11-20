@@ -166,6 +166,18 @@ far (`context`, written in the same call, so a thread started later has it), `li
 (`todos`), so copying that file carries them; chat applies each call to the
 session, as it does for `update_plan`, since the server never writes that file.
 
+In the **My Todos** list on the new-chat page, each row has a start box, an
+open-chat icon, **Done** and **Remove**. **Done** is a state change: the todo
+stays in its chat's file with status `done` and drops off the list (the same as
+the model's `complete_todo`). **Remove** deletes the todo from its chat. Both go
+through one server route (`POST /api/sessions/<id>/todos/<todoId>`, logic in
+`server/todoEdit.ts`) that locks the session file, changes only that todo and
+answers with the chat's open todos; the page redraws from that answer, never
+from a local edit. After Remove, a "Removed: …" message with **Undo** shows for
+about six seconds; Undo sends `restore`, which puts the todo back at its old
+place and is refused if a todo with that id already exists. The model's tools
+are unchanged: it can add, list and complete todos, but not remove them.
+
 The **Ideas and action items** group (`server/replyNotes.ts`) lets the model
 hand over short notes instead of writing them at the end of its reply text.
 The kinds of note live in one small table (`src/replyNoteKinds.ts`, plain

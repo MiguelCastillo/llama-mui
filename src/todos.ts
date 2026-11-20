@@ -14,6 +14,11 @@ export interface TodoGroup {
   updatedAt?: number;
 }
 
+// The sessions with one session's open todos replaced by what the server
+// answered (the answer is the whole list, so a todo it left out is gone).
+export const withOpenTodos = (sessions: TodoSession[], sessionId: string, todos: { id: string; summary: string }[]) =>
+  sessions.map((s) => (s.id === sessionId ? { ...s, todos } : s));
+
 // The message a todo sends: its summary, then the description (the user's
 // words) and the context (the model's notes from when it was added), each
 // after a blank line when there is one.

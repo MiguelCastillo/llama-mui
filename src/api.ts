@@ -1198,6 +1198,23 @@ export const deleteSession = (id: string) =>
     return r;
   });
 
+// Done or Remove on one chat's todo. The server does it under its lock and
+// answers with that chat's open todos; the page shows that answer, nothing else.
+// A remove also answers with `removed`: the todo as saved and its old place.
+export interface RemovedTodo {
+  todo: Todo;
+  index: number;
+}
+export type TodoAnswer = { id: string; todos: { id: string; summary: string }[]; removed?: RemovedTodo };
+const todoUrl = (sessionId: string, todoId: string) =>
+  `/api/sessions/${encodeURIComponent(sessionId)}/todos/${encodeURIComponent(todoId)}`;
+export const editTodo = (sessionId: string, todoId: string, action: "done" | "remove") =>
+  call<TodoAnswer>("POST", todoUrl(sessionId, todoId), { action });
+
+// Undo of a remove: the server puts the todo back unless its id is back already.
+export const restoreTodo = (sessionId: string, removed: RemovedTodo) =>
+  call<TodoAnswer>("POST", todoUrl(sessionId, removed.todo.id), { action: "restore", ...removed });
+
 // Delete a single uploaded image from a session's image store.
 export const deleteImage = (sessionId: string, imageId: string) =>
   call<void>("DELETE", `/api/sessions/${sessionId}/images/${imageId}`);
