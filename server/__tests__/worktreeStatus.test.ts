@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { worktreeStatuses } = await import("../worktreeStatus.ts");
 const { sessionFolder } = await import("../sessionFile.ts");
+const { auditDir } = await import("../audit.ts");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -53,6 +55,24 @@ function made(repo: string, wt: string, name: string, ok = true) {
     },
   ];
 }
+
+describe("worktreeStatuses audit", () => {
+  it("reads git without writing any io.exec line", async () => {
+    const { id, messages } = await setup("quiet");
+    const execLines = () =>
+      (existsSync(auditDir()) ? readdirSync(auditDir()) : [])
+        .map((f) => readFileSync(path.join(auditDir(), f), "utf8"))
+        .join("")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+        .filter((l) => l.event === "io.exec");
+    const before = execLines().length;
+    const rows = await worktreeStatuses(id, messages);
+    expect(rows).toHaveLength(1); // it really ran git
+    expect(execLines().length).toBe(before);
+  });
+});
 
 describe("worktreeStatuses", () => {
   it("a clean worktree on main's tip has nothing left", async () => {

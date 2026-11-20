@@ -37,7 +37,9 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
       timeout: 10_000,
       maxBuffer: 4 * 1024 * 1024,
     },
-    { why: "git.status" },
+    // Read-only status checks that carry no decision: not audited (guide, "The audit log").
+    // Only read-only git commands may go through this helper.
+    { why: "git.status", quiet: true },
   );
   return stdout.trim();
 }

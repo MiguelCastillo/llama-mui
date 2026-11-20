@@ -2550,7 +2550,12 @@ A failure to write a line never stops a reply or a request.
   that repo's saved answer so the page's reload right after sees the change. A
   failed load is not saved. Those actions, and making or removing a worktree, now
   also send the work event, so the page reads the list when something changes and
-  asks on a one-minute timer only as a backup.
+  asks on a one-minute timer only as a backup. The same exception covers the
+  per-chat worktree status (each worktree a chat created: branch, uncommitted
+  files, commits not on main): about 8 read-only git commands each time the page
+  asks, which it does when a chat opens, when a thread starts or ends and when a
+  run stops, never on a timer. It carries no decision either, so its helper also
+  sets `quiet: true`. These two helpers are the only ones that do.
 - `api.request`: every request that changes something, and every request that was
   refused or failed (cross-site, unpaired device, stale save and so on): method,
   route, status, time, the reason, and who sent it (address and the start of the
